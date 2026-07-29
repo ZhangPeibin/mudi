@@ -1,0 +1,207 @@
+//! Claude Code adapter.
+//!
+//! Transcripts: `~/.claude/projects/<encoded-project>/<session-id>.jsonl`.
+//!
+//! Key semantics:
+//! - Current context = latest assistant message `input_tokens + cache_read_input_tokens`
+//!   (never `cache_creation_input_tokens`).
+//! - Streaming writes multiple records per `message.id`; usage must be de-duplicated by
+//!   id (last occurrence wins — it carries the final counts).
+//! - Compaction = `type:system` / `subtype:compact_boundary`.
+
+use super::{iso_to_ms, known_context_window, ParsedSession, PerModel};
+use crate::domain::{Compaction, ContextState, Provider, Usage};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::Path;
+
+/// Parse a Claude transcript file. Returns `None` if the file is unreadable or yields
+/// nothing usable. Malformed lines are skipped, never fatal.
+pub fn parse_file(path: &Path) -> Option<ParsedSession> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let id = path.file_stem()?.to_string_lossy().into_owned();
+    parse_str(&id, &text)
+}
+
+/// Parse transcript content with a known session id. Split out for testing.
+pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
+    // De-duplicated assistant usage, keyed by message id (last write wins).
+    struct Msg {
+        usage: Usage,
+        model: String,
+        ts: i64,
+        ctx_tokens: u64,
+    }
+    let mut msgs: HashMap<String, Msg> = HashMap::new();
+    let mut cwd: Option<String> = None;
+    let mut compactions: Vec<Compaction> = Vec::new();
+    let mut last_activity_ms: i64 = 0;
+    let mut anon_counter: u64 = 0;
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue, // malformed line — skip
+        };
+
+        let ts = v.get("timestamp").and_then(Value::as_str).and_then(iso_to_ms);
+        if let Some(t) = ts {
+            last_activity_ms = last_activity_ms.max(t);
+        }
+        if cwd.is_none() {
+            if let Some(c) = v.get("cwd").and_then(Value::as_str) {
+                cwd = Some(c.to_string());
+            }
+        }
+
+        match v.get("type").and_then(Value::as_str) {
+            Some("assistant") => {
+                let Some(msg) = v.get("message") else { continue };
+                let Some(usage_v) = msg.get("usage") else { continue };
+                let model = msg
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let input = u(usage_v, "input_tokens");
+                let output = u(usage_v, "output_tokens");
+                let cache_read = u(usage_v, "cache_read_input_tokens");
+                let cache_write = u(usage_v, "cache_creation_input_tokens");
+
+                let usage = Usage { input, output, cache_read, cache_write };
+                // Current context excludes cache creation (write-side).
+                let ctx_tokens = input + cache_read;
+
+                let key = msg
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        anon_counter += 1;
+                        format!("__anon_{anon_counter}")
+                    });
+
+                // Last occurrence wins: streaming's final chunk has complete counts.
+                msgs.insert(key, Msg { usage, model, ts: ts.unwrap_or(0), ctx_tokens });
+            }
+            Some("system") => {
+                if v.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
+                    let meta = v.get("compactMetadata");
+                    let trigger = meta
+                        .and_then(|m| m.get("trigger"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let pre_tokens = meta
+                        .and_then(|m| m.get("preTokens"))
+                        .and_then(Value::as_u64);
+                    compactions.push(Compaction {
+                        at_ms: ts.unwrap_or(last_activity_ms),
+                        trigger,
+                        pre_tokens,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if msgs.is_empty() && compactions.is_empty() {
+        return None;
+    }
+
+    // Roll up totals and per-model split from de-duplicated messages.
+    let mut total = Usage::default();
+    let mut per_model = PerModel::default();
+    let mut latest: Option<&Msg> = None;
+    for m in msgs.values() {
+        total.add(&m.usage);
+        per_model.add(&m.model, &m.usage);
+        latest = match latest {
+            Some(cur) if cur.ts >= m.ts => Some(cur),
+            _ => Some(m),
+        };
+    }
+
+    let (context, latest_model) = match latest {
+        Some(m) => (
+            ContextState { tokens: m.ctx_tokens, window: known_context_window(&m.model) },
+            Some(m.model.clone()),
+        ),
+        None => (ContextState::default(), None),
+    };
+
+    Some(ParsedSession {
+        provider: Provider::ClaudeCode,
+        id: id.to_string(),
+        cwd,
+        latest_model,
+        context,
+        usage: total,
+        per_model: per_model.into_vec(),
+        compactions,
+        last_activity_ms,
+        codex_open_turn: None,
+    })
+}
+
+fn u(v: &Value, key: &str) -> u64 {
+    v.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dedups_streamed_records_by_message_id() {
+        // Same message.id appears 3x with growing output; only final counts once.
+        let text = r#"
+{"type":"assistant","timestamp":"2026-07-29T08:00:00.000Z","cwd":"/tmp/proj","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":100,"cache_read_input_tokens":50,"cache_creation_input_tokens":10,"output_tokens":5}}}
+{"type":"assistant","timestamp":"2026-07-29T08:00:01.000Z","cwd":"/tmp/proj","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":100,"cache_read_input_tokens":50,"cache_creation_input_tokens":10,"output_tokens":20}}}
+{"type":"assistant","timestamp":"2026-07-29T08:00:02.000Z","cwd":"/tmp/proj","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":100,"cache_read_input_tokens":50,"cache_creation_input_tokens":10,"output_tokens":40}}}
+"#;
+        let s = parse_str("sess", text).unwrap();
+        // Counted once, final output 40 (not 5+20+40).
+        assert_eq!(s.usage.output, 40);
+        assert_eq!(s.usage.input, 100);
+        assert_eq!(s.usage.cache_read, 50);
+        assert_eq!(s.usage.cache_write, 10);
+    }
+
+    #[test]
+    fn context_excludes_cache_creation_and_uses_latest() {
+        let text = r#"
+{"type":"assistant","timestamp":"2026-07-29T08:00:00.000Z","message":{"id":"a","model":"claude-opus-4-8","usage":{"input_tokens":1000,"cache_read_input_tokens":2000,"cache_creation_input_tokens":9999,"output_tokens":10}}}
+{"type":"assistant","timestamp":"2026-07-29T09:00:00.000Z","message":{"id":"b","model":"claude-opus-4-8","usage":{"input_tokens":1500,"cache_read_input_tokens":3000,"cache_creation_input_tokens":8888,"output_tokens":20}}}
+"#;
+        let s = parse_str("sess", text).unwrap();
+        // Latest = "b": 1500 + 3000, excluding cache creation.
+        assert_eq!(s.context.tokens, 4500);
+        assert_eq!(s.context.window, Some(200_000));
+        assert_eq!(s.latest_model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn extracts_compaction_boundary() {
+        let text = r#"
+{"type":"assistant","timestamp":"2026-07-29T08:00:00.000Z","message":{"id":"a","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":1}}}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-07-29T08:30:00.000Z","compactMetadata":{"trigger":"auto","preTokens":150000}}
+"#;
+        let s = parse_str("sess", text).unwrap();
+        assert_eq!(s.compactions.len(), 1);
+        assert_eq!(s.compactions[0].trigger.as_deref(), Some("auto"));
+        assert_eq!(s.compactions[0].pre_tokens, Some(150000));
+    }
+
+    #[test]
+    fn malformed_lines_are_skipped_not_fatal() {
+        let text = "not json\n{broken\n{\"type\":\"assistant\",\"message\":{\"id\":\"a\",\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n";
+        let s = parse_str("sess", text).unwrap();
+        assert_eq!(s.usage.input, 5);
+    }
+}
