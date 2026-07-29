@@ -28,6 +28,12 @@ const WARN: Color = Color::Rgb(0xE6, 0xC0, 0x50);
 const CRIT: Color = Color::Rgb(0xE0, 0x6c, 0x6c);
 const FG: Color = Color::Rgb(0xd8, 0xd4, 0xcc);
 
+/// Shared style for the currently-selected item in a segmented control (tabs, filter
+/// bar). Kept in one place so a theme change touches a single line.
+fn selected_style() -> Style {
+    Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD)
+}
+
 /// Interactive UI state (owned by the event loop).
 pub struct Ui {
     pub tab: Tab,
@@ -104,28 +110,20 @@ fn draw_tabs(f: &mut Frame, area: Rect, ui: &Ui) {
         )
         .select(ui.tab.index())
         .style(Style::default().fg(FG))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(ACCENT)
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(selected_style());
     f.render_widget(tabs, area);
 }
 
-/// A segmented time-range selector: `Time: [Active Today] [Last 7 Days] …` with the
-/// active range highlighted. Makes it obvious that `f` cycles the time window.
+/// Segmented time-range selector, rendered as `Time  <ranges…>  (f to change)` with the
+/// active range highlighted — so it's obvious `f` cycles the time range, not some
+/// generic filter. Matches the segmented control shown in the product spec.
 fn draw_filter_bar(f: &mut Frame, area: Rect, ui: &Ui) {
     let mut spans = vec![Span::styled(" Time  ", Style::default().fg(DIM))];
     for (i, tf) in TimeFilter::ALL.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled("  ", Style::default().fg(DIM)));
         }
-        let style = if *tf == ui.filter {
-            Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(FG)
-        };
+        let style = if *tf == ui.filter { selected_style() } else { Style::default().fg(FG) };
         spans.push(Span::styled(format!(" {} ", tf.title()), style));
     }
     spans.push(Span::styled("   (f to change)", Style::default().fg(DIM)));
@@ -301,7 +299,14 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 .title(Span::styled(
                     format!(" {} ", ui.tab.title()),
                     Style::default().fg(FG),
-                )),
+                ))
+                .title_bottom(
+                    Line::from(Span::styled(
+                        " showing full lifetime usage of matching sessions ",
+                        Style::default().fg(DIM),
+                    ))
+                    .right_aligned(),
+                ),
         )
         .row_highlight_style(Style::default().bg(Color::Rgb(0x33, 0x30, 0x28)).add_modifier(Modifier::BOLD))
         .highlight_symbol("▌");
