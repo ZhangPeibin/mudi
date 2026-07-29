@@ -1,0 +1,94 @@
+//! Configuration: data directories, environment overrides, thresholds.
+//!
+//! Standard locations with env overrides and configurable extra directories.
+
+use std::path::PathBuf;
+
+/// Warning context threshold (percent of window).
+pub const WARN_PCT: f64 = 70.0;
+/// Critical context threshold (percent of window).
+pub const CRIT_PCT: f64 = 85.0;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// Root of Claude Code data (`~/.claude` by default).
+    pub claude_dir: PathBuf,
+    /// Root of Codex CLI data (`~/.codex` by default).
+    pub codex_dir: PathBuf,
+    /// Where the disposable SQLite index lives.
+    pub data_dir: PathBuf,
+    /// Additional directories to scan for provider logs.
+    pub extra_dirs: Vec<PathBuf>,
+}
+
+impl Config {
+    /// Resolve configuration from the environment, falling back to standard paths.
+    ///
+    /// Overrides:
+    /// - `TOKENPLAY_CLAUDE_DIR`
+    /// - `TOKENPLAY_CODEX_DIR`
+    /// - `TOKENPLAY_DATA_DIR`
+    /// - `TOKENPLAY_EXTRA_DIRS` (colon-separated)
+    pub fn load() -> Self {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+
+        let claude_dir = env_path("TOKENPLAY_CLAUDE_DIR").unwrap_or_else(|| home.join(".claude"));
+        let codex_dir = env_path("TOKENPLAY_CODEX_DIR").unwrap_or_else(|| home.join(".codex"));
+
+        let data_dir = env_path("TOKENPLAY_DATA_DIR").unwrap_or_else(|| {
+            dirs::data_dir()
+                .unwrap_or_else(|| home.join(".local/share"))
+                .join("tokenplay")
+        });
+
+        let extra_dirs = std::env::var("TOKENPLAY_EXTRA_DIRS")
+            .ok()
+            .map(|v| {
+                v.split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Config {
+            claude_dir,
+            codex_dir,
+            data_dir,
+            extra_dirs,
+        }
+    }
+
+    /// Path to the SQLite index file (inside `data_dir`).
+    pub fn index_path(&self) -> PathBuf {
+        self.data_dir.join("index.db")
+    }
+
+    /// Optional local pricing override (`data_dir/pricing.json`).
+    pub fn pricing_override_path(&self) -> PathBuf {
+        self.data_dir.join("pricing.json")
+    }
+
+    /// Directories to search for Claude transcripts.
+    pub fn claude_project_roots(&self) -> Vec<PathBuf> {
+        let mut v = vec![self.claude_dir.join("projects")];
+        v.extend(self.extra_dirs.iter().cloned());
+        v
+    }
+
+    /// Directories to search for Codex rollouts.
+    pub fn codex_session_roots(&self) -> Vec<PathBuf> {
+        let mut v = vec![self.codex_dir.join("sessions")];
+        v.extend(self.extra_dirs.iter().cloned());
+        v
+    }
+
+    /// Path to the Claude open-session state directory.
+    pub fn claude_sessions_dir(&self) -> PathBuf {
+        self.claude_dir.join("sessions")
+    }
+}
+
+fn env_path(key: &str) -> Option<PathBuf> {
+    std::env::var(key).ok().filter(|s| !s.is_empty()).map(PathBuf::from)
+}
