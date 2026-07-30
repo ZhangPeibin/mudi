@@ -15,9 +15,43 @@ Session ID**. Sessions are **never merged across providers** — a Claude sessio
 Codex session are always distinct, even if related in time or directory.
 
 - `Provider` ∈ { ClaudeCode, CodexCli }.
-- `Project` label = basename of the session working directory. If two visible sessions
-  collide on basename, prepend enough parent path to disambiguate (e.g. `dex/backend`).
+- A Session belongs to one Project and, for a Git Project, one Worktree according to its
+  working directory.
 - A session lists its **latest** model. Mixed-model sessions split usage in the detail view.
+
+## Project
+
+A local repository-scale unit of related coding work. Git working directories with the
+same canonical Git common directory belong to one Project; independent clones remain
+distinct even when they use the same remote. A non-Git canonical working directory is a
+standalone Project.
+
+The display label uses the working directory or repository basename and adds parent-path
+context when visible labels collide.
+
+_Avoid:_ Remote repository, project label, when referring to Project identity.
+
+## Worktree
+
+A specific Git working copy within a Project, identified by its canonical Git top-level
+directory. Linked Worktrees share a Project but remain distinct working copies.
+
+_Avoid:_ Project, repository, branch.
+
+## Current Run
+
+The currently active provider CLI invocation attached to a Session. Resuming the same
+native Session in a new process creates a new Run without creating a new Session.
+
+_Avoid:_ Current Session, when referring only to usage since the latest invocation began.
+
+## Open Session
+
+A Session currently attached to a validated live provider CLI process. An Open Session is
+either Busy or Idle; a Session without a live process is Exited even if its source log
+still exists and the Session can later be resumed.
+
+_Avoid:_ Active Session, live log, closed Session.
 
 ## Current Context
 
@@ -35,10 +69,19 @@ session. It is *not* cumulative token processing.
 
 ## Processed Usage
 
-Cumulative, provider-reported token processing. Used for the Usage detail view and price
-estimates. Categories, kept separate when the provider exposes them:
+Cumulative, provider-reported token processing. Every displayed value has an explicit
+scope and keeps provider categories separate when available:
 
 - input, output, cache read, cache creation.
+
+**Current Run Usage** is Processed Usage belonging to the Current Run. It exists only
+while the Session is Open and is the scope users compare with the provider's in-session
+usage display; an Exited Session has no Current Run Usage or Last Run Usage.
+
+**Transcript Lifetime Usage** is Processed Usage across the complete provider-native
+Session transcript, including history inherited when the Session is resumed.
+
+_Avoid:_ Session Usage or Total Usage without an explicit scope; Last Run Usage.
 
 Processed Usage is **kept strictly separate** from Current Context.
 
@@ -78,6 +121,31 @@ Notify once when crossing each threshold. Reset notification state when context 
 below the threshold (including after Compaction). Only Busy/Idle sessions contribute to
 `Context Alerts`; exited historical sessions never do.
 
+## Shared Worktree Risk
+
+A structural concurrency risk that exists when two or more distinct Open Sessions resolve
+to the same writable Git worktree. It indicates possible interference in one working copy,
+not an observed file-level or Git merge conflict. It has Warning severity and does not
+become Critical solely because more Sessions share the worktree.
+
+_Avoid:_ Worktree conflict, candidate conflict.
+
+## Attention Condition
+
+An evidence-backed current condition on a Session or worktree that may warrant user
+inspection. An Idle Session is a neutral Attention Condition; Attention Conditions are not
+Alerts unless they carry Warning or Critical severity.
+
+_Avoid:_ Attention state, when referring to a condition independent of Session lifecycle.
+
+## Recent Signal
+
+A deduplicated, metadata-only record that a meaningful Session, Context, or Worktree
+condition changed recently. A Recent Signal describes a transition, not current state and
+never provider conversation content.
+
+_Avoid:_ Session history, transcript history, prompt history.
+
 ## Compaction
 
 A provider-recorded context-compression event.
@@ -89,12 +157,13 @@ A provider-recorded context-compression event.
 The first version **records observed events** (count badge + detail timeline). It does
 **not** predict the next compaction.
 
-## Time filters
+## Session recency
 
-`Active Today`, `Last 7 Days`, `Last 30 Days`, `All Sessions`. These select sessions by
-**activity time**. A matched session always displays its **complete lifetime Usage** —
-token data is never split across days. The UI states plainly that shown Usage is the full
-usage of matching sessions.
+A Session is **Recent** when its last activity falls within the rolling seven-day window
+and **Older** when it predates that cutoff, regardless of lifecycle state. Recency never
+changes the Session's complete lifetime Usage scope.
+
+_Avoid:_ History, when referring to Older Sessions rather than Signal History.
 
 ## Storage & privacy (non-negotiable)
 
