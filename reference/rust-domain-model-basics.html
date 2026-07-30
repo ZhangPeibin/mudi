@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rust domain model quick reference</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">TokenPlay Rust Reference</p>
+      <h1>领域模型语法速查</h1>
+      <p class="lede">阅读 <code>src/domain.rs</code> 时最常见的五个 Rust 结构。</p>
+    </header>
+
+    <section>
+      <h2><code>enum</code>：封闭的可能性集合</h2>
+      <pre><code>pub enum Provider {
+    ClaudeCode,
+    CodexCli,
+}</code></pre>
+      <p>一个 <code>Provider</code> 值只能是列出的变体之一。新增变体后，相关的穷尽
+      <code>match</code> 通常会由编译器指出需要更新的位置。</p>
+    </section>
+
+    <section>
+      <h2><code>impl</code>：给类型定义行为</h2>
+      <pre><code>impl Provider {
+    pub fn label(self) -&gt; &amp;'static str { /* ... */ }
+}</code></pre>
+      <table>
+        <thead><tr><th>接收者</th><th>含义</th><th>典型用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>self</code></td><td>取得值</td><td>消费值，或复制一个 <code>Copy</code> 小值</td></tr>
+          <tr><td><code>&amp;self</code></td><td>只读借用</td><td>读取而不取得所有权</td></tr>
+          <tr><td><code>&amp;mut self</code></td><td>可变借用</td><td>原地修改值</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2><code>match</code>：按形状穷尽处理</h2>
+      <pre><code>match provider {
+    Provider::ClaudeCode =&gt; "claude",
+    Provider::CodexCli =&gt; "codex",
+}</code></pre>
+      <p>每个分支都是表达式，整个 <code>match</code> 也产生一个值。这里两个分支都返回
+      <code>&amp;str</code>。</p>
+    </section>
+
+    <section>
+      <h2><code>Option&lt;T&gt;</code>：显式表达“可能没有”</h2>
+      <pre><code>enum Option&lt;T&gt; {
+    Some(T),
+    None,
+}</code></pre>
+      <p><code>Option&lt;Provider&gt;</code> 不是空指针：调用者必须处理“有 Provider”和“没有
+      Provider”这两种情况。</p>
+    </section>
+
+    <section>
+      <h2><code>derive</code>：请编译器生成常用实现</h2>
+      <table>
+        <thead><tr><th>Trait</th><th>在本项目中的作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>Debug</code></td><td>允许用调试格式输出值</td></tr>
+          <tr><td><code>Clone</code></td><td>显式复制完整值</td></tr>
+          <tr><td><code>Copy</code></td><td>小值赋值和传参时按位复制</td></tr>
+          <tr><td><code>PartialEq, Eq</code></td><td>允许比较是否相等</td></tr>
+          <tr><td><code>Hash</code></td><td>允许作为哈希集合或映射的键</td></tr>
+          <tr><td><code>Serialize, Deserialize</code></td><td>让 Serde 编解码该类型</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>
