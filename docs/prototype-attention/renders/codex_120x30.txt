@@ -1,0 +1,30 @@
+┌ TokenPlay | PROTOTYPE ───────────────────────────────────────────────────────────────────────────────────────────────┐
+│  [1]   [2]   [3]                                                                                   Theme: tokenplay  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ CODEX CLI SESSIONS | grouped by Project ─────────────────────────────────────────────────────────────────────────────┐
+│  State   Session                    Model                    Context            Lifetime $  Updated  Cmp  Action     │
+│PROJECT  tokenplay                                                                                                    │
+│> Idle    codex-native-session-01... gpt-5.6-codex-ultra-l... [#######---] 67%   $28.64      4m       C1  Inspect     │
+│   + OLDER SESSIONS (1)  Expand                                                                                       │
+│PROJECT  merchant-observability-console-with-an-intentionally-long-name                                               │
+│  Busy    codex-native-session-me... gpt-5.5-codex            [#####-----] 41%   $28.64      1m       C0  Inspect     │
+│   + OLDER SESSIONS (1)  Expand                                                                                       │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ Enter Inspect/Expand | j/k Move | 1/2/3 Page | t Theme | q Quit                                   | Theme: tokenplay   

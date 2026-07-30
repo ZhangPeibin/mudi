@@ -1,0 +1,24 @@
+┌ TokenPlay | PROTOTYPE ───────────────────────────────────────────────────────┐
+│  [1]   [2]   [3]                                           Theme: tokenplay  │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ CODEX CLI SESSIONS | grouped by Project ─────────────────────────────────────┐
+│  State  Session             Ctx    Cost  Cmp  Action                         │
+│PROJECT  tokenplay                                                            │
+│> Idle   ...4d2-a0f6e06fe551 67%   $28.64 C1  Inspect                         │
+│   + OLDER SESSIONS (1)  Expand                                               │
+│PROJECT  merchant-observability-console-with-an-intentionally-long-name       │
+│  Busy   ...ealthy-busy-a951 41%   $28.64 C0  Inspect                         │
+│   + OLDER SESSIONS (1)  Expand                                               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ Enter Inspect/Expand | j/k Move | 1/2/3 Page | t Theme | q Quit                

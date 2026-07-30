@@ -1,0 +1,24 @@
+┌ TokenPlay | PROTOTYPE ───────────────────────────────────────────────────────┐
+│  [1]   [2]   [3]                                           Theme: tokenplay  │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ SESSION DETAIL | Claude Code | OPEN ─────────────────────────────────────────┐
+│Provider   Claude Code / Busy                                                 │
+│Project    tokenplay                                                          │
+│Session    claude-native-session-7f31b652-811d-4bb7-a675-b8af91ac77d2         │
+│Model      claude-opus-4-20260514-thinking-long-context                       │
+│Context    [##########] 92% | CRITICAL Context >=85%                          │
+│CURRENT RUN USAGE                                                             │
+│in 81.2k | out 9.8k | cache read 642.1k | cache create 18.4k | API est. $6.42 │
+│TRANSCRIPT LIFETIME USAGE                                                     │
+│in 344.8k | out 38.2k | cache read 2.8m | cache create 77.1k | API est. $28.64│
+│SOURCE METADATA                                                               │
+│Worktree   /Users/peibin/code/personal/tokenplay                              │
+│cwd        /Users/peibin/code/personal/tokenplay/src/ui/experiments/attention-│
+│           console                                                            │
+│Source log /Users/peibin/.claude/projects/-Users-peibin-code-personal-tokenpla│
+│           y/7f31b652-811d-4bb7-a675-b8af91ac77d2.jsonl                       │
+│Format     JSONL                                                              │
+│                                                                              │
+│COMPACTIONS (2)                                                               │
+└ lines 1-18 of 20 ────────────────────────────────────────────────────────────┘
+ Esc Back | j/k Scroll | c Copy | 1/2/3 Page | t Theme | q Quit                 

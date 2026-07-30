@@ -1,0 +1,24 @@
+┌ TokenPlay | PROTOTYPE ───────────────────────────────────────────────────────┐
+│  [1]   [2]   [3]                                           Theme: tokenplay  │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ SESSION DETAIL | Claude Code | EXITED ───────────────────────────────────────┐
+│Provider   Claude Code / Exited                                               │
+│Project    tokenplay                                                          │
+│Session    claude-native-session-exited-older-2a17                            │
+│Model      claude-sonnet-4-20250514                                           │
+│Context    [#########-] 88% | historical; no current alert                    │
+│TRANSCRIPT LIFETIME USAGE                                                     │
+│in 344.8k | out 38.2k | cache read 2.8m | cache create 77.1k | API est. $28.64│
+│SOURCE METADATA                                                               │
+│Worktree   /Users/peibin/code/personal/tokenplay                              │
+│cwd        /Users/peibin/code/personal/tokenplay                              │
+│Source log /Users/peibin/.claude/projects/-Users-peibin-code-personal-tokenpla│
+│           y/older/exited-2a17.jsonl                                          │
+│Format     JSONL                                                              │
+│                                                                              │
+│COMPACTIONS (3)                                                               │
+│2026-07-30 09:42  auto  pre=181.4k | Context Critical cleared                 │
+│2026-07-29 18:17  manual  pre=146.0k                                          │
+│                                                                              │
+└ lines 1-17 of 17 ────────────────────────────────────────────────────────────┘
+ Esc Back | j/k Scroll | c Copy | 1/2/3 Page | t Theme | q Quit                 

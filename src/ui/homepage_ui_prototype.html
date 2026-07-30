@@ -1,0 +1,501 @@
+<!doctype html>
+<!-- PROTOTYPE - single agreed-direction homepage mockup; delete after validation. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TokenPlay Homepage Prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f100e;
+      --surface: #151613;
+      --surface-2: #1b1c18;
+      --line: #3a3b34;
+      --line-soft: #292a25;
+      --fg: #e4e0d5;
+      --muted: #85867d;
+      --gold: #e5b34f;
+      --green: #80cf72;
+      --cyan: #72b9d6;
+      --amber: #e2bd52;
+      --red: #e16c68;
+      --purple: #b89bd9;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: "SFMono-Regular", "Cascadia Mono", Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.4;
+      letter-spacing: 0;
+    }
+
+    .screen {
+      display: flex;
+      flex-direction: column;
+      width: min(1180px, calc(100% - 32px));
+      min-height: 720px;
+      margin: 22px auto;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: 0 20px 60px rgb(0 0 0 / 35%);
+    }
+
+    .screen > section:last-of-type {
+      flex: 1;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(160px, 1fr) auto minmax(260px, 1fr);
+      min-height: 48px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      padding: 0 15px;
+    }
+
+    .brand {
+      color: var(--gold);
+      font-weight: 800;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      justify-self: center;
+    }
+
+    .nav-item {
+      display: grid;
+      width: 32px;
+      height: 27px;
+      place-items: center;
+      color: var(--muted);
+      font-weight: 750;
+    }
+
+    .nav-item.active {
+      background: var(--gold);
+      color: #11120f;
+    }
+
+    .live {
+      justify-self: end;
+      color: var(--green);
+      white-space: nowrap;
+    }
+
+    .live::before {
+      content: "●";
+      margin-right: 7px;
+    }
+
+    .summary {
+      display: flex;
+      min-height: 41px;
+      align-items: center;
+      gap: 24px;
+      border-bottom: 1px solid var(--line);
+      padding: 0 15px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .summary strong {
+      margin-left: 6px;
+      color: var(--fg);
+      font-size: 14px;
+    }
+
+    .summary .critical {
+      color: var(--red);
+    }
+
+    .summary .warning {
+      color: var(--amber);
+    }
+
+    .content-title {
+      display: flex;
+      min-height: 43px;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      padding: 0 15px;
+      font-weight: 750;
+    }
+
+    .content-title span:last-child {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
+    }
+
+    .project {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .project:last-of-type {
+      border-bottom: 0;
+    }
+
+    .project-header {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) 120px 180px;
+      min-height: 37px;
+      align-items: center;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      padding: 0 15px;
+    }
+
+    .project-name {
+      font-weight: 800;
+    }
+
+    .project-count {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .project-state {
+      justify-self: end;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
+
+    .project-state.danger {
+      color: var(--red);
+      font-weight: 750;
+    }
+
+    .project-state.warn {
+      color: var(--amber);
+      font-weight: 750;
+    }
+
+    .session-row {
+      display: grid;
+      grid-template-columns: 76px 92px minmax(145px, 1fr) minmax(220px, 1.3fr) 76px 82px;
+      min-height: 45px;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--line-soft);
+      padding: 0 15px;
+    }
+
+    .session-row:last-child {
+      border-bottom: 0;
+    }
+
+    .session-row.selected {
+      background: #2a281f;
+      box-shadow: inset 3px 0 0 var(--gold);
+    }
+
+    .state {
+      white-space: nowrap;
+    }
+
+    .busy {
+      color: var(--green);
+      font-weight: 750;
+    }
+
+    .idle {
+      color: var(--cyan);
+    }
+
+    .provider {
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .claude {
+      color: var(--gold);
+    }
+
+    .codex {
+      color: var(--cyan);
+    }
+
+    .model,
+    .updated {
+      overflow: hidden;
+      color: var(--muted);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .updated {
+      justify-self: end;
+    }
+
+    .context {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) 44px;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .track {
+      height: 9px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: #090a08;
+    }
+
+    .fill {
+      height: 100%;
+      background: var(--green);
+    }
+
+    .fill.warn {
+      background: var(--amber);
+    }
+
+    .fill.critical {
+      background: var(--red);
+    }
+
+    .pct {
+      text-align: right;
+    }
+
+    .pct.warn {
+      color: var(--amber);
+    }
+
+    .pct.critical {
+      color: var(--red);
+      font-weight: 800;
+    }
+
+    .attention {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .attention.critical {
+      color: var(--red);
+    }
+
+    .attention.warn {
+      color: var(--amber);
+    }
+
+    .reason {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      min-height: 30px;
+      align-items: center;
+      border-bottom: 1px solid var(--line-soft);
+      padding: 0 15px 0 195px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .reason:last-child {
+      border-bottom: 0;
+    }
+
+    .reason strong {
+      color: inherit;
+    }
+
+    .footer {
+      display: flex;
+      min-height: 40px;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--line);
+      padding: 0 15px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .key {
+      color: var(--gold);
+    }
+
+    @media (max-width: 820px) {
+      .screen {
+        width: calc(100% - 16px);
+        margin: 8px;
+      }
+
+      .topbar {
+        grid-template-columns: 1fr auto;
+      }
+
+      .nav {
+        order: 3;
+        grid-column: 1 / -1;
+        margin-bottom: 10px;
+      }
+
+      .live {
+        grid-column: 2;
+      }
+
+      .summary {
+        flex-wrap: wrap;
+        gap: 8px 18px;
+        padding: 9px 12px;
+      }
+
+      .session-row {
+        grid-template-columns: 70px 82px minmax(110px, 1fr) 64px;
+      }
+
+      .model,
+      .updated {
+        display: none;
+      }
+
+      .context {
+        grid-template-columns: 1fr;
+      }
+
+      .track {
+        display: none;
+      }
+
+      .reason {
+        grid-template-columns: 1fr;
+        padding-left: 15px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="screen" aria-label="TokenPlay homepage prototype">
+    <header class="topbar">
+      <div class="brand">TokenPlay</div>
+      <nav class="nav" aria-label="Primary navigation">
+        <span class="nav-item active">1</span>
+        <span class="nav-item">2</span>
+        <span class="nav-item">3</span>
+      </nav>
+      <div class="live">watching · updated 2s ago</div>
+    </header>
+
+    <section class="summary" aria-label="Open session summary">
+      <span>OPEN<strong>6</strong></span>
+      <span>BUSY<strong>4</strong></span>
+      <span>IDLE<strong>2</strong></span>
+      <span>CRITICAL<strong class="critical">1</strong></span>
+      <span>WARNING<strong class="warning">2</strong></span>
+    </section>
+
+    <section>
+      <div class="content-title">
+        <span>Open sessions by project</span>
+        <span>risk first · current state only</span>
+      </div>
+
+      <article class="project">
+        <header class="project-header">
+          <div><span class="project-name">ios-app</span> <span class="project-count">· 1 session</span></div>
+          <div></div>
+          <div class="project-state danger">P1 · context critical</div>
+        </header>
+        <div class="session-row selected">
+          <span class="state busy">● Busy</span>
+          <span class="provider claude">CLAUDE</span>
+          <span class="model">opus-4.8</span>
+          <div class="context"><div class="track"><div class="fill critical" style="width: 91%"></div></div><span class="pct critical">91%</span></div>
+          <span class="attention critical">! inspect</span>
+          <span class="updated">18s</span>
+        </div>
+        <div class="reason"><strong class="critical">Context critical</strong><span>182k / 200k · open a fresh session soon</span></div>
+      </article>
+
+      <article class="project">
+        <header class="project-header">
+          <div><span class="project-name">backend</span> <span class="project-count">· 2 sessions</span></div>
+          <div></div>
+          <div class="project-state danger">worktree conflict</div>
+        </header>
+        <div class="session-row">
+          <span class="state busy">● Busy</span>
+          <span class="provider claude">CLAUDE</span>
+          <span class="model">opus-4.8</span>
+          <div class="context"><div class="track"><div class="fill warn" style="width: 76%"></div></div><span class="pct warn">76%</span></div>
+          <span class="attention warn">! warning</span>
+          <span class="updated">22s</span>
+        </div>
+        <div class="session-row">
+          <span class="state idle">○ Idle</span>
+          <span class="provider codex">CODEX</span>
+          <span class="model">gpt-5.6</span>
+          <div class="context"><div class="track"><div class="fill" style="width: 43%"></div></div><span class="pct">43%</span></div>
+          <span class="attention">waiting</span>
+          <span class="updated">4m</span>
+        </div>
+        <div class="reason"><strong class="critical">Conflict risk</strong><span>2 open sessions share /code/backend</span></div>
+      </article>
+
+      <article class="project">
+        <header class="project-header">
+          <div><span class="project-name">payments</span> <span class="project-count">· 1 session</span></div>
+          <div></div>
+          <div class="project-state warn">possible stall</div>
+        </header>
+        <div class="session-row">
+          <span class="state busy">● Busy</span>
+          <span class="provider codex">CODEX</span>
+          <span class="model">gpt-5.6-sol</span>
+          <div class="context"><div class="track"><div class="fill warn" style="width: 72%"></div></div><span class="pct warn">72%</span></div>
+          <span class="attention warn">! inspect</span>
+          <span class="updated">12m</span>
+        </div>
+        <div class="reason"><strong class="warn">Possible stall</strong><span>process Busy · no source-log growth for 12m</span></div>
+      </article>
+
+      <article class="project">
+        <header class="project-header">
+          <div><span class="project-name">tokenplay</span> <span class="project-count">· 2 sessions</span></div>
+          <div></div>
+          <div class="project-state">healthy</div>
+        </header>
+        <div class="session-row">
+          <span class="state busy">● Busy</span>
+          <span class="provider claude">CLAUDE</span>
+          <span class="model">opus-4.8</span>
+          <div class="context"><div class="track"><div class="fill" style="width: 38%"></div></div><span class="pct">38%</span></div>
+          <span class="attention">monitoring</span>
+          <span class="updated">12s</span>
+        </div>
+        <div class="session-row">
+          <span class="state idle">○ Idle</span>
+          <span class="provider codex">CODEX</span>
+          <span class="model">gpt-5.6</span>
+          <div class="context"><div class="track"><div class="fill" style="width: 24%"></div></div><span class="pct">24%</span></div>
+          <span class="attention">waiting</span>
+          <span class="updated">19m</span>
+        </div>
+      </article>
+    </section>
+
+    <footer class="footer">
+      <span><span class="key">↑/↓</span> select · <span class="key">Enter</span> inspect · <span class="key">r</span> refresh · <span class="key">?</span> help</span>
+      <span>local only · metadata only</span>
+    </footer>
+  </main>
+</body>
+</html>
