@@ -29,7 +29,17 @@ impl StateDetector {
 
     /// Live state for a Claude session id. Exited when no valid state file matches.
     pub fn claude_state(&self, session_id: &str) -> SessionState {
-        self.claude.get(session_id).copied().unwrap_or(SessionState::Exited)
+        self.claude
+            .get(session_id)
+            .copied()
+            .unwrap_or(SessionState::Exited)
+    }
+
+    /// Whether a live Codex process currently holds `rollout_path` open. Only a
+    /// held file can be Busy/Idle; everything else is Exited — so the adapter reads
+    /// a file's task-boundary tail only when this returns true.
+    pub fn holds_codex(&self, rollout_path: &Path) -> bool {
+        self.codex_held.contains(rollout_path)
     }
 
     /// Live state for a Codex session given its rollout path and latest task boundary.
@@ -60,11 +70,19 @@ fn detect_claude(sessions_dir: &Path) -> HashMap<String, SessionState> {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else { continue };
-        let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
 
-        let Some(pid) = v.get("pid").and_then(Value::as_i64) else { continue };
-        let Some(session_id) = v.get("sessionId").and_then(Value::as_str) else { continue };
+        let Some(pid) = v.get("pid").and_then(Value::as_i64) else {
+            continue;
+        };
+        let Some(session_id) = v.get("sessionId").and_then(Value::as_str) else {
+            continue;
+        };
         let started_at_ms = v.get("startedAt").and_then(Value::as_i64);
 
         // PID-reuse guard: the live process must exist and its start time must match
@@ -103,7 +121,9 @@ fn process_matches(pid: i64, expected_started_ms: Option<i64>) -> bool {
     if etime.is_empty() {
         return false; // process not alive
     }
-    let Some(elapsed_s) = parse_etime(&etime) else { return false };
+    let Some(elapsed_s) = parse_etime(&etime) else {
+        return false;
+    };
 
     match expected_started_ms {
         Some(exp_ms) => {
@@ -125,7 +145,10 @@ fn parse_etime(s: &str) -> Option<i64> {
         Some((d, rest)) => (d.parse::<i64>().ok()?, rest),
         None => (0, s),
     };
-    let parts: Vec<i64> = hms.split(':').map(|p| p.parse::<i64>().ok()).collect::<Option<_>>()?;
+    let parts: Vec<i64> = hms
+        .split(':')
+        .map(|p| p.parse::<i64>().ok())
+        .collect::<Option<_>>()?;
     let (h, m, sec) = match parts.as_slice() {
         [h, m, s] => (*h, *m, *s),
         [m, s] => (0, *m, *s),
@@ -190,7 +213,10 @@ mod tests {
 
     #[test]
     fn claude_state_defaults_to_exited() {
-        let d = StateDetector { claude: HashMap::new(), codex_held: HashSet::new() };
+        let d = StateDetector {
+            claude: HashMap::new(),
+            codex_held: HashSet::new(),
+        };
         assert_eq!(d.claude_state("nope"), SessionState::Exited);
     }
 
@@ -198,7 +224,10 @@ mod tests {
     fn parses_etime_formats() {
         assert_eq!(parse_etime("57:43"), Some(57 * 60 + 43));
         assert_eq!(parse_etime("12:34:56"), Some(12 * 3600 + 34 * 60 + 56));
-        assert_eq!(parse_etime("13-06:15:11"), Some(13 * 86400 + 6 * 3600 + 15 * 60 + 11));
+        assert_eq!(
+            parse_etime("13-06:15:11"),
+            Some(13 * 86400 + 6 * 3600 + 15 * 60 + 11)
+        );
         assert_eq!(parse_etime("garbage"), None);
     }
 }

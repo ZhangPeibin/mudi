@@ -71,7 +71,6 @@ impl Index {
                 cache_read      INTEGER NOT NULL,
                 cache_write     INTEGER NOT NULL,
                 last_activity_ms INTEGER NOT NULL,
-                codex_open_turn INTEGER,           -- NULL claude, 0/1 codex
                 PRIMARY KEY (provider, id)
             );
 
@@ -98,6 +97,18 @@ impl Index {
             CREATE INDEX IF NOT EXISTS idx_compactions ON compactions(provider, session_id);
             "#,
         )?;
+
+        // The index is disposable and the column is harmless on existing files,
+        // but drop it when present so the persisted schema matches the pure usage
+        // cache model. Fresh schemas never create it.
+        let has_codex_open_turn = conn
+            .prepare("PRAGMA table_info(sessions)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(Result::ok)
+            .any(|name| name == "codex_open_turn");
+        if has_codex_open_turn {
+            conn.execute("ALTER TABLE sessions DROP COLUMN codex_open_turn", [])?;
+        }
         Ok(())
     }
 
@@ -107,13 +118,23 @@ impl Index {
             .query_row(
                 "SELECT source_mtime_ns, source_size FROM sessions WHERE source_path = ?1",
                 params![source_path.to_string_lossy()],
-                |row| Ok(Fingerprint { mtime_ns: row.get(0)?, size: row.get(1)? }),
+                |row| {
+                    Ok(Fingerprint {
+                        mtime_ns: row.get(0)?,
+                        size: row.get(1)?,
+                    })
+                },
             )
             .ok()
     }
 
     /// Insert or replace a parsed session and its child rows.
-    pub fn upsert(&mut self, parsed: &ParsedSession, source_path: &Path, fp: Fingerprint) -> Result<()> {
+    pub fn upsert(
+        &mut self,
+        parsed: &ParsedSession,
+        source_path: &Path,
+        fp: Fingerprint,
+    ) -> Result<()> {
         let tx = self.conn.transaction()?;
         let provider = parsed.provider.as_str();
         let sp = source_path.to_string_lossy().to_string();
@@ -132,8 +153,8 @@ impl Index {
             r#"INSERT INTO sessions
                 (provider, id, source_path, source_mtime_ns, source_size, cwd, latest_model,
                  context_tokens, context_window, in_tokens, out_tokens, cache_read, cache_write,
-                 last_activity_ms, codex_open_turn)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                 last_activity_ms)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                ON CONFLICT(provider, id) DO UPDATE SET
                  source_path=excluded.source_path,
                  source_mtime_ns=excluded.source_mtime_ns,
@@ -146,8 +167,7 @@ impl Index {
                  out_tokens=excluded.out_tokens,
                  cache_read=excluded.cache_read,
                  cache_write=excluded.cache_write,
-                 last_activity_ms=excluded.last_activity_ms,
-                 codex_open_turn=excluded.codex_open_turn"#,
+                 last_activity_ms=excluded.last_activity_ms"#,
             params![
                 provider,
                 parsed.id,
@@ -163,7 +183,6 @@ impl Index {
                 parsed.usage.cache_read as i64,
                 parsed.usage.cache_write as i64,
                 parsed.last_activity_ms,
-                parsed.codex_open_turn.map(|b| b as i64),
             ],
         )?;
 
@@ -189,9 +208,15 @@ impl Index {
     /// Returns the number of sessions pruned.
     pub fn prune_missing(&mut self, present: &HashSet<PathBuf>) -> Result<usize> {
         let indexed: Vec<(String, String, String)> = {
-            let mut stmt = self.conn.prepare("SELECT provider, id, source_path FROM sessions")?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT provider, id, source_path FROM sessions")?;
             let rows = stmt.query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })?;
             rows.filter_map(Result::ok).collect()
         };
@@ -200,9 +225,18 @@ impl Index {
         let tx = self.conn.transaction()?;
         for (provider, id, sp) in indexed {
             if !present.contains(Path::new(&sp)) {
-                tx.execute("DELETE FROM sessions WHERE provider=?1 AND id=?2", params![provider, id])?;
-                tx.execute("DELETE FROM per_model WHERE provider=?1 AND session_id=?2", params![provider, id])?;
-                tx.execute("DELETE FROM compactions WHERE provider=?1 AND session_id=?2", params![provider, id])?;
+                tx.execute(
+                    "DELETE FROM sessions WHERE provider=?1 AND id=?2",
+                    params![provider, id],
+                )?;
+                tx.execute(
+                    "DELETE FROM per_model WHERE provider=?1 AND session_id=?2",
+                    params![provider, id],
+                )?;
+                tx.execute(
+                    "DELETE FROM compactions WHERE provider=?1 AND session_id=?2",
+                    params![provider, id],
+                )?;
                 pruned += 1;
             }
         }
@@ -214,12 +248,13 @@ impl Index {
     pub fn load_all(&self) -> Result<Vec<StoredSession>> {
         let mut stmt = self.conn.prepare(
             "SELECT provider, id, source_path, cwd, latest_model, context_tokens, context_window,
-                    in_tokens, out_tokens, cache_read, cache_write, last_activity_ms, codex_open_turn
+                    in_tokens, out_tokens, cache_read, cache_write, last_activity_ms
              FROM sessions",
         )?;
         let base: Vec<StoredSession> = stmt
             .query_map([], |row| {
-                let provider = Provider::from_str(&row.get::<_, String>(0)?).unwrap_or(Provider::ClaudeCode);
+                let provider =
+                    Provider::from_str(&row.get::<_, String>(0)?).unwrap_or(Provider::ClaudeCode);
                 let id: String = row.get(1)?;
                 let source_path = PathBuf::from(row.get::<_, String>(2)?);
                 let cwd: Option<String> = row.get(3)?;
@@ -235,7 +270,6 @@ impl Index {
                     cache_write: row.get::<_, i64>(10)? as u64,
                 };
                 let last_activity_ms: i64 = row.get(11)?;
-                let codex_open_turn: Option<i64> = row.get(12)?;
                 Ok(StoredSession {
                     source_path,
                     parsed: ParsedSession {
@@ -248,7 +282,6 @@ impl Index {
                         per_model: Vec::new(),
                         compactions: Vec::new(),
                         last_activity_ms,
-                        codex_open_turn: codex_open_turn.map(|v| v != 0),
                     },
                 })
             })?
@@ -310,7 +343,10 @@ pub fn fingerprint_of(path: &Path) -> Option<Fingerprint> {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_nanos() as i64)
         .unwrap_or(0);
-    Some(Fingerprint { mtime_ns, size: meta.len() as i64 })
+    Some(Fingerprint {
+        mtime_ns,
+        size: meta.len() as i64,
+    })
 }
 
 #[cfg(test)]
@@ -324,12 +360,31 @@ mod tests {
             id: id.to_string(),
             cwd: Some("/tmp/proj".into()),
             latest_model: Some("claude-opus-4-8".into()),
-            context: ContextState { tokens: 4500, window: Some(200_000) },
-            usage: Usage { input: 100, output: 40, cache_read: 50, cache_write: 10 },
-            per_model: vec![("claude-opus-4-8".into(), Usage { input: 100, output: 40, cache_read: 50, cache_write: 10 })],
-            compactions: vec![Compaction { at_ms: 123, trigger: Some("auto".into()), pre_tokens: Some(150000) }],
+            context: ContextState {
+                tokens: 4500,
+                window: Some(200_000),
+            },
+            usage: Usage {
+                input: 100,
+                output: 40,
+                cache_read: 50,
+                cache_write: 10,
+            },
+            per_model: vec![(
+                "claude-opus-4-8".into(),
+                Usage {
+                    input: 100,
+                    output: 40,
+                    cache_read: 50,
+                    cache_write: 10,
+                },
+            )],
+            compactions: vec![Compaction {
+                at_ms: 123,
+                trigger: Some("auto".into()),
+                pre_tokens: Some(150000),
+            }],
             last_activity_ms: 999,
-            codex_open_turn: None,
         }
     }
 
@@ -337,7 +392,10 @@ mod tests {
     fn upsert_then_load_roundtrips() {
         let mut idx = Index::open_in_memory().unwrap();
         let path = PathBuf::from("/logs/a.jsonl");
-        let fp = Fingerprint { mtime_ns: 1, size: 2 };
+        let fp = Fingerprint {
+            mtime_ns: 1,
+            size: 2,
+        };
         idx.upsert(&sample("s1"), &path, fp).unwrap();
 
         let all = idx.load_all().unwrap();
@@ -350,14 +408,59 @@ mod tests {
     }
 
     #[test]
+    fn opening_an_old_index_drops_the_provider_specific_state_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                provider TEXT NOT NULL,
+                id TEXT NOT NULL,
+                codex_open_turn INTEGER,
+                PRIMARY KEY (provider, id)
+            );",
+        )
+        .unwrap();
+
+        Index::init(&conn).unwrap();
+
+        let names: Vec<String> = conn
+            .prepare("PRAGMA table_info(sessions)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(!names.iter().any(|name| name == "codex_open_turn"));
+    }
+
+    #[test]
     fn reupsert_replaces_child_rows_no_duplication() {
         let mut idx = Index::open_in_memory().unwrap();
         let path = PathBuf::from("/logs/a.jsonl");
-        idx.upsert(&sample("s1"), &path, Fingerprint { mtime_ns: 1, size: 2 }).unwrap();
-        idx.upsert(&sample("s1"), &path, Fingerprint { mtime_ns: 9, size: 9 }).unwrap();
+        idx.upsert(
+            &sample("s1"),
+            &path,
+            Fingerprint {
+                mtime_ns: 1,
+                size: 2,
+            },
+        )
+        .unwrap();
+        idx.upsert(
+            &sample("s1"),
+            &path,
+            Fingerprint {
+                mtime_ns: 9,
+                size: 9,
+            },
+        )
+        .unwrap();
         let all = idx.load_all().unwrap();
         assert_eq!(all.len(), 1);
-        assert_eq!(all[0].parsed.per_model.len(), 1, "child rows replaced, not appended");
+        assert_eq!(
+            all[0].parsed.per_model.len(),
+            1,
+            "child rows replaced, not appended"
+        );
         assert_eq!(all[0].parsed.compactions.len(), 1);
         assert_eq!(idx.fingerprint(&path).unwrap().mtime_ns, 9);
     }
@@ -365,8 +468,24 @@ mod tests {
     #[test]
     fn prune_removes_deleted_sources() {
         let mut idx = Index::open_in_memory().unwrap();
-        idx.upsert(&sample("s1"), Path::new("/logs/a.jsonl"), Fingerprint { mtime_ns: 1, size: 2 }).unwrap();
-        idx.upsert(&sample("s2"), Path::new("/logs/b.jsonl"), Fingerprint { mtime_ns: 1, size: 2 }).unwrap();
+        idx.upsert(
+            &sample("s1"),
+            Path::new("/logs/a.jsonl"),
+            Fingerprint {
+                mtime_ns: 1,
+                size: 2,
+            },
+        )
+        .unwrap();
+        idx.upsert(
+            &sample("s2"),
+            Path::new("/logs/b.jsonl"),
+            Fingerprint {
+                mtime_ns: 1,
+                size: 2,
+            },
+        )
+        .unwrap();
 
         let mut present = HashSet::new();
         present.insert(PathBuf::from("/logs/a.jsonl"));

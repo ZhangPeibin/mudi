@@ -6,10 +6,9 @@ use crate::domain::{ModelUsage, Provider, Session};
 use crate::index::{fingerprint_of, Index, StoredSession};
 use crate::pricing::RateCard;
 use crate::providers::state::StateDetector;
-use crate::providers::{claude, codex};
+use crate::providers::{self, ProviderAdapter};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 /// Progress reported while (re)indexing.
 #[derive(Debug, Clone, Copy, Default)]
@@ -20,77 +19,36 @@ pub struct ScanStats {
     pub pruned: usize,
 }
 
-/// Discover all candidate Claude transcript files under the configured roots.
-pub fn discover_claude_files(cfg: &Config) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for root in cfg.claude_project_roots() {
-        collect_jsonl(&root, &mut out, |name| name.ends_with(".jsonl"));
-    }
-    out
-}
-
-/// Discover all candidate Codex rollout files under the configured roots.
-pub fn discover_codex_files(cfg: &Config) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for root in cfg.codex_session_roots() {
-        collect_jsonl(&root, &mut out, |name| {
-            name.starts_with("rollout-") && name.ends_with(".jsonl")
-        });
-    }
-    out
-}
-
-fn collect_jsonl(root: &Path, out: &mut Vec<PathBuf>, keep: impl Fn(&str) -> bool) {
-    if !root.exists() {
-        return;
-    }
-    for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        if let Some(name) = entry.file_name().to_str() {
-            if keep(name) {
-                out.push(entry.into_path());
-            }
-        }
-    }
-}
-
 /// Incrementally refresh the index from source: parse changed/new files, skip
-/// unchanged ones, and prune sessions whose source vanished.
+/// unchanged ones, and prune sessions whose source vanished. Each provider's
+/// adapter owns discovery and parsing; nothing here enumerates providers.
 pub fn refresh(cfg: &Config, index: &mut Index) -> ScanStats {
     let mut stats = ScanStats::default();
     let mut present: HashSet<PathBuf> = HashSet::new();
 
-    let claude_files = discover_claude_files(cfg);
-    let codex_files = discover_codex_files(cfg);
-    stats.discovered = claude_files.len() + codex_files.len();
-
-    for path in &claude_files {
-        present.insert(path.clone());
-        index_one(index, path, Provider::ClaudeCode, &mut stats);
-    }
-    for path in &codex_files {
-        present.insert(path.clone());
-        index_one(index, path, Provider::CodexCli, &mut stats);
+    for adapter in providers::ADAPTERS {
+        let files = adapter.discover(cfg);
+        stats.discovered += files.len();
+        for path in files {
+            present.insert(path.clone());
+            index_one(index, &path, *adapter, &mut stats);
+        }
     }
 
     stats.pruned = index.prune_missing(&present).unwrap_or(0);
     stats
 }
 
-fn index_one(index: &mut Index, path: &Path, provider: Provider, stats: &mut ScanStats) {
-    let Some(fp) = fingerprint_of(path) else { return };
+fn index_one(index: &mut Index, path: &Path, adapter: &dyn ProviderAdapter, stats: &mut ScanStats) {
+    let Some(fp) = fingerprint_of(path) else {
+        return;
+    };
     // Skip unchanged files — this is what keeps incremental updates cheap.
     if index.fingerprint(path) == Some(fp) {
         stats.skipped += 1;
         return;
     }
-    let parsed = match provider {
-        Provider::ClaudeCode => claude::parse_file(path),
-        Provider::CodexCli => codex::parse_file(path),
-    };
-    if let Some(parsed) = parsed {
+    if let Some(parsed) = adapter.parse_file(path) {
         if index.upsert(&parsed, path, fp).is_ok() {
             stats.parsed += 1;
         }
@@ -112,12 +70,12 @@ pub fn build_sessions(cfg: &Config, index: &Index, rates: &RateCard) -> Vec<Sess
 }
 
 fn to_session(stored: StoredSession, detector: &StateDetector, rates: &RateCard) -> Session {
-    let StoredSession { parsed, source_path } = stored;
+    let StoredSession {
+        parsed,
+        source_path,
+    } = stored;
 
-    let state = match parsed.provider {
-        Provider::ClaudeCode => detector.claude_state(&parsed.id),
-        Provider::CodexCli => detector.codex_state(&source_path, parsed.codex_open_turn),
-    };
+    let state = providers::adapter_for(parsed.provider).live_state(detector, &source_path);
 
     // Per-model cost; total is None if any contributing model price is unknown.
     let mut any_unknown = false;
@@ -131,10 +89,18 @@ fn to_session(stored: StoredSession, detector: &StateDetector, rates: &RateCard)
                 Some(c) => total += c,
                 None => any_unknown = true,
             }
-            ModelUsage { model: model.clone(), usage: *usage, cost }
+            ModelUsage {
+                model: model.clone(),
+                usage: *usage,
+                cost,
+            }
         })
         .collect();
-    let cost = if per_model.is_empty() || any_unknown { None } else { Some(total) };
+    let cost = if per_model.is_empty() || any_unknown {
+        None
+    } else {
+        Some(total)
+    };
 
     let project = basename_of(parsed.cwd.as_deref());
 
@@ -203,7 +169,11 @@ fn disambiguate_projects(sessions: &mut [Session]) {
 fn tail_path(cwd: Option<&str>, n: usize) -> String {
     match cwd {
         Some(p) => {
-            let comps: Vec<&str> = p.trim_end_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+            let comps: Vec<&str> = p
+                .trim_end_matches('/')
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .collect();
             let start = comps.len().saturating_sub(n);
             comps[start..].join("/")
         }
@@ -213,7 +183,11 @@ fn tail_path(cwd: Option<&str>, n: usize) -> String {
 
 fn path_depth(cwd: Option<&str>) -> usize {
     match cwd {
-        Some(p) => p.trim_end_matches('/').split('/').filter(|s| !s.is_empty()).count(),
+        Some(p) => p
+            .trim_end_matches('/')
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .count(),
         None => 1,
     }
 }
@@ -263,7 +237,11 @@ mod tests {
 
     #[test]
     fn disambiguates_colliding_basenames() {
-        let mut s = vec![sess("/Users/x/dex/backend"), sess("/Users/x/pay/backend"), sess("/Users/x/solo")];
+        let mut s = vec![
+            sess("/Users/x/dex/backend"),
+            sess("/Users/x/pay/backend"),
+            sess("/Users/x/solo"),
+        ];
         disambiguate_projects(&mut s);
         assert_eq!(s[0].project, "dex/backend");
         assert_eq!(s[1].project, "pay/backend");

@@ -1,6 +1,6 @@
 # ADR 0001 — Express the `ProviderAdapter` seam
 
-- **Status:** Accepted (design locked 2026-07-30) — not yet implemented.
+- **Status:** Accepted and implemented (2026-07-30).
 - **Scope:** Architecture deepening candidates **1 + 2 + 4** as one unit. Candidates 3
   (pricing policy) and 5 (probe injection / testability) are explicitly out of scope.
 

@@ -9,11 +9,52 @@
 //!   id (last occurrence wins — it carries the final counts).
 //! - Compaction = `type:system` / `subtype:compact_boundary`.
 
-use super::{iso_to_ms, known_context_window, ParsedSession, PerModel};
-use crate::domain::{Compaction, ContextState, Provider, Usage};
+use super::{iso_to_ms, ParsedSession, PerModel, ProviderAdapter};
+use crate::config::Config;
+use crate::domain::{Compaction, ContextState, Provider, SessionState, Usage};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// The Claude Code provider adapter.
+pub struct ClaudeAdapter;
+
+impl ProviderAdapter for ClaudeAdapter {
+    fn provider(&self) -> Provider {
+        Provider::ClaudeCode
+    }
+
+    fn discover(&self, cfg: &Config) -> Vec<PathBuf> {
+        super::discover_files(&cfg.claude_project_roots(), |name| name.ends_with(".jsonl"))
+    }
+
+    fn parse_file(&self, path: &Path) -> Option<ParsedSession> {
+        parse_file(path)
+    }
+
+    fn context_window(&self, model: &str) -> Option<u64> {
+        let m = model.to_ascii_lowercase();
+        if !m.starts_with("claude") {
+            return None;
+        }
+        // Haiku-tier models are 200k; current Opus/Sonnet run a 1M window in
+        // Claude Code. The transcript never records the window, so it is derived
+        // from the model name here.
+        if m.contains("haiku") {
+            Some(200_000)
+        } else {
+            Some(1_000_000)
+        }
+    }
+
+    fn live_state(&self, probe: &super::state::StateDetector, source_path: &Path) -> SessionState {
+        // A Claude session's id is its transcript filename stem.
+        match source_path.file_stem().and_then(|s| s.to_str()) {
+            Some(id) => probe.claude_state(id),
+            None => SessionState::Exited,
+        }
+    }
+}
 
 /// Parse a Claude transcript file. Returns `None` if the file is unreadable or yields
 /// nothing usable. Malformed lines are skipped, never fatal.
@@ -48,7 +89,10 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
             Err(_) => continue, // malformed line — skip
         };
 
-        let ts = v.get("timestamp").and_then(Value::as_str).and_then(iso_to_ms);
+        let ts = v
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(iso_to_ms);
         if let Some(t) = ts {
             last_activity_ms = last_activity_ms.max(t);
         }
@@ -60,8 +104,12 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
 
         match v.get("type").and_then(Value::as_str) {
             Some("assistant") => {
-                let Some(msg) = v.get("message") else { continue };
-                let Some(usage_v) = msg.get("usage") else { continue };
+                let Some(msg) = v.get("message") else {
+                    continue;
+                };
+                let Some(usage_v) = msg.get("usage") else {
+                    continue;
+                };
                 let model = msg
                     .get("model")
                     .and_then(Value::as_str)
@@ -73,7 +121,12 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
                 let cache_read = u(usage_v, "cache_read_input_tokens");
                 let cache_write = u(usage_v, "cache_creation_input_tokens");
 
-                let usage = Usage { input, output, cache_read, cache_write };
+                let usage = Usage {
+                    input,
+                    output,
+                    cache_read,
+                    cache_write,
+                };
                 // Current context excludes cache creation (write-side).
                 let ctx_tokens = input + cache_read;
 
@@ -87,7 +140,15 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
                     });
 
                 // Last occurrence wins: streaming's final chunk has complete counts.
-                msgs.insert(key, Msg { usage, model, ts: ts.unwrap_or(0), ctx_tokens });
+                msgs.insert(
+                    key,
+                    Msg {
+                        usage,
+                        model,
+                        ts: ts.unwrap_or(0),
+                        ctx_tokens,
+                    },
+                );
             }
             Some("system") => {
                 if v.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
@@ -129,7 +190,10 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
 
     let (context, latest_model) = match latest {
         Some(m) => (
-            ContextState { tokens: m.ctx_tokens, window: known_context_window(&m.model) },
+            ContextState {
+                tokens: m.ctx_tokens,
+                window: ClaudeAdapter.context_window(&m.model),
+            },
             Some(m.model.clone()),
         ),
         None => (ContextState::default(), None),
@@ -145,7 +209,6 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
         per_model: per_model.into_vec(),
         compactions,
         last_activity_ms,
-        codex_open_turn: None,
     })
 }
 
@@ -182,8 +245,47 @@ mod tests {
         let s = parse_str("sess", text).unwrap();
         // Latest = "b": 1500 + 3000, excluding cache creation.
         assert_eq!(s.context.tokens, 4500);
-        assert_eq!(s.context.window, Some(200_000));
+        assert_eq!(s.context.window, Some(1_000_000));
         assert_eq!(s.latest_model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn context_window_is_1m_except_haiku() {
+        // Current Claude Code Opus/Sonnet models run a 1M window; Haiku-tier is 200k.
+        assert_eq!(
+            ClaudeAdapter.context_window("claude-opus-4-8"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            ClaudeAdapter.context_window("claude-sonnet-4-6"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            ClaudeAdapter.context_window("claude-haiku-4-5"),
+            Some(200_000)
+        );
+        // Case-insensitive on the model string.
+        assert_eq!(
+            ClaudeAdapter.context_window("Claude-Haiku-4-5"),
+            Some(200_000)
+        );
+        // Non-Claude strings remain unknown.
+        assert_eq!(ClaudeAdapter.context_window("gpt-5.5"), None);
+    }
+
+    #[test]
+    fn large_context_no_longer_exceeds_100_percent() {
+        // Observed 212.7k tokens on opus-4-8 previously rendered as 106% against a
+        // hardcoded 200k window; against the real 1M window it is well under 100%.
+        let ctx = ContextState {
+            tokens: 212_700,
+            window: ClaudeAdapter.context_window("claude-opus-4-8"),
+        };
+        let pct = ctx.percent().expect("window known");
+        assert!(
+            pct < 100.0,
+            "212.7k should be under 100% of the real window, got {pct}"
+        );
     }
 
     #[test]

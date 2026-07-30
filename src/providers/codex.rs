@@ -12,13 +12,77 @@
 //! - Compaction = top-level `type:compacted` and/or `event_msg`/`context_compacted`
 //!   (collapsed when they describe the same event).
 
-use super::{iso_to_ms, ParsedSession, PerModel};
-use crate::domain::{Compaction, ContextState, Provider, Usage};
+use super::{iso_to_ms, ParsedSession, PerModel, ProviderAdapter};
+use crate::config::Config;
+use crate::domain::{Compaction, ContextState, Provider, SessionState, Usage};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Compaction events emitted within this window (ms) are treated as one event.
 const COMPACT_DEDUP_MS: i64 = 2000;
+
+/// The Codex CLI provider adapter.
+pub struct CodexAdapter;
+
+impl ProviderAdapter for CodexAdapter {
+    fn provider(&self) -> Provider {
+        Provider::CodexCli
+    }
+
+    fn discover(&self, cfg: &Config) -> Vec<PathBuf> {
+        super::discover_files(&cfg.codex_session_roots(), |name| {
+            name.starts_with("rollout-") && name.ends_with(".jsonl")
+        })
+    }
+
+    fn parse_file(&self, path: &Path) -> Option<ParsedSession> {
+        parse_file(path)
+    }
+
+    fn context_window(&self, _model: &str) -> Option<u64> {
+        // Codex records `model_context_window` in its own log; the parser reads it
+        // directly, so there is nothing to infer from the model name here.
+        None
+    }
+
+    fn live_state(&self, probe: &super::state::StateDetector, source_path: &Path) -> SessionState {
+        // Only a held file can be live; read its task-boundary tail only then.
+        if !probe.holds_codex(source_path) {
+            return SessionState::Exited;
+        }
+        probe.codex_state(source_path, latest_task_boundary(source_path))
+    }
+}
+
+/// The latest task boundary in a Codex rollout file: `Some(true)` if the last
+/// boundary is an unmatched `task_started`, `Some(false)` if it is a
+/// completion/abort, `None` if the file has no boundary (or is unreadable).
+///
+/// Read at snapshot-build time for the few currently-held files, so the index
+/// need not persist this Codex-only bit.
+pub fn latest_task_boundary(path: &Path) -> Option<bool> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut open_turn: Option<bool> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        let Some(p) = v.get("payload") else { continue };
+        match p.get("type").and_then(Value::as_str) {
+            Some("task_started") => open_turn = Some(true),
+            Some("task_complete") | Some("turn_aborted") => open_turn = Some(false),
+            _ => {}
+        }
+    }
+    open_turn
+}
 
 pub fn parse_file(path: &Path) -> Option<ParsedSession> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -28,7 +92,10 @@ pub fn parse_file(path: &Path) -> Option<ParsedSession> {
 
 /// Extract the session UUID from a `rollout-<ts>-<uuid>.jsonl` filename.
 fn derive_id_from_filename(path: &Path) -> String {
-    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     // The UUID is the last 5 dash-separated groups.
     let parts: Vec<&str> = stem.split('-').collect();
     if parts.len() >= 5 {
@@ -57,9 +124,7 @@ pub fn parse_str(fallback_id: &str, text: &str) -> Option<ParsedSession> {
     // Current context from latest last_token_usage.
     let mut context = ContextState::default();
 
-    // Latest task boundary: Some(true)=started/open, Some(false)=completed/aborted.
-    let mut open_turn: Option<bool> = None;
-
+    // Compaction events may appear in two record forms.
     let mut compaction_ts: Vec<i64> = Vec::new();
 
     for line in text.lines() {
@@ -72,7 +137,10 @@ pub fn parse_str(fallback_id: &str, text: &str) -> Option<ParsedSession> {
             Err(_) => continue,
         };
 
-        let top_ts = v.get("timestamp").and_then(Value::as_str).and_then(iso_to_ms);
+        let top_ts = v
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(iso_to_ms);
         if let Some(t) = top_ts {
             last_activity_ms = last_activity_ms.max(t);
         }
@@ -110,8 +178,6 @@ pub fn parse_str(fallback_id: &str, text: &str) -> Option<ParsedSession> {
             Some("event_msg") => {
                 let Some(p) = payload else { continue };
                 match p.get("type").and_then(Value::as_str) {
-                    Some("task_started") => open_turn = Some(true),
-                    Some("task_complete") | Some("turn_aborted") => open_turn = Some(false),
                     Some("context_compacted") => {
                         compaction_ts.push(top_ts.unwrap_or(last_activity_ms));
                     }
@@ -148,7 +214,9 @@ pub fn parse_str(fallback_id: &str, text: &str) -> Option<ParsedSession> {
                             let d_input = ci.saturating_sub(prev_input);
                             let d_cached = cc.saturating_sub(prev_cached);
                             let d_output = co.saturating_sub(prev_output);
-                            let model = current_model.clone().unwrap_or_else(|| "unknown".to_string());
+                            let model = current_model
+                                .clone()
+                                .unwrap_or_else(|| "unknown".to_string());
                             per_model.add(
                                 &model,
                                 &Usage {
@@ -180,7 +248,11 @@ pub fn parse_str(fallback_id: &str, text: &str) -> Option<ParsedSession> {
     let mut last_kept = i64::MIN;
     for t in compaction_ts {
         if t.saturating_sub(last_kept) > COMPACT_DEDUP_MS {
-            compactions.push(Compaction { at_ms: t, trigger: None, pre_tokens: None });
+            compactions.push(Compaction {
+                at_ms: t,
+                trigger: None,
+                pre_tokens: None,
+            });
             last_kept = t;
         }
     }
@@ -195,7 +267,6 @@ pub fn parse_str(fallback_id: &str, text: &str) -> Option<ParsedSession> {
         per_model: per_model.into_vec(),
         compactions,
         last_activity_ms,
-        codex_open_turn: open_turn,
     })
 }
 
@@ -228,18 +299,39 @@ mod tests {
     }
 
     #[test]
-    fn task_boundary_tracks_open_turn() {
+    fn task_boundary_is_not_part_of_normalized_usage_metadata() {
         let started = r#"
 {"type":"event_msg","timestamp":"2026-05-29T08:30:53.150Z","payload":{"type":"task_started","model_context_window":258400}}
 {"type":"event_msg","timestamp":"2026-05-29T08:30:57.899Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1},"last_token_usage":{"input_tokens":10,"output_tokens":1},"model_context_window":258400}}}
 "#;
-        assert_eq!(parse_str("fb", started).unwrap().codex_open_turn, Some(true));
+        let parsed = parse_str("fb", started).unwrap();
+        assert_eq!(parsed.provider, Provider::CodexCli);
 
         let completed = format!(
             "{started}{}",
             "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-29T08:31:00.000Z\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"t\"}}\n"
         );
-        assert_eq!(parse_str("fb", &completed).unwrap().codex_open_turn, Some(false));
+        assert!(parse_str("fb", &completed).is_some());
+    }
+
+    #[test]
+    fn latest_boundary_is_read_from_the_source_when_needed() {
+        use std::fs;
+        let path = std::env::temp_dir().join("tokenplay-codex-boundary-test.jsonl");
+        let started = r#"
+{"type":"event_msg","timestamp":"2026-05-29T08:30:53.150Z","payload":{"type":"task_started"}}
+{"type":"event_msg","timestamp":"2026-05-29T08:30:57.899Z","payload":{"type":"token_count","info":{}}}
+"#;
+        fs::write(&path, started).unwrap();
+        assert_eq!(latest_task_boundary(&path), Some(true));
+
+        let completed = format!(
+            "{started}{}",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-29T08:31:00.000Z\",\"payload\":{\"type\":\"task_complete\"}}\n"
+        );
+        fs::write(&path, completed).unwrap();
+        assert_eq!(latest_task_boundary(&path), Some(false));
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -268,6 +360,10 @@ mod tests {
 {"type":"event_msg","timestamp":"2026-05-20T11:33:57.899Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1},"last_token_usage":{"input_tokens":10,"output_tokens":1},"model_context_window":258400}}}
 "#;
         let s = parse_str("fb", text).unwrap();
-        assert_eq!(s.compactions.len(), 1, "4ms-apart events are one compaction");
+        assert_eq!(
+            s.compactions.len(),
+            1,
+            "4ms-apart events are one compaction"
+        );
     }
 }
