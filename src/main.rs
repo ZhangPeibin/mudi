@@ -6,9 +6,11 @@
 //! snapshot from shared state each frame.
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
@@ -17,12 +19,13 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use tokenplay::alerts::{self, AlertEngine};
-use tokenplay::app::{Snapshot, Tab};
+use tokenplay::app::Snapshot;
+use tokenplay::attention::AttentionEngine;
 use tokenplay::collector;
-use tokenplay::config::Config;
+use tokenplay::config::{theme_override_from_args, Config};
 use tokenplay::index::Index;
 use tokenplay::pricing::RateCard;
-use tokenplay::ui::{draw, Ui};
+use tokenplay::ui::{draw, Ui, UiAction};
 
 /// Shared snapshot updated by the collector, read by the UI.
 type Shared = Arc<Mutex<Snapshot>>;
@@ -30,6 +33,8 @@ type Shared = Arc<Mutex<Snapshot>>;
 #[tokio::main]
 async fn main() -> Result<()> {
     let cfg = Config::load();
+    let theme_override = theme_override_from_args(std::env::args());
+    let ui = Ui::load(cfg.profile_path(), theme_override.as_deref())?;
     let shared: Shared = Arc::new(Mutex::new(Snapshot {
         status: "Starting…".to_string(),
         ..Default::default()
@@ -42,7 +47,7 @@ async fn main() -> Result<()> {
     let bg = tokio::spawn(collector_loop(cfg.clone(), shared.clone(), rescan_rx));
 
     // Run the TUI on the current thread.
-    let result = run_tui(shared.clone(), rescan_tx);
+    let result = run_tui(shared.clone(), rescan_tx, ui);
 
     bg.abort();
     result
@@ -62,12 +67,17 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
     };
     let rates = RateCard::load(Some(&cfg.pricing_override_path()));
     let mut alert_engine = AlertEngine::new();
+    let mut attention_engine = AttentionEngine::default();
     let mut first = true;
 
     loop {
         {
             if let Ok(mut s) = shared.lock() {
-                s.status = if first { "Indexing…".into() } else { "Refreshing…".into() };
+                s.status = if first {
+                    "Indexing…".into()
+                } else {
+                    "Refreshing…".into()
+                };
             }
         }
 
@@ -80,8 +90,10 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
         let alert_counts = alerts::counts(&sessions);
 
         let now = chrono::Local::now().timestamp_millis();
+        let attention = attention_engine.update(&sessions, now);
         let snap = Snapshot {
             sessions,
+            attention: Some(attention),
             stats,
             alerts: alert_counts,
             status: format!(
@@ -89,7 +101,11 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
                 stats.discovered,
                 stats.parsed,
                 stats.skipped,
-                if stats.pruned > 0 { format!(" · {} pruned", stats.pruned) } else { String::new() },
+                if stats.pruned > 0 {
+                    format!(" · {} pruned", stats.pruned)
+                } else {
+                    String::new()
+                },
             ),
             generated_ms: now,
             ready: true,
@@ -107,14 +123,13 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
     }
 }
 
-fn run_tui(shared: Shared, rescan_tx: mpsc::UnboundedSender<()>) -> Result<()> {
+fn run_tui(shared: Shared, rescan_tx: mpsc::UnboundedSender<()>, mut ui: Ui) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut ui = Ui::default();
     let res = event_loop(&mut terminal, &mut ui, &shared, &rescan_tx);
 
     disable_raw_mode()?;
@@ -141,54 +156,19 @@ fn event_loop<B: ratatui::backend::Backend>(
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else { continue };
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
         if key.kind != KeyEventKind::Press {
             continue;
         }
 
-        match key.code {
-            KeyCode::Char('q') => return Ok(()),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-
-            KeyCode::Tab | KeyCode::Right => switch_tab(ui, 1),
-            KeyCode::BackTab | KeyCode::Left => switch_tab(ui, -1),
-            KeyCode::Char('1') => set_tab(ui, Tab::All),
-            KeyCode::Char('2') => set_tab(ui, Tab::Claude),
-            KeyCode::Char('3') => set_tab(ui, Tab::Codex),
-
-            KeyCode::Char('f') => {
-                ui.filter = ui.filter.next();
-                ui.selected = 0;
-            }
-            KeyCode::Char('r') => {
+        match ui.handle_key(key, &snap)? {
+            UiAction::None => {}
+            UiAction::Rescan => {
                 let _ = rescan_tx.send(());
             }
-
-            KeyCode::Down | KeyCode::Char('j') if ui.tab != Tab::All => {
-                if visible_len > 0 && ui.selected + 1 < visible_len {
-                    ui.selected += 1;
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') if ui.tab != Tab::All => {
-                ui.selected = ui.selected.saturating_sub(1);
-            }
-            KeyCode::Enter if ui.tab != Tab::All && visible_len > 0 => ui.detail = true,
-            KeyCode::Esc => ui.detail = false,
-
-            _ => {}
+            UiAction::Quit => return Ok(()),
         }
     }
-}
-
-fn set_tab(ui: &mut Ui, tab: Tab) {
-    ui.tab = tab;
-    ui.selected = 0;
-    ui.detail = false;
-}
-
-fn switch_tab(ui: &mut Ui, dir: i32) {
-    let i = ui.tab.index() as i32;
-    let n = Tab::ALL.len() as i32;
-    let next = ((i + dir) % n + n) % n;
-    set_tab(ui, Tab::ALL[next as usize]);
 }

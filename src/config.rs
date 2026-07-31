@@ -9,6 +9,21 @@ pub const WARN_PCT: f64 = 70.0;
 /// Critical context threshold (percent of window).
 pub const CRIT_PCT: f64 = 85.0;
 
+/// Return the process-local Theme name supplied as `--theme <name>`.
+pub fn theme_override_from_args<I, S>(args: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut args = args.into_iter().skip(1);
+    while let Some(argument) = args.next() {
+        if argument.as_ref() == "--theme" {
+            return args.next().map(|name| name.as_ref().to_string());
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Root of Claude Code data (`~/.claude` by default).
@@ -64,6 +79,11 @@ impl Config {
         self.data_dir.join("index.db")
     }
 
+    /// Local Profile preferences, stored separately from the disposable Session index.
+    pub fn profile_path(&self) -> PathBuf {
+        self.data_dir.join("profile.json")
+    }
+
     /// Optional local pricing override (`data_dir/pricing.json`).
     pub fn pricing_override_path(&self) -> PathBuf {
         self.data_dir.join("pricing.json")
@@ -90,5 +110,20 @@ impl Config {
 }
 
 fn env_path(key: &str) -> Option<PathBuf> {
-    std::env::var(key).ok().filter(|s| !s.is_empty()).map(PathBuf::from)
+    std::env::var(key)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_override_is_read_from_process_arguments() {
+        let args = ["tokenplay", "--theme", "dracula"];
+
+        assert_eq!(theme_override_from_args(args), Some("dracula".to_string()));
+    }
 }

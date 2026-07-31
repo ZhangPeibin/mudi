@@ -3,13 +3,13 @@
 
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use tokenplay::alerts;
 use tokenplay::app::{Snapshot, Tab, TimeFilter};
 use tokenplay::collector;
 use tokenplay::config::Config;
 use tokenplay::index::Index;
 use tokenplay::pricing::RateCard;
 use tokenplay::ui::{draw, Ui};
-use tokenplay::alerts;
 
 fn main() -> anyhow::Result<()> {
     let cfg = Config::load();
@@ -29,8 +29,14 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    for (tab, filter) in [(Tab::All, TimeFilter::Last30), (Tab::Claude, TimeFilter::Last30), (Tab::Codex, TimeFilter::Last30)] {
-        let ui = Ui { tab, filter, selected: 0, detail: false };
+    for (tab, filter) in [
+        (Tab::All, TimeFilter::Last30),
+        (Tab::Claude, TimeFilter::Last30),
+        (Tab::Codex, TimeFilter::Last30),
+    ] {
+        let mut ui = Ui::default();
+        ui.tab = tab;
+        ui.filter = filter;
         print_frame(&snap, &ui, tab, filter)?;
     }
     Ok(())
@@ -42,7 +48,12 @@ fn print_frame(snap: &Snapshot, ui: &Ui, tab: Tab, filter: TimeFilter) -> anyhow
     terminal.draw(|f| draw(f, snap, ui))?;
     let buf = terminal.backend().buffer().clone();
 
-    println!("\n┌── tab: {} · filter: {} {}", tab.title(), filter.title(), "─".repeat(40));
+    println!(
+        "\n┌── tab: {} · filter: {} {}",
+        tab.title(),
+        filter.title(),
+        "─".repeat(40)
+    );
     for y in 0..h {
         let mut line = String::new();
         for x in 0..w {

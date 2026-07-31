@@ -2,6 +2,7 @@
 //! small formatting helpers. Rendering lives in `ui/`.
 
 use crate::alerts::AlertCounts;
+use crate::attention::AttentionSnapshot;
 use crate::collector::ScanStats;
 use crate::domain::{Provider, Session};
 use chrono::{Duration, Local, TimeZone};
@@ -52,7 +53,12 @@ pub enum TimeFilter {
 }
 
 impl TimeFilter {
-    pub const ALL: [TimeFilter; 4] = [TimeFilter::Today, TimeFilter::Last7, TimeFilter::Last30, TimeFilter::All];
+    pub const ALL: [TimeFilter; 4] = [
+        TimeFilter::Today,
+        TimeFilter::Last7,
+        TimeFilter::Last30,
+        TimeFilter::All,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -90,42 +96,13 @@ impl TimeFilter {
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub sessions: Vec<Session>,
+    pub attention: Option<AttentionSnapshot>,
     pub stats: ScanStats,
     pub alerts: AlertCounts,
     pub status: String,
     pub generated_ms: i64,
     /// True once the first full scan has completed.
     pub ready: bool,
-}
-
-/// Provider totals for the All dashboard.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ProviderTotals {
-    pub sessions: usize,
-    pub open: usize,
-    pub cost: f64,
-    pub cost_complete: bool, // false if some sessions had unknown pricing
-}
-
-impl Snapshot {
-    /// Totals for one provider within the given time cutoff.
-    pub fn totals(&self, provider: Provider, cutoff_ms: i64) -> ProviderTotals {
-        let mut t = ProviderTotals { cost_complete: true, ..Default::default() };
-        for s in &self.sessions {
-            if s.provider != provider || s.last_activity_ms < cutoff_ms {
-                continue;
-            }
-            t.sessions += 1;
-            if s.state.is_open() {
-                t.open += 1;
-            }
-            match s.cost {
-                Some(c) => t.cost += c,
-                None => t.cost_complete = false,
-            }
-        }
-        t
-    }
 }
 
 // ---- formatting helpers ----
