@@ -12,7 +12,7 @@
 //! - Compaction = top-level `type:compacted` and/or `event_msg`/`context_compacted`
 //!   (collapsed when they describe the same event).
 
-use super::{iso_to_ms, ParsedSession, PerModel, ProviderAdapter};
+use super::{iso_to_ms, ParsedSession, ParsedUsage, PerModel, ProviderAdapter};
 use crate::config::Config;
 use crate::domain::{Compaction, ContextState, Provider, SessionState, Usage};
 use serde_json::Value;
@@ -27,6 +27,10 @@ pub struct CodexAdapter;
 impl ProviderAdapter for CodexAdapter {
     fn provider(&self) -> Provider {
         Provider::CodexCli
+    }
+
+    fn source_format(&self) -> crate::domain::SourceFormat {
+        crate::domain::SourceFormat::JsonLines
     }
 
     fn discover(&self, cfg: &Config) -> Vec<PathBuf> {
@@ -45,12 +49,24 @@ impl ProviderAdapter for CodexAdapter {
         None
     }
 
-    fn live_state(&self, probe: &super::state::StateDetector, source_path: &Path) -> SessionState {
+    fn live_state(
+        &self,
+        probe: &super::state::StateDetector,
+        source_path: &Path,
+    ) -> super::state::LiveState {
         // Only a held file can be live; read its task-boundary tail only then.
         if !probe.holds_codex(source_path) {
-            return SessionState::Exited;
+            return super::state::LiveState {
+                state: SessionState::Exited,
+                current_run_started_at_ms: None,
+            };
         }
         probe.codex_state(source_path, latest_task_boundary(source_path))
+    }
+
+    fn current_run_usage(&self, source_path: &Path, started_at_ms: i64) -> Option<ParsedUsage> {
+        let text = std::fs::read_to_string(source_path).ok()?;
+        Some(parse_current_run_str(&text, started_at_ms))
     }
 }
 
@@ -270,6 +286,70 @@ pub fn parse_str(fallback_id: &str, text: &str) -> Option<ParsedSession> {
     })
 }
 
+/// Calculate Codex Usage from cumulative counter deltas at or after a validated
+/// process-start boundary.
+pub fn parse_current_run_str(text: &str, started_at_ms: i64) -> ParsedUsage {
+    let mut current_model: Option<String> = None;
+    let mut previous: Option<(u64, u64, u64)> = None;
+    let mut usage = Usage::default();
+    let mut per_model = PerModel::default();
+
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        let timestamp_ms = v
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(iso_to_ms);
+        let top_type = v.get("type").and_then(Value::as_str);
+        let payload = v.get("payload");
+
+        if top_type == Some("turn_context") {
+            if let Some(model) = payload.and_then(|p| p.get("model")).and_then(Value::as_str) {
+                current_model = Some(model.to_string());
+            }
+            continue;
+        }
+        if top_type != Some("event_msg")
+            || payload.and_then(|p| p.get("type")).and_then(Value::as_str) != Some("token_count")
+        {
+            continue;
+        }
+        let Some(total) = payload
+            .and_then(|p| p.get("info"))
+            .and_then(|info| info.get("total_token_usage"))
+        else {
+            continue;
+        };
+
+        let current = (
+            u(total, "input_tokens"),
+            u(total, "cached_input_tokens"),
+            u(total, "output_tokens"),
+        );
+        let baseline = previous.unwrap_or_default();
+        if timestamp_ms.is_some_and(|timestamp| timestamp >= started_at_ms) {
+            let input_delta = current.0.saturating_sub(baseline.0);
+            let cache_delta = current.1.saturating_sub(baseline.1);
+            let delta = Usage {
+                input: input_delta.saturating_sub(cache_delta),
+                output: current.2.saturating_sub(baseline.2),
+                cache_read: cache_delta,
+                cache_write: 0,
+            };
+            usage.add(&delta);
+            per_model.add(current_model.as_deref().unwrap_or("unknown"), &delta);
+        }
+        previous = Some(current);
+    }
+
+    ParsedUsage {
+        usage,
+        per_model: per_model.into_vec(),
+    }
+}
+
 fn u(v: &Value, key: &str) -> u64 {
     v.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
@@ -364,6 +444,57 @@ mod tests {
             s.compactions.len(),
             1,
             "4ms-apart events are one compaction"
+        );
+    }
+
+    #[test]
+    fn current_run_uses_cumulative_deltas_after_process_boundary() {
+        let text = r#"
+{"type":"turn_context","timestamp":"2026-05-29T08:59:00.000Z","payload":{"model":"gpt-5.5"}}
+{"type":"event_msg","timestamp":"2026-05-29T08:59:30.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100}}}}
+{"type":"event_msg","timestamp":"2026-05-29T09:00:01.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1600,"cached_input_tokens":650,"output_tokens":160}}}}
+{"type":"turn_context","timestamp":"2026-05-29T09:00:30.000Z","payload":{"model":"gpt-5"}}
+{"type":"event_msg","timestamp":"2026-05-29T09:01:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":2100,"cached_input_tokens":700,"output_tokens":220}}}}
+"#;
+        let boundary = iso_to_ms("2026-05-29T09:00:00.000Z").unwrap();
+
+        let run = parse_current_run_str(text, boundary);
+
+        assert_eq!(
+            run.usage,
+            Usage {
+                input: 800,
+                output: 120,
+                cache_read: 300,
+                cache_write: 0,
+            }
+        );
+        assert_eq!(run.per_model.len(), 2);
+        assert_eq!(
+            run.per_model
+                .iter()
+                .find(|(model, _)| model == "gpt-5.5")
+                .unwrap()
+                .1,
+            Usage {
+                input: 350,
+                output: 60,
+                cache_read: 250,
+                cache_write: 0,
+            }
+        );
+        assert_eq!(
+            run.per_model
+                .iter()
+                .find(|(model, _)| model == "gpt-5")
+                .unwrap()
+                .1,
+            Usage {
+                input: 450,
+                output: 60,
+                cache_read: 50,
+                cache_write: 0,
+            }
         );
     }
 }

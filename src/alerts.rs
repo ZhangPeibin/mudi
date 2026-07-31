@@ -146,6 +146,7 @@ mod tests {
         Session {
             provider: Provider::ClaudeCode,
             id: id.into(),
+            source: Default::default(),
             project: Some(Project {
                 identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/p")),
                 label: "p".into(),
@@ -160,6 +161,7 @@ mod tests {
             },
             usage: Default::default(),
             per_model: vec![],
+            current_run_usage: None,
             compactions: vec![],
             last_activity_ms: 0,
             cost: None,

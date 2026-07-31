@@ -21,10 +21,12 @@ use tokio::sync::mpsc;
 use tokenplay::alerts::{self, AlertEngine};
 use tokenplay::app::Snapshot;
 use tokenplay::attention::AttentionEngine;
+use tokenplay::clipboard::{Clipboard, MacosClipboard};
 use tokenplay::collector;
 use tokenplay::config::{theme_override_from_args, Config};
 use tokenplay::index::Index;
 use tokenplay::pricing::RateCard;
+use tokenplay::signals::RecentSignalsEngine;
 use tokenplay::ui::{draw, Ui, UiAction};
 
 /// Shared snapshot updated by the collector, read by the UI.
@@ -68,6 +70,7 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
     let rates = RateCard::load(Some(&cfg.pricing_override_path()));
     let mut alert_engine = AlertEngine::new();
     let mut attention_engine = AttentionEngine::default();
+    let mut recent_signals_engine = RecentSignalsEngine::default();
     let mut first = true;
 
     loop {
@@ -91,8 +94,10 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
 
         let now = chrono::Local::now().timestamp_millis();
         let attention = attention_engine.update(&sessions, now);
+        let recent_signals = recent_signals_engine.update(&sessions, now).to_vec();
         let snap = Snapshot {
             sessions,
+            recent_signals,
             attention: Some(attention),
             stats,
             alerts: alert_counts,
@@ -130,7 +135,8 @@ fn run_tui(shared: Shared, rescan_tx: mpsc::UnboundedSender<()>, mut ui: Ui) -> 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let res = event_loop(&mut terminal, &mut ui, &shared, &rescan_tx);
+    let mut clipboard = MacosClipboard;
+    let res = event_loop(&mut terminal, &mut ui, &shared, &rescan_tx, &mut clipboard);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -143,14 +149,15 @@ fn event_loop<B: ratatui::backend::Backend>(
     ui: &mut Ui,
     shared: &Shared,
     rescan_tx: &mpsc::UnboundedSender<()>,
+    clipboard: &mut dyn Clipboard,
 ) -> Result<()> {
     loop {
         // Snapshot the shared state (cheap clone) so rendering holds no lock.
         let snap = shared.lock().map(|s| s.clone()).unwrap_or_default();
-        let visible_len = ui.visible(&snap).len();
-        ui.clamp_selection(visible_len);
+        ui.clamp_selections(&snap);
 
         terminal.draw(|f| draw(f, &snap, ui))?;
+        terminal.set_cursor_position((0, 0))?;
 
         // Poll for input with a timeout so the screen refreshes even without keys.
         if !event::poll(Duration::from_millis(250))? {
@@ -167,6 +174,9 @@ fn event_loop<B: ratatui::backend::Backend>(
             UiAction::None => {}
             UiAction::Rescan => {
                 let _ = rescan_tx.send(());
+            }
+            UiAction::Copy { field, value } => {
+                ui.copy_to_clipboard(clipboard, field, &value);
             }
             UiAction::Quit => return Ok(()),
         }

@@ -2,7 +2,7 @@
 //! normalized snapshot the UI renders.
 
 use crate::config::Config;
-use crate::domain::{ModelUsage, ProjectIdentity, Provider, Session};
+use crate::domain::{ModelUsage, ProjectIdentity, Session, SourceMetadata, Usage, UsageSummary};
 use crate::index::{fingerprint_of, Index, StoredSession};
 use crate::pricing::RateCard;
 use crate::project;
@@ -95,36 +95,32 @@ fn to_session(
         source_path,
     } = stored;
 
-    let state = providers::adapter_for(parsed.provider).live_state(detector, &source_path);
+    let adapter = providers::adapter_for(parsed.provider);
+    let live = adapter.live_state(detector, &source_path);
+    let state = live.state;
 
-    // Per-model cost; total is None if any contributing model price is unknown.
-    let mut any_unknown = false;
-    let mut total = 0.0;
-    let per_model: Vec<ModelUsage> = parsed
-        .per_model
-        .iter()
-        .map(|(model, usage)| {
-            let cost = rates.estimate(model, usage);
-            match cost {
-                Some(c) => total += c,
-                None => any_unknown = true,
-            }
-            ModelUsage {
-                model: model.clone(),
-                usage: *usage,
-                cost,
-            }
-        })
-        .collect();
-    let cost = if per_model.is_empty() || any_unknown {
-        None
+    let (per_model, cost) = price_models(
+        parsed
+            .per_model
+            .iter()
+            .map(|(model, usage)| (model.clone(), *usage)),
+        rates,
+    );
+    let current_run_usage = if state.is_open() {
+        live.current_run_started_at_ms
+            .and_then(|started_at_ms| adapter.current_run_usage(&source_path, started_at_ms))
+            .map(|run| price_usage(run, rates))
     } else {
-        Some(total)
+        None
     };
 
     Session {
         provider: parsed.provider,
         id: parsed.id,
+        source: SourceMetadata {
+            path: source_path,
+            format: adapter.source_format(),
+        },
         project: resolved.project,
         worktree: resolved.worktree,
         cwd: parsed.cwd,
@@ -133,10 +129,46 @@ fn to_session(
         context: parsed.context,
         usage: parsed.usage,
         per_model,
+        current_run_usage,
         compactions: parsed.compactions,
         last_activity_ms: parsed.last_activity_ms,
         cost,
     }
+}
+
+fn price_usage(parsed: providers::ParsedUsage, rates: &RateCard) -> UsageSummary {
+    let (per_model, cost) = price_models(parsed.per_model, rates);
+
+    UsageSummary {
+        usage: parsed.usage,
+        per_model,
+        cost,
+    }
+}
+
+fn price_models(
+    usage_by_model: impl IntoIterator<Item = (String, Usage)>,
+    rates: &RateCard,
+) -> (Vec<ModelUsage>, Option<f64>) {
+    let mut any_unknown = false;
+    let mut total = 0.0;
+    let per_model: Vec<ModelUsage> = usage_by_model
+        .into_iter()
+        .map(|(model, usage)| {
+            let cost = rates.estimate(&model, &usage);
+            match cost {
+                Some(value) => total += value,
+                None => any_unknown = true,
+            }
+            ModelUsage { model, usage, cost }
+        })
+        .collect();
+    let cost = if per_model.is_empty() || any_unknown {
+        None
+    } else {
+        Some(total)
+    };
+    (per_model, cost)
 }
 
 /// When distinct Project basenames collide, prepend enough canonical parent path
@@ -222,27 +254,17 @@ pub fn sort_for_display(sessions: &mut [Session]) {
     });
 }
 
-/// Filter to sessions of a provider active within `cutoff_ms` (0 = all time).
-pub fn provider_sessions(all: &[Session], provider: Provider, cutoff_ms: i64) -> Vec<Session> {
-    let mut v: Vec<Session> = all
-        .iter()
-        .filter(|s| s.provider == provider && s.last_activity_ms >= cutoff_ms)
-        .cloned()
-        .collect();
-    sort_for_display(&mut v);
-    v
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Project, SessionState};
+    use crate::domain::{Project, Provider, SessionState};
 
     fn sess(cwd: &str) -> Session {
         let path = PathBuf::from(cwd);
         Session {
             provider: Provider::ClaudeCode,
             id: cwd.into(),
+            source: SourceMetadata::default(),
             project: Some(Project {
                 label: tail_path(&path, 1),
                 identity: ProjectIdentity::CanonicalCwd(path),
@@ -254,6 +276,7 @@ mod tests {
             context: Default::default(),
             usage: Default::default(),
             per_model: vec![],
+            current_run_usage: None,
             compactions: vec![],
             last_activity_ms: 0,
             cost: None,
@@ -271,5 +294,82 @@ mod tests {
         assert_eq!(s[0].project_label(), "dex/backend");
         assert_eq!(s[1].project_label(), "pay/backend");
         assert_eq!(s[2].project_label(), "solo"); // unique, untouched
+    }
+
+    #[test]
+    fn open_session_attaches_current_run_usage_from_the_validated_process_start() {
+        let started = chrono::Utc::now();
+        let started_at_ms = started.timestamp_millis();
+        let nonce = started.timestamp_nanos_opt().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "tokenplay-current-run-{}-{nonce}",
+            std::process::id()
+        ));
+        let claude_dir = root.join("claude");
+        let transcript_dir = claude_dir.join("projects/project");
+        let state_dir = claude_dir.join("sessions");
+        std::fs::create_dir_all(&transcript_dir).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        let before = (started - chrono::Duration::seconds(1)).to_rfc3339();
+        let after = (started + chrono::Duration::seconds(1)).to_rfc3339();
+        std::fs::write(
+            transcript_dir.join("live-session.jsonl"),
+            format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{before}\",\"message\":{{\"id\":\"old\",\"model\":\"claude-opus-4-8\",\"usage\":{{\"input_tokens\":900,\"output_tokens\":90,\"cache_read_input_tokens\":800,\"cache_creation_input_tokens\":70}}}}}}\n\
+                 {{\"type\":\"assistant\",\"timestamp\":\"{after}\",\"message\":{{\"id\":\"run\",\"model\":\"claude-opus-4-8\",\"usage\":{{\"input_tokens\":100,\"output_tokens\":10,\"cache_read_input_tokens\":200,\"cache_creation_input_tokens\":20}}}}}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            state_dir.join("state.json"),
+            format!(
+                "{{\"pid\":{},\"sessionId\":\"live-session\",\"status\":\"busy\",\"startedAt\":{started_at_ms}}}",
+                std::process::id()
+            ),
+        )
+        .unwrap();
+        let cfg = Config {
+            claude_dir,
+            codex_dir: root.join("codex"),
+            data_dir: root.join("data"),
+            extra_dirs: vec![],
+        };
+        let mut index = Index::open_in_memory().unwrap();
+        refresh(&cfg, &mut index);
+
+        let sessions = build_sessions(&cfg, &index, &RateCard::load(None));
+
+        let session = sessions
+            .iter()
+            .find(|session| session.id == "live-session")
+            .unwrap();
+        assert_eq!(session.state, SessionState::Busy);
+        assert_eq!(session.usage.input, 1_000);
+        let run = session.current_run_usage.as_ref().unwrap();
+        assert_eq!(
+            run.usage,
+            crate::domain::Usage {
+                input: 100,
+                output: 10,
+                cache_read: 200,
+                cache_write: 20,
+            }
+        );
+        assert_eq!(run.per_model.len(), 1);
+        assert_eq!(run.per_model[0].model, "claude-opus-4-8");
+        assert!((run.cost.unwrap() - 0.002925).abs() < 1e-12);
+
+        std::fs::remove_file(state_dir.join("state.json")).unwrap();
+        let exited = build_sessions(&cfg, &index, &RateCard::load(None));
+        let exited = exited
+            .iter()
+            .find(|session| session.id == "live-session")
+            .unwrap();
+        assert_eq!(exited.state, SessionState::Exited);
+        assert_eq!(exited.usage.input, 1_000);
+        assert!(exited.current_run_usage.is_none());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -16,6 +16,7 @@ fn session(
     Session {
         provider,
         id: id.into(),
+        source: Default::default(),
         project: Some(Project {
             identity: ProjectIdentity::GitCommonDir(PathBuf::from(project_path).join(".git")),
             label: PathBuf::from(project_path)
@@ -38,6 +39,7 @@ fn session(
         },
         usage: Default::default(),
         per_model: vec![],
+        current_run_usage: None,
         compactions: vec![],
         last_activity_ms: 1_000,
         cost: None,

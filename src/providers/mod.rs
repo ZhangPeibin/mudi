@@ -6,7 +6,7 @@ pub mod codex;
 pub mod state;
 
 use crate::config::Config;
-use crate::domain::{Compaction, ContextState, Provider, SessionState, Usage};
+use crate::domain::{Compaction, ContextState, Provider, SourceFormat, Usage};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -17,6 +17,8 @@ use walkdir::WalkDir;
 pub trait ProviderAdapter {
     /// Which provider this adapter speaks for.
     fn provider(&self) -> Provider;
+    /// Encoding used by this provider's discovered source logs.
+    fn source_format(&self) -> SourceFormat;
     /// Discover all candidate source files under the configured roots.
     fn discover(&self, cfg: &Config) -> Vec<PathBuf>;
     /// Parse one source file into the normalized [`ParsedSession`], or `None` if
@@ -28,7 +30,10 @@ pub trait ProviderAdapter {
     /// Live lifecycle state for a session, given the shared once-per-scan process
     /// probe and the session's source path. The path is sufficient: Claude derives
     /// its session id from the transcript filename; Codex keys on the path itself.
-    fn live_state(&self, probe: &state::StateDetector, source_path: &Path) -> SessionState;
+    fn live_state(&self, probe: &state::StateDetector, source_path: &Path) -> state::LiveState;
+    /// Usage observed at or after a validated Current Run start. `None` means
+    /// the source cannot be read; an empty successful Run returns zero Usage.
+    fn current_run_usage(&self, source_path: &Path, started_at_ms: i64) -> Option<ParsedUsage>;
 }
 
 /// Every provider adapter, in display order. Iterated instead of matching on
@@ -82,6 +87,13 @@ pub struct ParsedSession {
     pub per_model: Vec<(String, Usage)>,
     pub compactions: Vec<Compaction>,
     pub last_activity_ms: i64,
+}
+
+/// Provider-normalized Usage for a validated Current Run boundary.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedUsage {
+    pub usage: Usage,
+    pub per_model: Vec<(String, Usage)>,
 }
 
 /// Parse ISO-8601 (RFC3339) timestamps to epoch milliseconds.

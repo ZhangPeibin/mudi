@@ -5,12 +5,13 @@
 
 mod theme;
 
-use crate::app::{
-    fmt_context, fmt_cost, fmt_datetime, fmt_relative, fmt_tokens, Snapshot, Tab, TimeFilter,
-};
+use crate::app::{fmt_context, fmt_cost, fmt_datetime, fmt_relative, fmt_tokens, Snapshot, Tab};
 use crate::attention::{AttentionCondition, AttentionEngine, AttentionRank, AttentionSnapshot};
-use crate::collector;
-use crate::domain::{Project, ProjectIdentity, Provider, Session, SessionState, Worktree};
+use crate::clipboard::Clipboard;
+use crate::domain::{
+    ModelUsage, Project, ProjectIdentity, Provider, Session, SessionState, Usage, Worktree,
+};
+use crate::signals::{ContextAlertLevel, RecentSignal, RecentSignalKind};
 use chrono::Local;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -21,13 +22,14 @@ use ratatui::widgets::{
 use ratatui::Frame;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use theme::{Theme, ThemeName};
 
-/// Shared style for the currently-selected item in a segmented control (tabs, filter
-/// bar).
+/// Shared style for the currently-selected item.
 fn selected_style(theme: Theme) -> Style {
     Style::default()
         .fg(theme.selected_foreground)
@@ -45,20 +47,103 @@ struct SessionIdentity {
 struct DetailView {
     session: SessionIdentity,
     scroll: usize,
+    origin_signal: Option<RecentSignal>,
+    copy_menu_selected: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopyField {
+    SourceLog,
+    Worktree,
+    Cwd,
+    SessionId,
+}
+
+impl CopyField {
+    const ALL: [Self; 4] = [Self::SourceLog, Self::Worktree, Self::Cwd, Self::SessionId];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::SourceLog => "Source log",
+            Self::Worktree => "Worktree",
+            Self::Cwd => "cwd",
+            Self::SessionId => "Session ID",
+        }
+    }
+
+    fn value(self, session: &Session) -> Option<Cow<'_, str>> {
+        match self {
+            Self::SourceLog => (!session.source.path.as_os_str().is_empty())
+                .then(|| session.source.path.to_string_lossy()),
+            Self::Worktree => session
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.root.to_string_lossy()),
+            Self::Cwd => session
+                .cwd
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(Cow::Borrowed),
+            Self::SessionId => {
+                (!session.id.is_empty()).then_some(Cow::Borrowed(session.id.as_str()))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AllRegion {
+    Now,
+    RecentSignals,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProviderProjectKey {
+    provider: Provider,
+    project: Option<ProjectIdentity>,
+}
+
+#[derive(Clone)]
+enum ProviderTarget<'a> {
+    Session(&'a Session),
+    Disclosure(ProviderProjectKey),
+}
+
+enum ProviderPageRow<'a> {
+    Project(Option<&'a Project>),
+    Session(&'a Session),
+    OlderSessions {
+        key: ProviderProjectKey,
+        count: usize,
+        expanded: bool,
+    },
+}
+
+impl<'a> ProviderPageRow<'a> {
+    fn into_target(self) -> Option<ProviderTarget<'a>> {
+        match self {
+            ProviderPageRow::Project(_) => None,
+            ProviderPageRow::Session(session) => Some(ProviderTarget::Session(session)),
+            ProviderPageRow::OlderSessions { key, .. } => Some(ProviderTarget::Disclosure(key)),
+        }
+    }
 }
 
 /// Interactive UI state (owned by the event loop).
 pub struct Ui {
     pub tab: Tab,
-    pub filter: TimeFilter,
     pub selected: usize,
+    all_region: AllRegion,
+    signal_selected: usize,
     detail: Option<DetailView>,
+    expanded_older: HashSet<ProviderProjectKey>,
     help_open: bool,
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
     theme: ThemeName,
     theme_override_active: bool,
     theme_notice_until: Option<Instant>,
+    status_notice: Option<(String, Instant)>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
@@ -69,10 +154,11 @@ struct ProfilePreferences {
     theme: ThemeName,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiAction {
     None,
     Rescan,
+    Copy { field: &'static str, value: String },
     Quit,
 }
 
@@ -80,15 +166,18 @@ impl Default for Ui {
     fn default() -> Self {
         Ui {
             tab: Tab::All,
-            filter: TimeFilter::Today,
             selected: 0,
+            all_region: AllRegion::Now,
+            signal_selected: 0,
             detail: None,
+            expanded_older: HashSet::new(),
             help_open: false,
             profile_path: None,
             profile: ProfilePreferences::default(),
             theme: ThemeName::default(),
             theme_override_active: false,
             theme_notice_until: None,
+            status_notice: None,
         }
     }
 }
@@ -134,12 +223,22 @@ impl Ui {
         self.theme.as_str()
     }
 
+    /// Perform one explicit clipboard request and report its result briefly.
+    pub fn copy_to_clipboard(&mut self, clipboard: &mut dyn Clipboard, field: &str, value: &str) {
+        let message = match clipboard.write_text(value) {
+            Ok(()) => format!("Copied {field}"),
+            Err(error) => format!("Copy failed: {error}"),
+        };
+        self.status_notice = Some((message, Instant::now() + Duration::from_secs(2)));
+    }
+
     /// Apply one user key through the UI's public interaction interface.
     pub fn handle_key(
         &mut self,
         key: crossterm::event::KeyEvent,
         snap: &Snapshot,
     ) -> std::io::Result<UiAction> {
+        self.clamp_selections(snap);
         match key.code {
             crossterm::event::KeyCode::Char('q') => return Ok(UiAction::Quit),
             crossterm::event::KeyCode::Char('c')
@@ -168,16 +267,79 @@ impl Ui {
                 self.help_open = false;
             }
             _ if self.help_open => {}
-            crossterm::event::KeyCode::Char('f')
-                if self.detail.is_none() && self.tab != Tab::All =>
+            crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::BackTab
+                if self.detail.is_none() && self.tab == Tab::All =>
             {
-                self.filter = self.filter.next();
-                self.selected = 0;
+                self.all_region = match self.all_region {
+                    AllRegion::Now => AllRegion::RecentSignals,
+                    AllRegion::RecentSignals => AllRegion::Now,
+                };
+            }
+            crossterm::event::KeyCode::Char('c') if self.detail.is_some() => {
+                let selected = self.detail_session(snap).and_then(|session| {
+                    CopyField::ALL
+                        .iter()
+                        .position(|field| field.value(session).is_some())
+                });
+                if let Some(detail) = self.detail.as_mut() {
+                    detail.copy_menu_selected = selected;
+                }
+            }
+            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
+                if self.copy_menu_is_open() =>
+            {
+                self.move_copy_menu_selection(snap, true);
+            }
+            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
+                if self.copy_menu_is_open() =>
+            {
+                self.move_copy_menu_selection(snap, false);
+            }
+            crossterm::event::KeyCode::Esc if self.copy_menu_is_open() => {
+                if let Some(detail) = self.detail.as_mut() {
+                    detail.copy_menu_selected = None;
+                }
+            }
+            crossterm::event::KeyCode::Enter if self.copy_menu_is_open() => {
+                let request = self
+                    .detail
+                    .as_ref()
+                    .and_then(|detail| detail.copy_menu_selected)
+                    .and_then(|selected| CopyField::ALL.get(selected).copied())
+                    .and_then(|field| {
+                        self.detail_session(snap).and_then(|session| {
+                            field
+                                .value(session)
+                                .map(|value| (field.label(), value.into_owned()))
+                        })
+                    });
+                if let Some((field, value)) = request {
+                    if let Some(detail) = self.detail.as_mut() {
+                        detail.copy_menu_selected = None;
+                    }
+                    return Ok(UiAction::Copy { field, value });
+                }
+            }
+            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
+                if self.detail.is_none()
+                    && self.tab == Tab::All
+                    && self.all_region == AllRegion::RecentSignals =>
+            {
+                if self.signal_selected + 1 < snap.recent_signals.len() {
+                    self.signal_selected += 1;
+                }
+            }
+            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
+                if self.detail.is_none()
+                    && self.tab == Tab::All
+                    && self.all_region == AllRegion::RecentSignals =>
+            {
+                self.signal_selected = self.signal_selected.saturating_sub(1);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
                 if self.detail.is_none() =>
             {
-                let visible_len = self.visible(snap).len();
+                let visible_len = self.selectable_len(snap);
                 if self.selected + 1 < visible_len {
                     self.selected += 1;
                 }
@@ -187,19 +349,8 @@ impl Ui {
             {
                 self.selected = self.selected.saturating_sub(1);
             }
-            crossterm::event::KeyCode::Enter
-                if self.detail.is_none() && !self.visible(snap).is_empty() =>
-            {
-                let sessions = self.visible(snap);
-                if let Some(session) = sessions.get(self.selected) {
-                    self.detail = Some(DetailView {
-                        session: SessionIdentity {
-                            provider: session.provider,
-                            native_id: session.id.clone(),
-                        },
-                        scroll: 0,
-                    });
-                }
+            crossterm::event::KeyCode::Enter if self.detail.is_none() => {
+                self.activate_selection(snap);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
                 if self.detail.is_some() =>
@@ -226,16 +377,78 @@ impl Ui {
     fn set_tab(&mut self, tab: Tab) {
         self.tab = tab;
         self.selected = 0;
+        self.all_region = AllRegion::Now;
+        self.signal_selected = 0;
         self.detail = None;
     }
 
-    fn close_detail(&mut self, snap: &Snapshot) {
-        let Some(identity) = self.detail.as_ref().map(|detail| detail.session.clone()) else {
+    fn copy_menu_is_open(&self) -> bool {
+        self.detail
+            .as_ref()
+            .is_some_and(|detail| detail.copy_menu_selected.is_some())
+    }
+
+    fn move_copy_menu_selection(&mut self, snap: &Snapshot, forward: bool) {
+        let Some(current) = self
+            .detail
+            .as_ref()
+            .and_then(|detail| detail.copy_menu_selected)
+        else {
             return;
         };
-        if let Some(index) = self.visible(snap).iter().position(|session| {
-            session.provider == identity.provider && session.id == identity.native_id
-        }) {
+        let Some(session) = self.detail_session(snap) else {
+            return;
+        };
+        let next = if forward {
+            CopyField::ALL
+                .iter()
+                .enumerate()
+                .skip(current + 1)
+                .find(|(_, field)| field.value(session).is_some())
+                .map(|(index, _)| index)
+        } else {
+            CopyField::ALL
+                .iter()
+                .enumerate()
+                .take(current)
+                .rev()
+                .find(|(_, field)| field.value(session).is_some())
+                .map(|(index, _)| index)
+        };
+        if let (Some(next), Some(detail)) = (next, self.detail.as_mut()) {
+            detail.copy_menu_selected = Some(next);
+        }
+    }
+
+    fn close_detail(&mut self, snap: &Snapshot) {
+        let Some(detail) = self.detail.as_ref().cloned() else {
+            return;
+        };
+        if let Some(origin_signal) = detail.origin_signal {
+            self.all_region = AllRegion::RecentSignals;
+            if let Some(index) = snap
+                .recent_signals
+                .iter()
+                .position(|signal| signal == &origin_signal)
+            {
+                self.signal_selected = index;
+            }
+            self.clamp_selections(snap);
+            self.detail = None;
+            return;
+        }
+        let identity = detail.session;
+        let index = if self.tab.provider().is_some() {
+            self.provider_targets(snap).iter().position(|target| {
+                matches!(target, ProviderTarget::Session(session)
+                    if session.provider == identity.provider && session.id == identity.native_id)
+            })
+        } else {
+            self.visible(snap).iter().position(|session| {
+                session.provider == identity.provider && session.id == identity.native_id
+            })
+        };
+        if let Some(index) = index {
             self.selected = index;
         }
         self.detail = None;
@@ -255,21 +468,23 @@ impl Ui {
     /// Selectable Sessions visible on the current page, in rendered row order.
     pub fn visible(&self, snap: &Snapshot) -> Vec<Session> {
         match self.tab.provider() {
-            Some(p) => collector::provider_sessions(&snap.sessions, p, self.filter.cutoff_ms()),
-            None => {
-                let attention = current_attention(snap);
-                group_open_sessions(&snap.sessions, &attention)
-                    .into_iter()
-                    .flat_map(|project| {
-                        project
-                            .worktrees
-                            .into_iter()
-                            .flat_map(|worktree| worktree.sessions)
-                            .chain(project.direct_sessions)
-                    })
-                    .cloned()
-                    .collect()
-            }
+            Some(_) => self
+                .provider_targets(snap)
+                .into_iter()
+                .filter_map(|target| match target {
+                    ProviderTarget::Session(session) => Some(session.clone()),
+                    ProviderTarget::Disclosure(_) => None,
+                })
+                .collect(),
+            None => now_sessions(snap).into_iter().cloned().collect(),
+        }
+    }
+
+    pub fn selectable_len(&self, snap: &Snapshot) -> usize {
+        if self.tab.provider().is_some() {
+            self.provider_targets(snap).len()
+        } else {
+            self.visible(snap).len()
         }
     }
 
@@ -281,11 +496,129 @@ impl Ui {
         }
     }
 
+    pub fn clamp_selections(&mut self, snap: &Snapshot) {
+        self.clamp_selection(self.selectable_len(snap));
+        if snap.recent_signals.is_empty() {
+            self.signal_selected = 0;
+        } else if self.signal_selected >= snap.recent_signals.len() {
+            self.signal_selected = snap.recent_signals.len() - 1;
+        }
+    }
+
     fn detail_session<'a>(&self, snap: &'a Snapshot) -> Option<&'a Session> {
         let identity = &self.detail.as_ref()?.session;
         snap.sessions.iter().find(|session| {
             session.provider == identity.provider && session.id == identity.native_id
         })
+    }
+
+    fn provider_targets<'a>(&self, snap: &'a Snapshot) -> Vec<ProviderTarget<'a>> {
+        self.provider_page_rows(snap)
+            .into_iter()
+            .filter_map(ProviderPageRow::into_target)
+            .collect()
+    }
+
+    fn provider_page_rows<'a>(&self, snap: &'a Snapshot) -> Vec<ProviderPageRow<'a>> {
+        let Some(provider) = self.tab.provider() else {
+            return Vec::new();
+        };
+        provider_page_rows(
+            &snap.sessions,
+            provider,
+            snap.generated_ms,
+            &self.expanded_older,
+        )
+    }
+
+    fn activate_selection(&mut self, snap: &Snapshot) {
+        if self.tab.provider().is_some() {
+            match self.provider_targets(snap).into_iter().nth(self.selected) {
+                Some(ProviderTarget::Session(session)) => {
+                    self.detail = Some(DetailView {
+                        session: SessionIdentity {
+                            provider: session.provider,
+                            native_id: session.id.clone(),
+                        },
+                        scroll: 0,
+                        origin_signal: None,
+                        copy_menu_selected: None,
+                    });
+                }
+                Some(ProviderTarget::Disclosure(project)) => {
+                    self.toggle_older(project);
+                }
+                None => {}
+            }
+            return;
+        }
+
+        if self.all_region == AllRegion::RecentSignals {
+            let Some(signal) = snap.recent_signals.get(self.signal_selected) else {
+                return;
+            };
+            match signal {
+                RecentSignal::Session {
+                    provider,
+                    session_id,
+                    ..
+                } => {
+                    if snap
+                        .sessions
+                        .iter()
+                        .any(|session| session.provider == *provider && session.id == *session_id)
+                    {
+                        self.detail = Some(DetailView {
+                            session: SessionIdentity {
+                                provider: *provider,
+                                native_id: session_id.clone(),
+                            },
+                            scroll: 0,
+                            origin_signal: Some(signal.clone()),
+                            copy_menu_selected: None,
+                        });
+                    }
+                }
+                RecentSignal::Worktree { worktree_root, .. } => {
+                    if let Some(index) = now_sessions(snap).iter().position(|session| {
+                        session
+                            .worktree
+                            .as_ref()
+                            .is_some_and(|worktree| worktree.root == *worktree_root)
+                    }) {
+                        self.tab = Tab::All;
+                        self.all_region = AllRegion::Now;
+                        self.selected = index;
+                        self.detail = None;
+                        self.status_notice = None;
+                    } else {
+                        self.status_notice = Some((
+                            "Worktree is no longer open".into(),
+                            Instant::now() + Duration::from_secs(2),
+                        ));
+                    }
+                }
+            }
+            return;
+        }
+
+        if let Some(session) = self.visible(snap).get(self.selected) {
+            self.detail = Some(DetailView {
+                session: SessionIdentity {
+                    provider: session.provider,
+                    native_id: session.id.clone(),
+                },
+                scroll: 0,
+                origin_signal: None,
+                copy_menu_selected: None,
+            });
+        }
+    }
+
+    fn toggle_older(&mut self, project: ProviderProjectKey) {
+        if !self.expanded_older.remove(&project) {
+            self.expanded_older.insert(project);
+        }
     }
 }
 
@@ -299,32 +632,97 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),                             // tabs
-            Constraint::Length(u16::from(ui.tab != Tab::All)), // Provider time-filter bar
-            Constraint::Min(3),                                // content
-            Constraint::Length(1),                             // footer
+            Constraint::Length(3), // tabs
+            Constraint::Min(3),    // content
+            Constraint::Length(1), // footer
         ])
         .split(f.area());
 
     draw_tabs(f, chunks[0], ui);
-    if ui.tab != Tab::All {
-        draw_filter_bar(f, chunks[1], ui);
-    }
 
     if ui.detail.is_some() {
-        draw_detail(f, chunks[2], snap, ui);
+        draw_detail(f, chunks[1], snap, ui);
     } else {
         match ui.tab {
-            Tab::All => draw_all(f, chunks[2], snap, ui),
-            _ => draw_provider(f, chunks[2], snap, ui),
+            Tab::All => draw_all(f, chunks[1], snap, ui),
+            _ => draw_provider(f, chunks[1], snap, ui),
         }
     }
 
-    draw_footer(f, chunks[3], snap, ui);
+    draw_footer(f, chunks[2], snap, ui);
+
+    if ui
+        .detail
+        .as_ref()
+        .is_some_and(|detail| detail.copy_menu_selected.is_some())
+    {
+        draw_copy_menu(f, snap, ui);
+    }
 
     if ui.help_open {
         draw_help(f, theme);
     }
+}
+
+fn draw_copy_menu(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
+    let Some(session) = ui.detail_session(snap) else {
+        return;
+    };
+    let Some(selected) = ui
+        .detail
+        .as_ref()
+        .and_then(|detail| detail.copy_menu_selected)
+    else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let area = centered_rect(84, 38, f.area());
+    let mut lines = vec![Line::from(Span::styled(
+        "Choose one complete metadata value",
+        Style::default().fg(theme.muted),
+    ))];
+    for (index, field) in CopyField::ALL.iter().copied().enumerate() {
+        let value = field.value(session);
+        let text = format!(
+            "{} {:<12} {}",
+            if index == selected { ">" } else { " " },
+            field.label(),
+            value.as_deref().unwrap_or("Unavailable")
+        );
+        let style = if value.is_none() {
+            Style::default().fg(theme.muted)
+        } else if index == selected {
+            selected_style(theme)
+        } else {
+            Style::default().fg(theme.foreground)
+        };
+        lines.push(Line::from(Span::styled(text, style)));
+    }
+
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(theme.foreground).bg(theme.background))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(Span::styled(
+                        " Copy source metadata ",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .title_bottom(
+                        Line::from(Span::styled(
+                            " Enter Copy | Esc Cancel ",
+                            Style::default().fg(theme.muted),
+                        ))
+                        .right_aligned(),
+                    ),
+            ),
+        area,
+    );
 }
 
 fn draw_help(f: &mut Frame, theme: Theme) {
@@ -347,7 +745,7 @@ fn draw_help(f: &mut Frame, theme: Theme) {
         Line::from("  Tab / Shift+Tab  Focus where available"),
         Line::from("  Up/Down or j/k   Move selection"),
         Line::from("  Enter            Inspect"),
-        Line::from("  f  Time range      t  Theme      r  Refresh"),
+        Line::from("  t  Theme      r  Refresh"),
         Line::from("  ?  Help      Esc  Close      q  Quit"),
     ];
     f.render_widget(Clear, area);
@@ -395,46 +793,24 @@ fn draw_tabs(f: &mut Frame, area: Rect, ui: &Ui) {
     f.render_widget(tabs, area);
 }
 
-/// Segmented time-range selector, rendered as `Time  <ranges…>  (f to change)` with the
-/// active range highlighted — so it's obvious `f` cycles the time range, not some
-/// generic filter. Matches the segmented control shown in the product spec.
-fn draw_filter_bar(f: &mut Frame, area: Rect, ui: &Ui) {
-    let theme = ui.theme.palette();
-    let mut spans = vec![Span::styled(" Time  ", Style::default().fg(theme.muted))];
-    for (i, tf) in TimeFilter::ALL.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled("  ", Style::default().fg(theme.muted)));
-        }
-        let style = if *tf == ui.filter {
-            selected_style(theme)
-        } else {
-            Style::default().fg(theme.foreground)
-        };
-        spans.push(Span::styled(format!(" {} ", tf.title()), style));
-    }
-    spans.push(Span::styled(
-        "   (f to change)",
-        Style::default().fg(theme.muted),
-    ));
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
 // ---- All page ----
 
 fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
-    let now_area = if area.width >= 120 {
-        Layout::default()
+    let (now_area, signals_area) = if area.width >= 120 {
+        let areas = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(66), Constraint::Percentage(34)])
-            .split(area)[0]
+            .split(area);
+        (areas[0], Some(areas[1]))
     } else if area.height >= 14 {
-        Layout::default()
+        let areas = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(14), Constraint::Min(0)])
-            .split(area)[0]
+            .split(area);
+        (areas[0], (areas[1].height >= 3).then_some(areas[1]))
     } else {
-        area
+        (area, None)
     };
     let attention = current_attention(snap);
     let now = group_open_sessions(&snap.sessions, &attention);
@@ -472,7 +848,7 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                     &attention,
                     now_ms,
                     content_width,
-                    selectable == ui.selected,
+                    ui.all_region == AllRegion::Now && selectable == ui.selected,
                     theme,
                 ));
                 selectable += 1;
@@ -484,7 +860,7 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 &attention,
                 now_ms,
                 content_width,
-                selectable == ui.selected,
+                ui.all_region == AllRegion::Now && selectable == ui.selected,
                 theme,
             ));
             selectable += 1;
@@ -495,7 +871,11 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.accent))
+                .border_style(Style::default().fg(if ui.all_region == AllRegion::Now {
+                    theme.accent
+                } else {
+                    theme.border
+                }))
                 .title(Span::styled(
                     " NOW ",
                     Style::default()
@@ -505,6 +885,190 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         ),
         now_area,
     );
+
+    if let Some(signals_area) = signals_area {
+        draw_recent_signals(f, signals_area, &snap.recent_signals, ui);
+    }
+}
+
+fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], ui: &Ui) {
+    let theme = ui.theme.palette();
+    let width = area.width.saturating_sub(2) as usize;
+    let height = area.height.saturating_sub(2) as usize;
+    let lines = if signals.is_empty() {
+        vec![Line::from(Span::styled(
+            "No recent Signals.",
+            Style::default().fg(theme.muted),
+        ))]
+    } else {
+        let mut lines = Vec::new();
+        for (index, signal) in signals.iter().enumerate() {
+            let style = if ui.all_region == AllRegion::RecentSignals && index == ui.signal_selected
+            {
+                selected_style(theme)
+            } else {
+                Style::default().fg(theme.foreground)
+            };
+            for text in recent_signal_lines(signal, width) {
+                if lines.len() == height {
+                    break;
+                }
+                lines.push(Line::from(Span::styled(text, style)));
+            }
+            if lines.len() == height {
+                break;
+            }
+        }
+        lines
+    };
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(
+                    Style::default().fg(if ui.all_region == AllRegion::RecentSignals {
+                        theme.accent
+                    } else {
+                        theme.border
+                    }),
+                )
+                .title(Span::styled(
+                    " RECENT SIGNALS ",
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        ),
+        area,
+    );
+}
+
+fn recent_signal_lines(signal: &RecentSignal, width: usize) -> Vec<String> {
+    let RecentSignal::Session {
+        provider,
+        session_id,
+        kind,
+        ..
+    } = signal
+    else {
+        let RecentSignal::Worktree {
+            worktree_root,
+            change,
+            before,
+            after,
+            ..
+        } = signal
+        else {
+            unreachable!();
+        };
+        let change = match change {
+            crate::signals::SharedWorktreeRiskChange::Detected => "detected",
+            crate::signals::SharedWorktreeRiskChange::Cleared => "cleared",
+        };
+        let suffix = format!("  Risk {change}");
+        let root_width = width.saturating_sub(3 + suffix.chars().count());
+        return vec![
+            format!(
+                "WT {}{suffix}",
+                shorten_start(&worktree_root.display().to_string(), root_width)
+            ),
+            shorten_end(
+                &format!("Before {}: {}", before.len(), signal_members(before)),
+                width,
+            ),
+            shorten_end(
+                &format!("After {}: {}", after.len(), signal_members(after)),
+                width,
+            ),
+        ];
+    };
+    let evidence = match kind {
+        RecentSignalKind::SessionStateChanged { from, to } => format!(
+            "{} -> {}",
+            signal_state_label(*from),
+            signal_state_label(*to)
+        ),
+        RecentSignalKind::ContextAlertChanged {
+            from,
+            to,
+            before,
+            after,
+        } => {
+            let (change, level) = match (from, to) {
+                (None, Some(to)) => ("entered", *to),
+                (Some(ContextAlertLevel::Warning), Some(ContextAlertLevel::Critical)) => {
+                    ("entered", ContextAlertLevel::Critical)
+                }
+                (Some(from), _) => ("cleared", *from),
+                (None, None) => unreachable!("unchanged Context bands are not Signals"),
+            };
+            format!(
+                "Ctx {}{} {}>{}",
+                if change == "entered" { "+" } else { "-" },
+                context_alert_label(level),
+                fmt_tokens(before.tokens),
+                fmt_tokens(after.tokens)
+            )
+        }
+        RecentSignalKind::CompactionObserved {
+            compaction,
+            context_before,
+            context_after,
+            cleared_alert,
+        } => {
+            let trigger = shorten_start(compaction.trigger.as_deref().unwrap_or("unknown"), 6);
+            let cleared = cleared_alert.map_or_else(String::new, |level| {
+                format!(" -{}", context_alert_label(level))
+            });
+            format!(
+                "Cmp {trigger} {}>{}{cleared}",
+                fmt_tokens(context_before.tokens),
+                fmt_tokens(context_after.tokens)
+            )
+        }
+    };
+    let provider = match provider {
+        Provider::ClaudeCode => "CL",
+        Provider::CodexCli => "CX",
+    };
+    let fixed_width = provider.chars().count() + evidence.chars().count() + 2;
+    let session_width = width.saturating_sub(fixed_width);
+    let session = shorten_start(session_id, session_width);
+    let text = if session.is_empty() {
+        format!("{provider} {evidence}")
+    } else {
+        format!("{provider} {session} {evidence}")
+    };
+    vec![shorten_start(&text, width)]
+}
+
+fn signal_members(members: &[crate::attention::SessionIdentity]) -> String {
+    members
+        .iter()
+        .map(|identity| {
+            let provider = match identity.provider {
+                Provider::ClaudeCode => "CL",
+                Provider::CodexCli => "CX",
+            };
+            format!("{provider}:{}", identity.native_id)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn signal_state_label(state: SessionState) -> &'static str {
+    match state {
+        SessionState::Busy => "Busy",
+        SessionState::Idle => "Idle",
+        SessionState::Exited => "Exited",
+    }
+}
+
+fn context_alert_label(level: ContextAlertLevel) -> &'static str {
+    match level {
+        ContextAlertLevel::Warning => "Warning",
+        ContextAlertLevel::Critical => "Critical",
+    }
 }
 
 struct NowProject<'a> {
@@ -536,6 +1100,20 @@ fn current_attention(snap: &Snapshot) -> Cow<'_, AttentionSnapshot> {
             Cow::Owned(AttentionEngine::default().update(&snap.sessions, observed_at_ms))
         }
     }
+}
+
+fn now_sessions(snap: &Snapshot) -> Vec<&Session> {
+    let attention = current_attention(snap);
+    group_open_sessions(&snap.sessions, &attention)
+        .into_iter()
+        .flat_map(|project| {
+            project
+                .worktrees
+                .into_iter()
+                .flat_map(|worktree| worktree.sessions)
+                .chain(project.direct_sessions)
+        })
+        .collect()
 }
 
 fn group_open_sessions<'a>(
@@ -802,14 +1380,122 @@ fn highest_context_pressure(sessions: &[&Session]) -> String {
 
 // ---- Provider page ----
 
+struct ProviderProject<'a> {
+    project: Option<&'a Project>,
+    recent_sessions: Vec<&'a Session>,
+    older_sessions: Vec<&'a Session>,
+}
+
+fn provider_projects(
+    sessions: &[Session],
+    provider: Provider,
+    now_ms: i64,
+) -> Vec<ProviderProject<'_>> {
+    const SEVEN_DAYS_MS: i64 = 7 * 86_400_000;
+    let cutoff_ms = now_ms - SEVEN_DAYS_MS;
+    let mut projects: Vec<ProviderProject<'_>> = Vec::new();
+
+    for session in sessions
+        .iter()
+        .filter(|session| session.provider == provider)
+    {
+        let project = projects.iter_mut().find(|group| {
+            group.project.map(|project| &project.identity)
+                == session.project.as_ref().map(|project| &project.identity)
+        });
+        if let Some(project) = project {
+            if session.last_activity_ms >= cutoff_ms {
+                project.recent_sessions.push(session);
+            } else {
+                project.older_sessions.push(session);
+            }
+        } else {
+            projects.push(ProviderProject {
+                project: session.project.as_ref(),
+                recent_sessions: (session.last_activity_ms >= cutoff_ms)
+                    .then_some(session)
+                    .into_iter()
+                    .collect(),
+                older_sessions: (session.last_activity_ms < cutoff_ms)
+                    .then_some(session)
+                    .into_iter()
+                    .collect(),
+            });
+        }
+    }
+
+    for project in &mut projects {
+        project
+            .recent_sessions
+            .sort_by_key(|session| Reverse(session.last_activity_ms));
+        project
+            .older_sessions
+            .sort_by_key(|session| Reverse(session.last_activity_ms));
+    }
+    projects.sort_by(|left, right| {
+        let newest = |project: &ProviderProject<'_>| {
+            project
+                .recent_sessions
+                .first()
+                .or_else(|| project.older_sessions.first())
+                .map_or(i64::MIN, |session| session.last_activity_ms)
+        };
+        newest(right).cmp(&newest(left)).then_with(|| {
+            left.project
+                .map_or("—", |project| project.label.as_str())
+                .cmp(right.project.map_or("—", |project| project.label.as_str()))
+        })
+    });
+    projects
+}
+
+fn provider_page_rows<'a>(
+    sessions: &'a [Session],
+    provider: Provider,
+    now_ms: i64,
+    expanded_older: &HashSet<ProviderProjectKey>,
+) -> Vec<ProviderPageRow<'a>> {
+    let mut rows = Vec::new();
+    for project in provider_projects(sessions, provider, now_ms) {
+        rows.push(ProviderPageRow::Project(project.project));
+        rows.extend(
+            project
+                .recent_sessions
+                .into_iter()
+                .map(ProviderPageRow::Session),
+        );
+        if !project.older_sessions.is_empty() {
+            let key = ProviderProjectKey {
+                provider,
+                project: project.project.map(|project| project.identity.clone()),
+            };
+            let expanded = expanded_older.contains(&key);
+            rows.push(ProviderPageRow::OlderSessions {
+                key,
+                count: project.older_sessions.len(),
+                expanded,
+            });
+            if expanded {
+                rows.extend(
+                    project
+                        .older_sessions
+                        .into_iter()
+                        .map(ProviderPageRow::Session),
+                );
+            }
+        }
+    }
+    rows
+}
+
 fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
-    let sessions = ui.visible(snap);
+    let provider_rows = ui.provider_page_rows(snap);
     let now = Local::now().timestamp_millis();
     let theme = ui.theme.palette();
 
-    if sessions.is_empty() {
+    if provider_rows.is_empty() {
         let msg = if snap.ready {
-            "No sessions match this filter."
+            "No sessions for this Provider."
         } else {
             "Indexing… sessions will appear shortly."
         };
@@ -825,11 +1511,17 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         return;
     }
 
+    if area.width < 120 {
+        draw_compact_provider(f, area, provider_rows, now, ui, theme);
+        return;
+    }
+
     let header = Row::new(vec![
         Cell::from("State"),
-        Cell::from("Project"),
+        Cell::from("Session"),
         Cell::from("Model"),
         Cell::from("Context"),
+        Cell::from("Lifetime Usage"),
         Cell::from("Est. $"),
         Cell::from("Updated"),
         Cell::from("Cmp"),
@@ -840,18 +1532,64 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
             .add_modifier(Modifier::BOLD),
     );
 
-    let rows: Vec<Row> = sessions
-        .iter()
-        .map(|s| session_row(s, now, theme))
-        .collect();
+    let mut rows = Vec::new();
+    let mut selected_row = 0;
+    let mut selectable = 0;
+    for provider_row in provider_rows {
+        match provider_row {
+            ProviderPageRow::Project(project) => {
+                rows.push(
+                    Row::new(vec![
+                        Cell::from("PROJECT"),
+                        Cell::from(format!(
+                            " {}",
+                            project.map_or("—", |project| project.label.as_str())
+                        )),
+                    ])
+                    .style(
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                );
+            }
+            ProviderPageRow::Session(session) => {
+                if selectable == ui.selected {
+                    selected_row = rows.len();
+                }
+                rows.push(session_row(session, now, theme));
+                selectable += 1;
+            }
+            ProviderPageRow::OlderSessions {
+                count, expanded, ..
+            } => {
+                if selectable == ui.selected {
+                    selected_row = rows.len();
+                }
+                rows.push(
+                    Row::new(vec![
+                        Cell::from(""),
+                        Cell::from(format!(
+                            "{} OLDER SESSIONS ({count})  {}",
+                            if expanded { "-" } else { "+" },
+                            if expanded { "Collapse" } else { "Expand" }
+                        )),
+                    ])
+                    .style(Style::default().fg(theme.muted)),
+                );
+                selectable += 1;
+            }
+        }
+    }
 
     let widths = [
-        Constraint::Length(6),
-        Constraint::Percentage(30),
+        Constraint::Length(7),
+        Constraint::Length(20),
         Constraint::Length(18),
-        Constraint::Length(16),
-        Constraint::Length(9),
+        Constraint::Length(15),
+        Constraint::Length(31),
         Constraint::Length(8),
+        Constraint::Length(7),
         Constraint::Length(4),
     ];
 
@@ -862,7 +1600,10 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme.border))
                 .title(Span::styled(
-                    format!(" {} ", ui.tab.title()),
+                    format!(
+                        " {} SESSIONS | grouped by Project ",
+                        ui.tab.title().to_uppercase()
+                    ),
                     Style::default().fg(theme.foreground),
                 ))
                 .title_bottom(
@@ -877,7 +1618,9 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .highlight_symbol("▌");
 
     let mut ts = TableState::default();
-    ts.select(Some(ui.selected.min(sessions.len().saturating_sub(1))));
+    if selectable > 0 {
+        ts.select(Some(selected_row));
+    }
     f.render_stateful_widget(table, area, &mut ts);
 }
 
@@ -902,6 +1645,16 @@ fn context_style(s: &Session, theme: Theme) -> Style {
     }
 }
 
+fn lifetime_usage_text(s: &Session) -> String {
+    format!(
+        "I {}  O {}  CR {}  CW {}",
+        fmt_tokens(s.usage.input),
+        fmt_tokens(s.usage.output),
+        fmt_tokens(s.usage.cache_read),
+        fmt_tokens(s.usage.cache_write),
+    )
+}
+
 fn session_row(s: &Session, now: i64, theme: Theme) -> Row<'static> {
     let model = s.latest_model.clone().unwrap_or_else(|| "—".into());
     let cmp = if s.compaction_count() > 0 {
@@ -918,11 +1671,15 @@ fn session_row(s: &Session, now: i64, theme: Theme) -> Row<'static> {
     Row::new(vec![
         state_cell(s.state, theme),
         Cell::from(Span::styled(
-            s.project_label().to_string(),
+            s.id.clone(),
             Style::default().fg(theme.foreground),
         )),
         Cell::from(Span::styled(model, Style::default().fg(theme.muted))),
         Cell::from(Span::styled(fmt_context(s), context_style(s, theme))),
+        Cell::from(Span::styled(
+            lifetime_usage_text(s),
+            Style::default().fg(theme.foreground),
+        )),
         Cell::from(Span::styled(
             fmt_cost(s.cost),
             Style::default().fg(theme.foreground),
@@ -935,7 +1692,224 @@ fn session_row(s: &Session, now: i64, theme: Theme) -> Row<'static> {
     ])
 }
 
+fn draw_compact_provider(
+    f: &mut Frame,
+    area: Rect,
+    provider_rows: Vec<ProviderPageRow<'_>>,
+    now: i64,
+    ui: &Ui,
+    theme: Theme,
+) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  State  Session             Model               Context",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "         Transcript Lifetime Usage                 Est.$  Updated  Cmp",
+            Style::default().fg(theme.muted),
+        )),
+    ];
+    let mut selectable = 0;
+    let mut selected_line = 0;
+
+    for provider_row in provider_rows {
+        match provider_row {
+            ProviderPageRow::Project(project) => {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "PROJECT  {}",
+                        project.map_or("—", |project| project.label.as_str())
+                    ),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
+            ProviderPageRow::Session(session) => {
+                if selectable == ui.selected {
+                    selected_line = lines.len();
+                }
+                lines.extend(compact_session_lines(
+                    session,
+                    now,
+                    selectable == ui.selected,
+                    theme,
+                ));
+                selectable += 1;
+            }
+            ProviderPageRow::OlderSessions {
+                count, expanded, ..
+            } => {
+                let selected = selectable == ui.selected;
+                if selected {
+                    selected_line = lines.len();
+                }
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "{} {} OLDER SESSIONS ({count})  {}",
+                        if selected { ">" } else { " " },
+                        if expanded { "-" } else { "+" },
+                        if expanded { "Collapse" } else { "Expand" }
+                    ),
+                    if selected {
+                        selected_style(theme)
+                    } else {
+                        Style::default().fg(theme.muted)
+                    },
+                )));
+                selectable += 1;
+            }
+        }
+    }
+
+    let visible_height = area.height.saturating_sub(2) as usize;
+    let scroll = selected_line.saturating_sub(visible_height.saturating_sub(2)) as u16;
+    let title = format!(
+        " {} SESSIONS | grouped by Project ",
+        ui.tab.title().to_uppercase()
+    );
+    f.render_widget(
+        Paragraph::new(lines).scroll((scroll, 0)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border))
+                .title(Span::styled(
+                    title,
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        ),
+        area,
+    );
+}
+
+fn compact_session_lines(
+    session: &Session,
+    now: i64,
+    selected: bool,
+    theme: Theme,
+) -> [Line<'static>; 2] {
+    let selected_or = |style| {
+        if selected {
+            selected_style(theme)
+        } else {
+            style
+        }
+    };
+    let state = match session.state {
+        SessionState::Busy => "Busy",
+        SessionState::Idle => "Idle",
+        SessionState::Exited => "· —",
+    };
+    let state_style = match session.state {
+        SessionState::Busy => Style::default().fg(theme.busy).add_modifier(Modifier::BOLD),
+        SessionState::Idle => Style::default().fg(theme.idle),
+        SessionState::Exited => Style::default().fg(theme.exited),
+    };
+    let model = session.latest_model.as_deref().unwrap_or("—");
+    let compactions = if session.compaction_count() > 0 {
+        format!("⤳{}", session.compaction_count())
+    } else {
+        "·".into()
+    };
+
+    [
+        Line::from(vec![
+            Span::styled(
+                if selected { "> " } else { "  " },
+                selected_or(Style::default().fg(theme.foreground)),
+            ),
+            Span::styled(format!("{state:<7}"), selected_or(state_style)),
+            Span::styled(
+                format!("{:<18}", shorten_end(&session.id, 18)),
+                selected_or(Style::default().fg(theme.foreground)),
+            ),
+            Span::styled(
+                format!("{:<18}", shorten_end(model, 18)),
+                selected_or(Style::default().fg(theme.muted)),
+            ),
+            Span::styled(
+                fmt_context(session),
+                selected_or(context_style(session, theme)),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("    {}  ", lifetime_usage_text(session)),
+                selected_or(Style::default().fg(theme.foreground)),
+            ),
+            Span::styled(
+                format!("{}  ", fmt_cost(session.cost)),
+                selected_or(Style::default().fg(theme.foreground)),
+            ),
+            Span::styled(
+                format!("{}  ", fmt_relative(session.last_activity_ms, now)),
+                selected_or(Style::default().fg(theme.muted)),
+            ),
+            Span::styled(compactions, selected_or(Style::default().fg(theme.accent))),
+        ]),
+    ]
+}
+
 // ---- detail child view ----
+
+fn push_usage_summary(
+    lines: &mut Vec<Line<'static>>,
+    scope: &str,
+    usage: &Usage,
+    per_model: &[ModelUsage],
+    cost: Option<f64>,
+    theme: Theme,
+) {
+    let hdr = |key: &str, value: String| {
+        Line::from(vec![
+            Span::styled(format!("{key:<16}"), Style::default().fg(theme.muted)),
+            Span::styled(value, Style::default().fg(theme.foreground)),
+        ])
+    };
+    lines.push(Line::from(Span::styled(
+        format!("{scope} Usage"),
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(hdr("Input", fmt_tokens(usage.input)));
+    lines.push(hdr("Output", fmt_tokens(usage.output)));
+    lines.push(hdr("Cache read", fmt_tokens(usage.cache_read)));
+    lines.push(hdr("Cache write", fmt_tokens(usage.cache_write)));
+    lines.push(hdr("Est. API cost", fmt_cost(cost)));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("{scope} per-model Usage"),
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD),
+    )));
+    for model in per_model {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<20}", model.model),
+                Style::default().fg(theme.foreground),
+            ),
+            Span::styled(
+                format!(
+                    "in {} out {} cr {} cw {}  ",
+                    fmt_tokens(model.usage.input),
+                    fmt_tokens(model.usage.output),
+                    fmt_tokens(model.usage.cache_read),
+                    fmt_tokens(model.usage.cache_write)
+                ),
+                Style::default().fg(theme.muted),
+            ),
+            Span::styled(fmt_cost(model.cost), Style::default().fg(theme.foreground)),
+        ]));
+    }
+    lines.push(Line::from(""));
+}
 
 fn draw_detail(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let Some(s) = ui.detail_session(snap) else {
@@ -982,6 +1956,14 @@ fn draw_detail(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         },
     ));
     lines.push(hdr("cwd", s.cwd.clone().unwrap_or_else(|| "N/A".into())));
+    lines.push(hdr(
+        "Source log",
+        CopyField::SourceLog
+            .value(s)
+            .map(Cow::into_owned)
+            .unwrap_or_else(|| "N/A".into()),
+    ));
+    lines.push(hdr("Source format", s.source.format.label().into()));
     lines.push(hdr("Session", s.id.clone()));
     lines.push(hdr(
         "Latest model",
@@ -1018,45 +2000,37 @@ fn draw_detail(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     lines.push(hdr("Occupancy", ctx));
     lines.push(Line::from(""));
 
-    lines.push(Line::from(Span::styled(
-        "Transcript Lifetime Usage",
-        Style::default()
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(hdr("Input", fmt_tokens(s.usage.input)));
-    lines.push(hdr("Output", fmt_tokens(s.usage.output)));
-    lines.push(hdr("Cache read", fmt_tokens(s.usage.cache_read)));
-    lines.push(hdr("Cache write", fmt_tokens(s.usage.cache_write)));
-    lines.push(hdr("Est. cost", fmt_cost(s.cost)));
-    lines.push(Line::from(""));
-
-    lines.push(Line::from(Span::styled(
-        "Per-model Usage",
-        Style::default()
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD),
-    )));
-    for m in &s.per_model {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {:<20}", m.model),
-                Style::default().fg(theme.foreground),
+    if s.state.is_open() {
+        match &s.current_run_usage {
+            Some(run) => push_usage_summary(
+                &mut lines,
+                "Current Run",
+                &run.usage,
+                &run.per_model,
+                run.cost,
+                theme,
             ),
-            Span::styled(
-                format!(
-                    "in {} out {} cr {} cw {}  ",
-                    fmt_tokens(m.usage.input),
-                    fmt_tokens(m.usage.output),
-                    fmt_tokens(m.usage.cache_read),
-                    fmt_tokens(m.usage.cache_write)
-                ),
-                Style::default().fg(theme.muted),
-            ),
-            Span::styled(fmt_cost(m.cost), Style::default().fg(theme.foreground)),
-        ]));
+            None => {
+                lines.push(Line::from(Span::styled(
+                    "Current Run Usage",
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                lines.push(hdr("Usage", "N/A".into()));
+                lines.push(Line::from(""));
+            }
+        }
     }
-    lines.push(Line::from(""));
+
+    push_usage_summary(
+        &mut lines,
+        "Transcript Lifetime",
+        &s.usage,
+        &s.per_model,
+        s.cost,
+        theme,
+    );
 
     lines.push(Line::from(Span::styled(
         format!("Compactions ({})", s.compaction_count()),
@@ -1128,23 +2102,33 @@ fn draw_detail(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
 
 fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
-    let left = if ui.detail.is_some() && area.width < 100 {
+    let left = if ui.copy_menu_is_open() && area.width < 100 {
+        "j/k Select | Enter Copy | Esc Cancel"
+    } else if ui.copy_menu_is_open() {
+        "Up/Down or j/k Select | Enter Copy | Esc Cancel"
+    } else if ui.detail.is_some() && area.width < 100 {
         "Esc Back | j/k Scroll | 1/2/3 Page"
     } else if ui.detail.is_some() {
-        "Esc Back | Up/Down or j/k Scroll | 1/2/3 Page | t Theme | ? Help | q Quit"
+        "Esc Back | Up/Down or j/k Scroll | c Copy | 1/2/3 Page | t Theme | ? Help | q Quit"
     } else if area.width < 100 && ui.tab == Tab::All {
         "j/k | Enter Inspect | 1/2/3 Page | t Theme | ? | q Quit"
     } else if area.width < 100 {
-        "j/k | Enter | t Theme | ? | q Quit"
+        "j/k | Enter Inspect/Expand | t Theme | ? | q Quit"
     } else if ui.tab == Tab::All {
         "j/k Move | Enter Inspect | 1/2/3 Page | r Scan | t Theme | ? Help | q Quit"
     } else {
-        "j/k Move | Enter Detail | 1/2/3 Page | t Theme | ? Help | q Quit"
+        "j/k Move | Enter Inspect/Expand | 1/2/3 Page | t Theme | ? Help | q Quit"
     };
-    let theme_notice = ui
-        .theme_notice_until
-        .is_some_and(|until| Instant::now() < until);
-    let status = if theme_notice {
+    let now = Instant::now();
+    let status_notice = ui
+        .status_notice
+        .as_ref()
+        .filter(|(_, until)| now < *until)
+        .map(|(message, _)| message.clone());
+    let theme_notice = ui.theme_notice_until.is_some_and(|until| now < until);
+    let status = if let Some(status_notice) = status_notice.as_ref() {
+        status_notice.clone()
+    } else if theme_notice {
         format!("Theme: {}", ui.active_theme_name())
     } else {
         snap.status.clone()
@@ -1162,7 +2146,7 @@ fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         Paragraph::new(Span::styled(left, Style::default().fg(theme.muted))),
         cols[0],
     );
-    let status_color = if theme_notice {
+    let status_color = if status_notice.is_some() || theme_notice {
         theme.accent
     } else {
         theme.muted
@@ -1199,8 +2183,10 @@ mod tests {
     use crate::alerts::AlertCounts;
     use crate::attention::AttentionEngine;
     use crate::domain::{
-        Compaction, ContextState, ModelUsage, Project, ProjectIdentity, Provider, Usage, Worktree,
+        Compaction, ContextState, ModelUsage, Project, ProjectIdentity, Provider, Usage,
+        UsageSummary, Worktree,
     };
+    use crate::signals::{RecentSignal, RecentSignalKind, SharedWorktreeRiskChange};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
@@ -1278,16 +2264,6 @@ mod tests {
             .join("\n")
     }
 
-    fn row_text_start(buffer: &ratatui::buffer::Buffer, row: usize, text: &str) -> usize {
-        let start = row * buffer.area.width as usize;
-        let end = start + buffer.area.width as usize;
-        let rendered_row: String = buffer.content()[start..end]
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        rendered_row.find(text).unwrap()
-    }
-
     fn rendered_style_at(terminal: &Terminal<TestBackend>, text: &str) -> Style {
         let buffer = terminal.backend().buffer();
         let width = buffer.area.width as usize;
@@ -1307,6 +2283,7 @@ mod tests {
         let session = Session {
             provider: Provider::ClaudeCode,
             id: "demo-session".into(),
+            source: Default::default(),
             project: Some(Project {
                 identity: ProjectIdentity::GitCommonDir(PathBuf::from(
                     "/Users/x/code/tokenplay/.git",
@@ -1341,6 +2318,7 @@ mod tests {
                 },
                 cost: Some(0.42),
             }],
+            current_run_usage: None,
             compactions: vec![],
             last_activity_ms: 0,
             cost: Some(0.42),
@@ -1361,7 +2339,6 @@ mod tests {
         let snap = demo_snapshot();
         let mut ui = Ui {
             tab,
-            filter: TimeFilter::All,
             selected: 0,
             ..Ui::default()
         };
@@ -1468,7 +2445,6 @@ mod tests {
         snapshot.sessions.push(selected);
         let ui = Ui {
             tab: Tab::Claude,
-            filter: TimeFilter::All,
             selected: 1,
             ..Ui::default()
         };
@@ -1509,7 +2485,6 @@ mod tests {
 
         let ui = Ui {
             tab: Tab::Claude,
-            filter: TimeFilter::All,
             ..Ui::default()
         };
         let terminal = render_terminal_with_snapshot(&ui, &snapshot);
@@ -1868,7 +2843,6 @@ mod tests {
             cache_write: 12_345,
         };
         let mut ui = Ui::default();
-        let original_filter = ui.filter;
 
         ui.handle_key(
             KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
@@ -1877,7 +2851,6 @@ mod tests {
         .unwrap();
         let page = rendered_rows_at(&ui, &snapshot, 120, 30);
 
-        assert_eq!(ui.filter, original_filter);
         for excluded in [
             "Active Today",
             "Last 7 Days",
@@ -1894,7 +2867,7 @@ mod tests {
     }
 
     #[test]
-    fn now_reserves_unlabelled_space_for_later_main_page_regions() {
+    fn now_shares_the_main_page_with_recent_signals_only() {
         let snapshot = demo_snapshot();
         let ui = Ui::default();
 
@@ -1914,10 +2887,365 @@ mod tests {
             Some(16)
         );
 
-        for speculative_label in ["RECENT SIGNALS", "FOCUS", "PROJECT PULSE"] {
+        assert!(wide.contains("RECENT SIGNALS"));
+        assert!(compact.contains("RECENT SIGNALS"));
+        for speculative_label in ["FOCUS", "PROJECT PULSE"] {
             assert!(!wide.contains(speculative_label));
             assert!(!compact.contains(speculative_label));
         }
+    }
+
+    #[test]
+    fn recent_signals_render_newest_first_without_history_controls() {
+        let mut snapshot = demo_snapshot();
+        snapshot.recent_signals = vec![
+            RecentSignal::Session {
+                observed_at_ms: 2_000,
+                provider: Provider::ClaudeCode,
+                session_id: "newest-signal".into(),
+                kind: RecentSignalKind::SessionStateChanged {
+                    from: SessionState::Busy,
+                    to: SessionState::Idle,
+                },
+            },
+            RecentSignal::Session {
+                observed_at_ms: 1_000,
+                provider: Provider::CodexCli,
+                session_id: "older-signal".into(),
+                kind: RecentSignalKind::SessionStateChanged {
+                    from: SessionState::Idle,
+                    to: SessionState::Exited,
+                },
+            },
+        ];
+
+        let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
+
+        assert!(page.contains("RECENT SIGNALS"));
+        assert!(page.find("newest-signal").unwrap() < page.find("older-signal").unwrap());
+        assert!(page.contains("Busy -> Idle"));
+        assert!(page.contains("Idle -> Exited"));
+        for excluded in ["View More", "Filter", "Scroll"] {
+            assert!(!page.contains(excluded));
+        }
+    }
+
+    #[test]
+    fn shared_worktree_signal_renders_canonical_root_and_membership_evidence() {
+        let mut snapshot = demo_snapshot();
+        snapshot.recent_signals = vec![RecentSignal::Worktree {
+            observed_at_ms: 2_000,
+            worktree_root: "/wt/shared".into(),
+            change: SharedWorktreeRiskChange::Detected,
+            before: vec![crate::attention::SessionIdentity {
+                provider: Provider::ClaudeCode,
+                native_id: "claude-a".into(),
+            }],
+            after: vec![
+                crate::attention::SessionIdentity {
+                    provider: Provider::ClaudeCode,
+                    native_id: "claude-a".into(),
+                },
+                crate::attention::SessionIdentity {
+                    provider: Provider::CodexCli,
+                    native_id: "codex-b".into(),
+                },
+            ],
+        }];
+
+        let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
+
+        for evidence in [
+            "/wt/shared",
+            "Risk detected",
+            "Before 1: CL:claude-a",
+            "After 2: CL:claude-a, CX:codex-b",
+        ] {
+            assert!(page.contains(evidence), "missing evidence {evidence:?}");
+        }
+        assert!(!page.to_lowercase().contains("conflict"));
+    }
+
+    #[test]
+    fn worktree_signal_locates_the_recommended_now_session_not_its_first_member() {
+        let mut snapshot = demo_snapshot();
+        let worktree_root = PathBuf::from("/wt/shared");
+        let healthy = &mut snapshot.sessions[0];
+        healthy.id = "arbitrary-first".into();
+        healthy.latest_model = Some("arbitrary-model".into());
+        healthy.context.tokens = 80_000;
+        healthy.worktree.as_mut().unwrap().root = worktree_root.clone();
+
+        let mut critical = healthy.clone();
+        critical.provider = Provider::CodexCli;
+        critical.id = "recommended".into();
+        critical.latest_model = Some("recommended-model".into());
+        critical.context.tokens = 180_000;
+        snapshot.sessions.push(critical);
+        snapshot.attention = Some(AttentionEngine::default().update(&snapshot.sessions, 2_000));
+        snapshot.recent_signals = vec![RecentSignal::Worktree {
+            observed_at_ms: 2_000,
+            worktree_root,
+            change: SharedWorktreeRiskChange::Detected,
+            before: vec![crate::attention::SessionIdentity {
+                provider: Provider::ClaudeCode,
+                native_id: "arbitrary-first".into(),
+            }],
+            after: vec![
+                crate::attention::SessionIdentity {
+                    provider: Provider::ClaudeCode,
+                    native_id: "arbitrary-first".into(),
+                },
+                crate::attention::SessionIdentity {
+                    provider: Provider::CodexCli,
+                    native_id: "recommended".into(),
+                },
+            ],
+        }];
+        let selected_background = Some(Color::Rgb(68, 61, 43));
+        let mut ui = Ui::default();
+
+        ui.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        let located = render_terminal_at(&ui, &snapshot, 120, 30);
+
+        assert_eq!(ui.active_tab(), Tab::All);
+        assert_eq!(
+            rendered_style_at(&located, "recommended-model").bg,
+            selected_background
+        );
+        assert_ne!(
+            rendered_style_at(&located, "arbitrary-model").bg,
+            selected_background
+        );
+        assert_ne!(
+            rendered_style_at(&located, "Risk detected").bg,
+            selected_background
+        );
+    }
+
+    #[test]
+    fn cleared_worktree_signal_stays_selected_when_the_worktree_is_no_longer_open() {
+        let mut snapshot = demo_snapshot();
+        let worktree_root = PathBuf::from("/wt/closed");
+        snapshot.sessions[0].state = SessionState::Exited;
+        snapshot.sessions[0].worktree.as_mut().unwrap().root = worktree_root.clone();
+        snapshot.recent_signals = vec![RecentSignal::Worktree {
+            observed_at_ms: 2_000,
+            worktree_root,
+            change: SharedWorktreeRiskChange::Cleared,
+            before: vec![
+                crate::attention::SessionIdentity {
+                    provider: Provider::ClaudeCode,
+                    native_id: "claude-a".into(),
+                },
+                crate::attention::SessionIdentity {
+                    provider: Provider::CodexCli,
+                    native_id: "codex-b".into(),
+                },
+            ],
+            after: vec![],
+        }];
+        let selected_background = Some(Color::Rgb(68, 61, 43));
+        let mut ui = Ui::default();
+
+        ui.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        let unchanged = render_terminal_at(&ui, &snapshot, 120, 30);
+        let page = rendered_rows_at(&ui, &snapshot, 120, 30);
+
+        assert_eq!(ui.active_tab(), Tab::All);
+        assert_eq!(
+            rendered_style_at(&unchanged, "Risk cleared").bg,
+            selected_background
+        );
+        assert!(page.contains("Worktree is no longer open"));
+    }
+
+    #[test]
+    fn all_page_focus_moves_between_independently_selected_regions() {
+        let mut snapshot = demo_snapshot();
+        snapshot.sessions[0].latest_model = Some("first-now-model".into());
+        let mut second = snapshot.sessions[0].clone();
+        second.provider = Provider::CodexCli;
+        second.id = "second-now".into();
+        second.latest_model = Some("second-now-model".into());
+        snapshot.sessions.push(second);
+        snapshot.recent_signals = vec![
+            RecentSignal::Session {
+                observed_at_ms: 2_000,
+                provider: Provider::ClaudeCode,
+                session_id: "first-signal".into(),
+                kind: RecentSignalKind::SessionStateChanged {
+                    from: SessionState::Busy,
+                    to: SessionState::Idle,
+                },
+            },
+            RecentSignal::Session {
+                observed_at_ms: 1_000,
+                provider: Provider::CodexCli,
+                session_id: "second-signal".into(),
+                kind: RecentSignalKind::SessionStateChanged {
+                    from: SessionState::Idle,
+                    to: SessionState::Exited,
+                },
+            },
+        ];
+        let selected_background = Some(Color::Rgb(68, 61, 43));
+        let mut ui = Ui::default();
+
+        ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        ui.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        let signals_focused = render_terminal_at(&ui, &snapshot, 120, 30);
+        assert_eq!(
+            rendered_style_at(&signals_focused, "second-signal").bg,
+            selected_background
+        );
+        assert_ne!(
+            rendered_style_at(&signals_focused, "second-now-model").bg,
+            selected_background
+        );
+
+        ui.handle_key(
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            &snapshot,
+        )
+        .unwrap();
+        let now_focused = render_terminal_at(&ui, &snapshot, 120, 30);
+        assert_eq!(
+            rendered_style_at(&now_focused, "second-now-model").bg,
+            selected_background
+        );
+        assert_ne!(
+            rendered_style_at(&now_focused, "second-signal").bg,
+            selected_background
+        );
+    }
+
+    #[test]
+    fn signal_detail_returns_to_the_signal_and_preserves_now_selection() {
+        let mut snapshot = demo_snapshot();
+        snapshot.sessions[0].latest_model = Some("first-now-model".into());
+        let mut target = snapshot.sessions[0].clone();
+        target.provider = Provider::CodexCli;
+        target.id = "signal-detail-target".into();
+        target.latest_model = Some("target-now-model".into());
+        snapshot.sessions.push(target);
+        snapshot.recent_signals = vec![
+            RecentSignal::Session {
+                observed_at_ms: 2_000,
+                provider: Provider::ClaudeCode,
+                session_id: "demo-session".into(),
+                kind: RecentSignalKind::SessionStateChanged {
+                    from: SessionState::Busy,
+                    to: SessionState::Idle,
+                },
+            },
+            RecentSignal::Session {
+                observed_at_ms: 1_000,
+                provider: Provider::CodexCli,
+                session_id: "signal-detail-target".into(),
+                kind: RecentSignalKind::SessionStateChanged {
+                    from: SessionState::Idle,
+                    to: SessionState::Exited,
+                },
+            },
+        ];
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let selected_background = Some(Color::Rgb(68, 61, 43));
+        let mut ui = Ui::default();
+
+        ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        let detail = rendered_with_snapshot(&ui, &snapshot);
+        assert!(detail.contains("signal-detail-target"));
+        assert!(detail.contains("target-now-model"));
+        assert!(!detail.contains("RECENT SIGNALS"));
+
+        ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
+        let restored_signal = render_terminal_at(&ui, &snapshot, 120, 30);
+        assert_eq!(
+            rendered_style_at(&restored_signal, "signal-detail-target").bg,
+            selected_background
+        );
+
+        ui.handle_key(
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            &snapshot,
+        )
+        .unwrap();
+        let restored_now = render_terminal_at(&ui, &snapshot, 120, 30);
+        assert_eq!(
+            rendered_style_at(&restored_now, "target-now-model").bg,
+            selected_background
+        );
+    }
+
+    #[test]
+    fn compound_signal_keeps_compaction_and_context_clear_evidence_visible() {
+        let mut snapshot = demo_snapshot();
+        snapshot.recent_signals = vec![RecentSignal::Session {
+            observed_at_ms: 2_000,
+            provider: Provider::ClaudeCode,
+            session_id: "s".into(),
+            kind: RecentSignalKind::CompactionObserved {
+                compaction: Compaction {
+                    at_ms: 1_900,
+                    trigger: Some("auto".into()),
+                    pre_tokens: Some(180_000),
+                },
+                context_before: ContextState {
+                    tokens: 180_000,
+                    window: Some(200_000),
+                },
+                context_after: ContextState {
+                    tokens: 80_000,
+                    window: Some(200_000),
+                },
+                cleared_alert: Some(ContextAlertLevel::Critical),
+            },
+        }];
+
+        let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
+        let signal = page.lines().find(|line| line.contains("Cmp")).unwrap();
+
+        for evidence in ["auto", "180.0k", "80.0k", "Critical"] {
+            assert!(signal.contains(evidence), "missing evidence {evidence:?}");
+        }
+    }
+
+    #[test]
+    fn compact_page_yields_recent_signal_rows_before_reducing_now() {
+        let mut snapshot = demo_snapshot();
+        snapshot.recent_signals = (1..=5)
+            .map(|position| RecentSignal::Session {
+                observed_at_ms: 3_000 - position,
+                provider: Provider::ClaudeCode,
+                session_id: format!("signal-{position}"),
+                kind: RecentSignalKind::SessionStateChanged {
+                    from: SessionState::Busy,
+                    to: SessionState::Idle,
+                },
+            })
+            .collect();
+
+        let page = rendered_rows_at(&Ui::default(), &snapshot, 80, 24);
+
+        assert!(page.contains("claude-opus-4-8"));
+        for visible in ["signal-1", "signal-2", "signal-3", "signal-4"] {
+            assert!(page.contains(visible));
+        }
+        assert!(!page.contains("signal-5"));
     }
 
     #[test]
@@ -2025,9 +3353,7 @@ mod tests {
         );
 
         tokenplay.tab = Tab::Claude;
-        tokenplay.filter = TimeFilter::All;
         light.tab = Tab::Claude;
-        light.filter = TimeFilter::All;
         assert_eq!(
             rendered_with_snapshot(&tokenplay, &snapshot),
             rendered_with_snapshot(&light, &snapshot)
@@ -2051,7 +3377,6 @@ mod tests {
         snapshot.sessions.push(secondary);
         let mut ui = Ui {
             tab: Tab::Claude,
-            filter: TimeFilter::All,
             ..Ui::default()
         };
         for _ in 0..4 {
@@ -2069,14 +3394,14 @@ mod tests {
         );
         assert_eq!(
             rendered_style_at(&inventory, "second").fg,
-            Some(Color::Rgb(28, 31, 34))
+            Some(Color::Rgb(25, 91, 130))
         );
         assert_eq!(
             rendered_style_at(&inventory, "model-two").fg,
             Some(Color::Rgb(96, 101, 106))
         );
         assert_eq!(
-            inventory.backend().buffer()[(0, 4)].style().fg,
+            inventory.backend().buffer()[(0, 3)].style().fg,
             Some(Color::Rgb(126, 130, 133))
         );
 
@@ -2121,7 +3446,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_and_footer_use_theme_roles_and_expose_theme_cycling() {
+    fn footer_uses_theme_roles_and_exposes_theme_cycling() {
         let mut ui = Ui {
             tab: Tab::Claude,
             ..Ui::default()
@@ -2138,14 +3463,14 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &snapshot, &ui)).unwrap();
 
-        assert_eq!(
-            rendered_style_at(&terminal, "Time").fg,
-            Some(Color::Rgb(96, 101, 106))
-        );
-        assert_eq!(
-            rendered_style_at(&terminal, "Active Today").bg,
-            Some(Color::Rgb(20, 84, 116))
-        );
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!rendered.contains("Active Today"));
         assert_eq!(
             rendered_style_at(&terminal, "t Theme").fg,
             Some(Color::Rgb(96, 101, 106))
@@ -2414,6 +3739,207 @@ mod tests {
     }
 
     #[test]
+    fn provider_page_groups_its_sessions_by_project_in_newest_project_order() {
+        let now = Local::now().timestamp_millis();
+        let mut snapshot = demo_snapshot();
+        snapshot.generated_ms = now;
+        snapshot.sessions[0].state = SessionState::Exited;
+        snapshot.sessions[0].id = "newest-project-recent".into();
+        snapshot.sessions[0].project = Some(test_project("newest-project"));
+        snapshot.sessions[0].latest_model = Some("new-project-model".into());
+        snapshot.sessions[0].last_activity_ms = now - 1_000;
+
+        let mut older_in_same_project = snapshot.sessions[0].clone();
+        older_in_same_project.id = "newest-project-second".into();
+        older_in_same_project.latest_model = Some("same-project-model".into());
+        older_in_same_project.last_activity_ms = now - 3_000;
+
+        let mut older_project = snapshot.sessions[0].clone();
+        older_project.id = "older-project-session".into();
+        older_project.project = Some(test_project("older-project"));
+        older_project.latest_model = Some("older-model".into());
+        older_project.last_activity_ms = now - 2_000;
+
+        let mut other_provider = snapshot.sessions[0].clone();
+        other_provider.provider = Provider::CodexCli;
+        other_provider.id = "codex-must-not-render".into();
+        other_provider.project = Some(test_project("codex-project"));
+        other_provider.latest_model = Some("codex-must-not-render".into());
+
+        snapshot
+            .sessions
+            .extend([older_in_same_project, older_project, other_provider]);
+        let ui = Ui {
+            tab: Tab::Claude,
+            ..Ui::default()
+        };
+
+        let page = rendered_rows_at(&ui, &snapshot, 120, 30);
+        let newest_header = page.find("PROJECT  newest-project").unwrap();
+        let older_header = page.find("PROJECT  older-project").unwrap();
+
+        assert!(newest_header < older_header);
+        assert_eq!(page.matches("PROJECT  newest-project").count(), 1);
+        assert!(page.contains("new-project-model"));
+        assert!(page.contains("same-project-model"));
+        assert!(page.contains("older-model"));
+        assert!(!page.contains("codex-must-not-render"));
+    }
+
+    #[test]
+    fn provider_projects_partition_sessions_at_the_rolling_seven_day_cutoff() {
+        const DAY_MS: i64 = 86_400_000;
+        let now = 1_800_000_000_000;
+        let cutoff = now - 7 * DAY_MS;
+        let mut snapshot = demo_snapshot();
+        snapshot.generated_ms = now;
+        snapshot.sessions[0].state = SessionState::Exited;
+        snapshot.sessions[0].id = "cutoff-session".into();
+        snapshot.sessions[0].project = Some(test_project("mixed-project"));
+        snapshot.sessions[0].latest_model = Some("cutoff-visible".into());
+        snapshot.sessions[0].last_activity_ms = cutoff;
+
+        let mut older = snapshot.sessions[0].clone();
+        older.id = "older-hidden".into();
+        older.latest_model = Some("older-hidden".into());
+        older.last_activity_ms = cutoff - 1;
+
+        let mut older_only = snapshot.sessions[0].clone();
+        older_only.id = "older-only-hidden".into();
+        older_only.project = Some(test_project("older-only-project"));
+        older_only.latest_model = Some("older-only-hidden".into());
+        older_only.last_activity_ms = cutoff - DAY_MS;
+
+        snapshot.sessions.extend([older, older_only]);
+        let ui = Ui {
+            tab: Tab::Claude,
+            ..Ui::default()
+        };
+
+        let page = rendered_rows_at(&ui, &snapshot, 120, 30);
+
+        assert!(page.contains("PROJECT  mixed-project"));
+        assert!(page.contains("cutoff-visible"));
+        assert!(!page.contains("older-hidden"));
+        assert!(page.contains("PROJECT  older-only-project"));
+        assert!(!page.contains("older-only-hidden"));
+        assert_eq!(page.matches("OLDER SESSIONS (1)").count(), 2);
+    }
+
+    #[test]
+    fn provider_project_older_disclosures_expand_independently() {
+        const DAY_MS: i64 = 86_400_000;
+        let now = 1_800_000_000_000;
+        let mut snapshot = demo_snapshot();
+        snapshot.generated_ms = now;
+        snapshot.sessions[0].state = SessionState::Exited;
+        snapshot.sessions[0].id = "alpha-older".into();
+        snapshot.sessions[0].project = Some(test_project("alpha"));
+        snapshot.sessions[0].latest_model = Some("alpha-older-model".into());
+        snapshot.sessions[0].last_activity_ms = now - 8 * DAY_MS;
+
+        let mut beta = snapshot.sessions[0].clone();
+        beta.id = "beta-older".into();
+        beta.project = Some(test_project("beta"));
+        beta.latest_model = Some("beta-older-model".into());
+        beta.last_activity_ms = now - 9 * DAY_MS;
+        snapshot.sessions.push(beta);
+
+        let mut ui = Ui {
+            tab: Tab::Claude,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        let alpha_expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
+        assert!(alpha_expanded.contains("alpha-older-model"));
+        assert!(!alpha_expanded.contains("beta-older-model"));
+
+        ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        let both_expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
+        assert!(both_expanded.contains("alpha-older-model"));
+        assert!(both_expanded.contains("beta-older-model"));
+
+        ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        let only_beta_expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
+        assert!(!only_beta_expanded.contains("alpha-older-model"));
+        assert!(only_beta_expanded.contains("beta-older-model"));
+    }
+
+    #[test]
+    fn expanding_older_sessions_preserves_an_exact_partition_and_lifetime_usage() {
+        const DAY_MS: i64 = 86_400_000;
+        let now = 1_800_000_000_000;
+        let mut snapshot = demo_snapshot();
+        snapshot.generated_ms = now;
+        snapshot.sessions[0].id = "recent-session".into();
+        snapshot.sessions[0].project = Some(test_project("partition-project"));
+        snapshot.sessions[0].latest_model = Some("recent-model".into());
+        snapshot.sessions[0].last_activity_ms = now - DAY_MS;
+        snapshot.sessions[0].usage = Usage {
+            input: 11,
+            output: 12,
+            cache_read: 13,
+            cache_write: 14,
+        };
+
+        let mut older_a = snapshot.sessions[0].clone();
+        older_a.id = "older-a".into();
+        older_a.latest_model = Some("older-a-model".into());
+        older_a.last_activity_ms = now - 8 * DAY_MS;
+        older_a.usage = Usage {
+            input: 21,
+            output: 22,
+            cache_read: 23,
+            cache_write: 24,
+        };
+
+        let mut older_b = snapshot.sessions[0].clone();
+        older_b.id = "older-b".into();
+        older_b.latest_model = Some("older-b-model".into());
+        older_b.last_activity_ms = now - 9 * DAY_MS;
+        older_b.usage = Usage {
+            input: 31,
+            output: 32,
+            cache_read: 33,
+            cache_write: 34,
+        };
+        snapshot.sessions.extend([older_a, older_b]);
+
+        let mut ui = Ui {
+            tab: Tab::Claude,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let collapsed = rendered_rows_at(&ui, &snapshot, 160, 30);
+        assert_eq!(collapsed.matches("recent-model").count(), 1);
+        assert!(collapsed.contains("I 11  O 12  CR 13  CW 14"));
+        assert_eq!(collapsed.matches("OLDER SESSIONS (2)").count(), 1);
+        assert!(!collapsed.contains("older-a-model"));
+        assert!(!collapsed.contains("older-b-model"));
+
+        ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        let expanded = rendered_rows_at(&ui, &snapshot, 160, 30);
+
+        for session in ["recent-model", "older-a-model", "older-b-model"] {
+            assert_eq!(expanded.matches(session).count(), 1);
+        }
+        for usage in [
+            "I 11  O 12  CR 13  CW 14",
+            "I 21  O 22  CR 23  CW 24",
+            "I 31  O 32  CR 33  CW 34",
+        ] {
+            assert_eq!(expanded.matches(usage).count(), 1);
+        }
+    }
+
+    #[test]
     fn global_keys_return_actions_for_the_event_loop() {
         let mut ui = Ui::default();
         let snapshot = Snapshot::default();
@@ -2445,19 +3971,13 @@ mod tests {
     }
 
     #[test]
-    fn time_filter_key_advances_the_visible_filter() {
+    fn provider_pages_have_no_time_filter_and_ignore_the_old_filter_key() {
         let mut ui = Ui {
             tab: Tab::Claude,
             ..Ui::default()
         };
         let snapshot = Snapshot::default();
-        let terminal = render_terminal(&ui);
-        let buffer = terminal.backend().buffer();
-        let x = row_text_start(buffer, 3, "Last 7 Days");
-        assert_ne!(
-            buffer.content()[3 * 80 + x].style().bg,
-            Some(Color::Rgb(68, 61, 43))
-        );
+        let before = rendered_with_snapshot(&ui, &snapshot);
 
         ui.handle_key(
             KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
@@ -2465,13 +3985,128 @@ mod tests {
         )
         .unwrap();
 
-        let terminal = render_terminal(&ui);
-        let buffer = terminal.backend().buffer();
-        let x = row_text_start(buffer, 3, "Last 7 Days");
-        assert_eq!(
-            buffer.content()[3 * 80 + x].style().bg,
-            Some(Color::Rgb(68, 61, 43))
-        );
+        let after = rendered_with_snapshot(&ui, &snapshot);
+        assert_eq!(after, before);
+        for removed in [
+            "Time",
+            "Active Today",
+            "Last 7 Days",
+            "Last 30 Days",
+            "All Sessions",
+        ] {
+            assert!(!after.contains(removed));
+        }
+    }
+
+    #[test]
+    fn provider_session_row_preserves_complete_session_facts_and_lifetime_usage() {
+        let now = Local::now().timestamp_millis();
+        let mut snapshot = demo_snapshot();
+        snapshot.generated_ms = now;
+        snapshot.sessions[0].last_activity_ms = now;
+        snapshot.sessions[0].compactions = vec![
+            Compaction {
+                at_ms: now - 2_000,
+                trigger: Some("auto".into()),
+                pre_tokens: Some(180_000),
+            },
+            Compaction {
+                at_ms: now - 1_000,
+                trigger: Some("manual".into()),
+                pre_tokens: Some(170_000),
+            },
+        ];
+        let ui = Ui {
+            tab: Tab::Claude,
+            ..Ui::default()
+        };
+
+        let page = rendered_rows_at(&ui, &snapshot, 160, 30);
+
+        for fact in [
+            "PROJECT  tokenplay",
+            "demo-session",
+            "Busy",
+            "claude-opus-4-8",
+            "150.0k (75%)",
+            "I 1.0k  O 500  CR 200  CW 100",
+            "$0.42",
+            "0s",
+            "⤳2",
+        ] {
+            assert!(page.contains(fact), "Provider row should contain {fact:?}");
+        }
+    }
+
+    #[test]
+    fn compact_provider_session_row_keeps_every_fact_visible() {
+        let now = Local::now().timestamp_millis();
+        let mut snapshot = demo_snapshot();
+        snapshot.generated_ms = now;
+        snapshot.sessions[0].last_activity_ms = now;
+        snapshot.sessions[0].compactions = vec![Compaction {
+            at_ms: now - 1_000,
+            trigger: Some("auto".into()),
+            pre_tokens: Some(180_000),
+        }];
+        let ui = Ui {
+            tab: Tab::Claude,
+            ..Ui::default()
+        };
+
+        let page = rendered_rows_at(&ui, &snapshot, 80, 24);
+
+        for fact in [
+            "PROJECT  tokenplay",
+            "demo-session",
+            "Busy",
+            "claude-opus-4-8",
+            "150.0k (75%)",
+            "I 1.0k  O 500  CR 200  CW 100",
+            "$0.42",
+            "0s",
+            "⤳1",
+        ] {
+            assert!(
+                page.contains(fact),
+                "compact Provider row should contain {fact:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn old_open_session_remains_now_and_restores_its_provider_disclosure_after_detail() {
+        const DAY_MS: i64 = 86_400_000;
+        let now = Local::now().timestamp_millis();
+        let mut snapshot = demo_snapshot();
+        snapshot.generated_ms = now;
+        snapshot.sessions[0].id = "old-open-session".into();
+        snapshot.sessions[0].project = Some(test_project("old-open-project"));
+        snapshot.sessions[0].latest_model = Some("old-open-model".into());
+        snapshot.sessions[0].state = SessionState::Busy;
+        snapshot.sessions[0].last_activity_ms = now - 8 * DAY_MS;
+        let mut ui = Ui::default();
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        assert!(rendered_rows_at(&ui, &snapshot, 80, 24).contains("old-open-model"));
+
+        ui.handle_key(key(KeyCode::Char('2')), &snapshot).unwrap();
+        let collapsed = rendered_rows_at(&ui, &snapshot, 80, 24);
+        assert!(collapsed.contains("OLDER SESSIONS (1)"));
+        assert!(!collapsed.contains("old-open-model"));
+
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+        assert!(rendered_rows_at(&ui, &snapshot, 80, 24).contains("old-open-model"));
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        assert!(rendered_with_snapshot(&ui, &snapshot).contains("old-open-session"));
+
+        ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
+        let restored = rendered_rows_at(&ui, &snapshot, 80, 24);
+        assert!(restored.contains("- OLDER SESSIONS (1)  Collapse"));
+        assert!(restored.contains("old-open-model"));
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        assert!(rendered_with_snapshot(&ui, &snapshot).contains("old-open-session"));
     }
 
     #[test]
@@ -2561,12 +4196,12 @@ mod tests {
         assert!(navigation.contains("[1]"));
         assert!(navigation.contains("[2]"));
         assert!(navigation.contains("[3]"));
-        let content_top: String = buffer.content()[80 * 4..80 * 5]
+        let content_top: String = buffer.content()[80 * 3..80 * 4]
             .iter()
             .map(|cell| cell.symbol())
             .collect();
         assert!(content_top.contains("Session detail"));
-        assert_eq!(buffer[(0, 4)].symbol(), "┌");
+        assert_eq!(buffer[(0, 3)].symbol(), "┌");
         let footer: String = buffer.content()[80 * 23..80 * 24]
             .iter()
             .map(|cell| cell.symbol())
@@ -2760,8 +4395,8 @@ mod tests {
             "Output",
             "Cache read",
             "Cache write",
-            "Per-model Usage",
-            "Est. cost",
+            "Transcript Lifetime per-model Usage",
+            "Est. API cost",
             "$0.42",
             "Compactions (1)",
             "manual",
@@ -2775,6 +4410,96 @@ mod tests {
         assert!(!detail.contains("RECENT SIGNALS"));
         assert!(!detail.contains("Recent Signals"));
         assert!(!detail.contains("Recent Signal"));
+    }
+
+    #[test]
+    fn open_session_detail_labels_current_run_and_transcript_lifetime_usage() {
+        let mut snapshot = demo_snapshot();
+        snapshot.sessions[0].current_run_usage = Some(UsageSummary {
+            usage: Usage {
+                input: 111,
+                output: 22,
+                cache_read: 33,
+                cache_write: 44,
+            },
+            per_model: vec![ModelUsage {
+                model: "run-only-model".into(),
+                usage: Usage {
+                    input: 111,
+                    output: 22,
+                    cache_read: 33,
+                    cache_write: 44,
+                },
+                cost: Some(0.07),
+            }],
+            cost: Some(0.07),
+        });
+        let mut ui = Ui {
+            tab: Tab::Claude,
+            ..Ui::default()
+        };
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+
+        let detail = rendered_rows_at(&ui, &snapshot, 120, 44);
+
+        for expected in [
+            "Current Run Usage",
+            "Current Run per-model Usage",
+            "run-only-model",
+            "$0.07",
+            "Transcript Lifetime Usage",
+            "Transcript Lifetime per-model Usage",
+            "$0.42",
+        ] {
+            assert!(
+                detail.contains(expected),
+                "Detail should contain {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn open_session_without_a_run_boundary_renders_current_run_usage_as_na() {
+        let snapshot = demo_snapshot();
+        let mut ui = Ui {
+            tab: Tab::Claude,
+            ..Ui::default()
+        };
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+
+        let detail = rendered_rows_at(&ui, &snapshot, 120, 40);
+
+        assert!(detail.contains("Current Run Usage"));
+        assert!(detail.contains("Usage           N/A"));
+        assert!(!detail.contains("Current Run per-model Usage"));
+    }
+
+    #[test]
+    fn exited_session_detail_shows_lifetime_usage_without_current_or_last_run_usage() {
+        let mut snapshot = demo_snapshot();
+        snapshot.sessions[0].state = SessionState::Exited;
+        snapshot.sessions[0].current_run_usage = Some(UsageSummary {
+            usage: Usage {
+                input: 111,
+                ..Usage::default()
+            },
+            per_model: vec![],
+            cost: None,
+        });
+        let mut ui = Ui {
+            tab: Tab::Claude,
+            ..Ui::default()
+        };
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+
+        let detail = rendered_rows_at(&ui, &snapshot, 120, 40);
+
+        assert!(detail.contains("Transcript Lifetime Usage"));
+        assert!(!detail.contains("Current Run Usage"));
+        assert!(!detail.contains("Last Run Usage"));
     }
 
     #[test]

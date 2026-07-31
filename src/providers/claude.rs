@@ -9,7 +9,7 @@
 //!   id (last occurrence wins — it carries the final counts).
 //! - Compaction = `type:system` / `subtype:compact_boundary`.
 
-use super::{iso_to_ms, ParsedSession, PerModel, ProviderAdapter};
+use super::{iso_to_ms, ParsedSession, ParsedUsage, PerModel, ProviderAdapter};
 use crate::config::Config;
 use crate::domain::{Compaction, ContextState, Provider, SessionState, Usage};
 use serde_json::Value;
@@ -22,6 +22,10 @@ pub struct ClaudeAdapter;
 impl ProviderAdapter for ClaudeAdapter {
     fn provider(&self) -> Provider {
         Provider::ClaudeCode
+    }
+
+    fn source_format(&self) -> crate::domain::SourceFormat {
+        crate::domain::SourceFormat::JsonLines
     }
 
     fn discover(&self, cfg: &Config) -> Vec<PathBuf> {
@@ -47,12 +51,24 @@ impl ProviderAdapter for ClaudeAdapter {
         }
     }
 
-    fn live_state(&self, probe: &super::state::StateDetector, source_path: &Path) -> SessionState {
+    fn live_state(
+        &self,
+        probe: &super::state::StateDetector,
+        source_path: &Path,
+    ) -> super::state::LiveState {
         // A Claude session's id is its transcript filename stem.
         match source_path.file_stem().and_then(|s| s.to_str()) {
             Some(id) => probe.claude_state(id),
-            None => SessionState::Exited,
+            None => super::state::LiveState {
+                state: SessionState::Exited,
+                current_run_started_at_ms: None,
+            },
         }
+    }
+
+    fn current_run_usage(&self, source_path: &Path, started_at_ms: i64) -> Option<ParsedUsage> {
+        let text = std::fs::read_to_string(source_path).ok()?;
+        Some(parse_current_run_str(&text, started_at_ms))
     }
 }
 
@@ -212,6 +228,84 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
     })
 }
 
+/// Calculate Claude Usage from assistant messages at or after a validated
+/// process-start boundary. Records without timestamps cannot be assigned to a Run.
+pub fn parse_current_run_str(text: &str, started_at_ms: i64) -> ParsedUsage {
+    struct Msg {
+        usage: Usage,
+        model: String,
+    }
+
+    let mut order = Vec::new();
+    let mut msgs: HashMap<String, Msg> = HashMap::new();
+    let mut anon_counter = 0_u64;
+
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        let Some(timestamp_ms) = v
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(iso_to_ms)
+        else {
+            continue;
+        };
+        if timestamp_ms < started_at_ms
+            || v.get("type").and_then(Value::as_str) != Some("assistant")
+        {
+            continue;
+        }
+        let Some(message) = v.get("message") else {
+            continue;
+        };
+        let Some(raw_usage) = message.get("usage") else {
+            continue;
+        };
+        let key = message
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                anon_counter += 1;
+                format!("__run_anon_{anon_counter}")
+            });
+        if !msgs.contains_key(&key) {
+            order.push(key.clone());
+        }
+        msgs.insert(
+            key,
+            Msg {
+                usage: Usage {
+                    input: u(raw_usage, "input_tokens"),
+                    output: u(raw_usage, "output_tokens"),
+                    cache_read: u(raw_usage, "cache_read_input_tokens"),
+                    cache_write: u(raw_usage, "cache_creation_input_tokens"),
+                },
+                model: message
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+            },
+        );
+    }
+
+    let mut usage = Usage::default();
+    let mut per_model = PerModel::default();
+    for key in order {
+        if let Some(message) = msgs.remove(&key) {
+            usage.add(&message.usage);
+            per_model.add(&message.model, &message.usage);
+        }
+    }
+
+    ParsedUsage {
+        usage,
+        per_model: per_model.into_vec(),
+    }
+}
+
 fn u(v: &Value, key: &str) -> u64 {
     v.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
@@ -305,5 +399,55 @@ mod tests {
         let text = "not json\n{broken\n{\"type\":\"assistant\",\"message\":{\"id\":\"a\",\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n";
         let s = parse_str("sess", text).unwrap();
         assert_eq!(s.usage.input, 5);
+    }
+
+    #[test]
+    fn current_run_matches_controlled_usage_fixture_after_process_boundary() {
+        let text = r#"
+{"type":"assistant","timestamp":"2026-07-29T08:59:59.000Z","message":{"id":"old","model":"claude-opus-4-8","usage":{"input_tokens":9000,"output_tokens":900,"cache_read_input_tokens":8000,"cache_creation_input_tokens":700}}}
+{"type":"assistant","timestamp":"2026-07-29T09:00:01.000Z","message":{"id":"run-a","model":"claude-opus-4-8","usage":{"input_tokens":1200,"output_tokens":25,"cache_read_input_tokens":2300,"cache_creation_input_tokens":45}}}
+{"type":"assistant","timestamp":"2026-07-29T09:00:02.000Z","message":{"id":"run-a","model":"claude-opus-4-8","usage":{"input_tokens":1200,"output_tokens":125,"cache_read_input_tokens":2300,"cache_creation_input_tokens":45}}}
+{"type":"assistant","timestamp":"2026-07-29T09:01:00.000Z","message":{"id":"run-b","model":"claude-sonnet-4-6","usage":{"input_tokens":400,"output_tokens":75,"cache_read_input_tokens":600,"cache_creation_input_tokens":25}}}
+"#;
+        let boundary = iso_to_ms("2026-07-29T09:00:00.000Z").unwrap();
+
+        let run = parse_current_run_str(text, boundary);
+
+        assert_eq!(
+            run.usage,
+            Usage {
+                input: 1_600,
+                output: 200,
+                cache_read: 2_900,
+                cache_write: 70,
+            }
+        );
+        assert_eq!(run.per_model.len(), 2);
+        assert_eq!(
+            run.per_model
+                .iter()
+                .find(|(model, _)| model == "claude-opus-4-8")
+                .unwrap()
+                .1,
+            Usage {
+                input: 1_200,
+                output: 125,
+                cache_read: 2_300,
+                cache_write: 45,
+            }
+        );
+        assert_eq!(
+            run.per_model
+                .iter()
+                .find(|(model, _)| model == "claude-sonnet-4-6")
+                .unwrap()
+                .1,
+            Usage {
+                input: 400,
+                output: 75,
+                cache_read: 600,
+                cache_write: 25,
+            }
+        );
     }
 }

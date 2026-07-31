@@ -13,6 +13,28 @@ pub enum Provider {
     CodexCli,
 }
 
+/// Encoding used by a provider's local Session source log.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SourceFormat {
+    #[default]
+    JsonLines,
+}
+
+impl SourceFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            SourceFormat::JsonLines => "JSONL",
+        }
+    }
+}
+
+/// Location and encoding of the local source log indexed for a Session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceMetadata {
+    pub path: PathBuf,
+    pub format: SourceFormat,
+}
+
 impl Provider {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -111,8 +133,17 @@ pub struct ModelUsage {
     pub cost: Option<f64>,
 }
 
-/// Trigger for a compaction, kept as an opaque provider label.
+/// Processed Usage and API price estimate for one explicitly labelled scope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageSummary {
+    pub usage: Usage,
+    pub per_model: Vec<ModelUsage>,
+    /// Estimated API-rate dollars, `None` when any contributing model is unknown.
+    pub cost: Option<f64>,
+}
+
+/// Trigger for a compaction, kept as an opaque provider label.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Compaction {
     /// Epoch milliseconds when observed.
     pub at_ms: i64,
@@ -165,6 +196,8 @@ pub struct Session {
     pub provider: Provider,
     /// Native provider session id.
     pub id: String,
+    /// Metadata about the indexed source log. Its contents are never exposed here.
+    pub source: SourceMetadata,
     /// Canonical Project identity and display label, if resolution succeeded.
     pub project: Option<Project>,
     /// Canonical Git Worktree metadata. `None` for non-Git or unavailable identity.
@@ -178,6 +211,10 @@ pub struct Session {
     /// Cumulative processed usage across the session lifetime.
     pub usage: Usage,
     pub per_model: Vec<ModelUsage>,
+    /// Usage since the validated start of the Current Run. `None` means the
+    /// Run boundary or source Usage is unavailable.
+    #[serde(default)]
+    pub current_run_usage: Option<UsageSummary>,
     pub compactions: Vec<Compaction>,
     /// Epoch ms of the last activity in the source log.
     pub last_activity_ms: i64,

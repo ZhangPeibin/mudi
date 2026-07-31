@@ -1,11 +1,12 @@
-//! UI-facing application state: tabs, time filters, the shared snapshot, and
+//! UI-facing application state: tabs, the shared snapshot, and
 //! small formatting helpers. Rendering lives in `ui/`.
 
 use crate::alerts::AlertCounts;
 use crate::attention::AttentionSnapshot;
 use crate::collector::ScanStats;
 use crate::domain::{Provider, Session};
-use chrono::{Duration, Local, TimeZone};
+use crate::signals::RecentSignal;
+use chrono::{Local, TimeZone};
 
 /// The three top-level tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,59 +44,11 @@ impl Tab {
     }
 }
 
-/// Activity-time filters. A matched session always shows its full lifetime usage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimeFilter {
-    Today,
-    Last7,
-    Last30,
-    All,
-}
-
-impl TimeFilter {
-    pub const ALL: [TimeFilter; 4] = [
-        TimeFilter::Today,
-        TimeFilter::Last7,
-        TimeFilter::Last30,
-        TimeFilter::All,
-    ];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            TimeFilter::Today => "Active Today",
-            TimeFilter::Last7 => "Last 7 Days",
-            TimeFilter::Last30 => "Last 30 Days",
-            TimeFilter::All => "All Sessions",
-        }
-    }
-
-    pub fn next(self) -> TimeFilter {
-        let all = TimeFilter::ALL;
-        let i = all.iter().position(|&f| f == self).unwrap_or(0);
-        all[(i + 1) % all.len()]
-    }
-
-    /// Epoch-ms cutoff; sessions with `last_activity_ms >= cutoff` match. 0 = all time.
-    pub fn cutoff_ms(self) -> i64 {
-        let now = Local::now();
-        let start = match self {
-            TimeFilter::Today => now
-                .date_naive()
-                .and_hms_opt(0, 0, 0)
-                .and_then(|d| Local.from_local_datetime(&d).single())
-                .unwrap_or(now),
-            TimeFilter::Last7 => now - Duration::days(7),
-            TimeFilter::Last30 => now - Duration::days(30),
-            TimeFilter::All => return 0,
-        };
-        start.timestamp_millis()
-    }
-}
-
 /// Immutable snapshot produced by the background collector, consumed by the UI.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub sessions: Vec<Session>,
+    pub recent_signals: Vec<RecentSignal>,
     pub attention: Option<AttentionSnapshot>,
     pub stats: ScanStats,
     pub alerts: AlertCounts,
@@ -176,11 +129,5 @@ mod tests {
         assert_eq!(fmt_cost(Some(0.0)), "$0.00");
         assert_eq!(fmt_cost(Some(12.5)), "$12.50");
         assert_eq!(fmt_cost(Some(250.0)), "$250");
-    }
-
-    #[test]
-    fn filter_cycles() {
-        assert_eq!(TimeFilter::Today.next(), TimeFilter::Last7);
-        assert_eq!(TimeFilter::All.next(), TimeFilter::Today);
     }
 }
