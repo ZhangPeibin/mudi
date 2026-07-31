@@ -61,12 +61,18 @@ pub struct AlertEngine {
 
 impl AlertEngine {
     pub fn new() -> Self {
-        AlertEngine { seen: HashMap::new(), deliver: true }
+        AlertEngine {
+            seen: HashMap::new(),
+            deliver: true,
+        }
     }
 
     #[cfg(test)]
     fn silent() -> Self {
-        AlertEngine { seen: HashMap::new(), deliver: false }
+        AlertEngine {
+            seen: HashMap::new(),
+            deliver: false,
+        }
     }
 
     /// Update state from the latest snapshot, emitting notifications for upward
@@ -97,13 +103,13 @@ impl AlertEngine {
                     Level::Crit => format!(
                         "CRITICAL: {} · {} context at {:.0}%",
                         s.provider.label(),
-                        s.project,
+                        s.project_label(),
                         pct
                     ),
                     Level::Warn => format!(
                         "Warning: {} · {} context at {:.0}%",
                         s.provider.label(),
-                        s.project,
+                        s.project_label(),
                         pct
                     ),
                     Level::None => unreachable!(),
@@ -133,17 +139,25 @@ fn notify(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ContextState, SessionState};
+    use crate::domain::{ContextState, Project, ProjectIdentity, SessionState};
+    use std::path::PathBuf;
 
     fn open_session(id: &str, tokens: u64, window: u64, state: SessionState) -> Session {
         Session {
             provider: Provider::ClaudeCode,
             id: id.into(),
-            project: "p".into(),
+            project: Some(Project {
+                identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/p")),
+                label: "p".into(),
+            }),
+            worktree: None,
             cwd: None,
             latest_model: None,
             state,
-            context: ContextState { tokens, window: Some(window) },
+            context: ContextState {
+                tokens,
+                window: Some(window),
+            },
             usage: Default::default(),
             per_model: vec![],
             compactions: vec![],
@@ -171,7 +185,7 @@ mod tests {
     fn resets_after_dropping_below_then_realerts() {
         let mut e = AlertEngine::silent();
         e.update(&[open_session("a", 150_000, 200_000, SessionState::Busy)]); // warn
-        // Drop below (e.g. after compaction).
+                                                                              // Drop below (e.g. after compaction).
         let drop = e.update(&[open_session("a", 20_000, 200_000, SessionState::Busy)]);
         assert!(drop.is_empty());
         // Rise again → alerts again.

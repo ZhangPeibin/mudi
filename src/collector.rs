@@ -2,9 +2,10 @@
 //! normalized snapshot the UI renders.
 
 use crate::config::Config;
-use crate::domain::{ModelUsage, Provider, Session};
+use crate::domain::{ModelUsage, ProjectIdentity, Provider, Session};
 use crate::index::{fingerprint_of, Index, StoredSession};
 use crate::pricing::RateCard;
+use crate::project;
 use crate::providers::state::StateDetector;
 use crate::providers::{self, ProviderAdapter};
 use std::collections::{HashMap, HashSet};
@@ -59,17 +60,36 @@ fn index_one(index: &mut Index, path: &Path, adapter: &dyn ProviderAdapter, stat
 pub fn build_sessions(cfg: &Config, index: &Index, rates: &RateCard) -> Vec<Session> {
     let stored = index.load_all().unwrap_or_default();
     let detector = StateDetector::gather(&cfg.claude_sessions_dir());
+    let mut resolutions: HashMap<String, project::ProjectResolution> = HashMap::new();
 
     let mut sessions: Vec<Session> = stored
         .into_iter()
-        .map(|s| to_session(s, &detector, rates))
+        .map(|stored| {
+            let resolved = stored
+                .parsed
+                .cwd
+                .as_deref()
+                .map(|cwd| {
+                    resolutions
+                        .entry(cwd.to_string())
+                        .or_insert_with(|| project::resolve(Some(Path::new(cwd))))
+                        .clone()
+                })
+                .unwrap_or_default();
+            to_session(stored, &detector, rates, resolved)
+        })
         .collect();
 
     disambiguate_projects(&mut sessions);
     sessions
 }
 
-fn to_session(stored: StoredSession, detector: &StateDetector, rates: &RateCard) -> Session {
+fn to_session(
+    stored: StoredSession,
+    detector: &StateDetector,
+    rates: &RateCard,
+    resolved: project::ProjectResolution,
+) -> Session {
     let StoredSession {
         parsed,
         source_path,
@@ -102,12 +122,11 @@ fn to_session(stored: StoredSession, detector: &StateDetector, rates: &RateCard)
         Some(total)
     };
 
-    let project = basename_of(parsed.cwd.as_deref());
-
     Session {
         provider: parsed.provider,
         id: parsed.id,
-        project,
+        project: resolved.project,
+        worktree: resolved.worktree,
         cwd: parsed.cwd,
         latest_model: parsed.latest_model,
         state,
@@ -120,43 +139,52 @@ fn to_session(stored: StoredSession, detector: &StateDetector, rates: &RateCard)
     }
 }
 
-fn basename_of(cwd: Option<&str>) -> String {
-    match cwd {
-        Some(p) => Path::new(p)
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| p.to_string()),
-        None => "—".to_string(),
-    }
-}
-
-/// When basenames collide across visible sessions, prepend enough parent path to
-/// disambiguate (e.g. `dex/backend`).
+/// When distinct Project basenames collide, prepend enough canonical parent path
+/// to disambiguate them (e.g. `dex/backend`). Sessions in the same Project keep
+/// the same label.
 fn disambiguate_projects(sessions: &mut [Session]) {
-    // Group session indices by current basename label.
-    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, s) in sessions.iter().enumerate() {
-        groups.entry(s.project.clone()).or_default().push(i);
+    let mut groups: HashMap<String, HashSet<ProjectIdentity>> = HashMap::new();
+    for project in sessions
+        .iter()
+        .filter_map(|session| session.project.as_ref())
+    {
+        groups
+            .entry(project.label.clone())
+            .or_default()
+            .insert(project.identity.clone());
     }
-    for (_, idxs) in groups {
-        if idxs.len() < 2 {
+    for (_, identities) in groups {
+        if identities.len() < 2 {
             continue;
         }
-        // Extend each colliding label with parent components until unique (or exhausted).
+
         let mut depth = 2;
         loop {
             let mut labels: HashMap<String, usize> = HashMap::new();
-            for &i in &idxs {
-                let label = tail_path(sessions[i].cwd.as_deref(), depth);
+            for identity in &identities {
+                let label = tail_path(identity.display_path(), depth);
                 *labels.entry(label).or_default() += 1;
             }
             let all_unique = labels.values().all(|&c| c == 1);
-            let exhausted = idxs
+            let exhausted = identities
                 .iter()
-                .all(|&i| path_depth(sessions[i].cwd.as_deref()) <= depth);
+                .all(|identity| path_depth(identity.display_path()) <= depth);
             if all_unique || exhausted {
-                for &i in &idxs {
-                    sessions[i].project = tail_path(sessions[i].cwd.as_deref(), depth);
+                let resolved: HashMap<ProjectIdentity, String> = identities
+                    .iter()
+                    .cloned()
+                    .map(|identity| {
+                        let label = tail_path(identity.display_path(), depth);
+                        (identity, label)
+                    })
+                    .collect();
+                for project in sessions
+                    .iter_mut()
+                    .filter_map(|session| session.project.as_mut())
+                {
+                    if let Some(label) = resolved.get(&project.identity) {
+                        project.label.clone_from(label);
+                    }
                 }
                 break;
             }
@@ -166,30 +194,22 @@ fn disambiguate_projects(sessions: &mut [Session]) {
 }
 
 /// Last `n` path components joined with `/`.
-fn tail_path(cwd: Option<&str>, n: usize) -> String {
-    match cwd {
-        Some(p) => {
-            let comps: Vec<&str> = p
-                .trim_end_matches('/')
-                .split('/')
-                .filter(|s| !s.is_empty())
-                .collect();
-            let start = comps.len().saturating_sub(n);
-            comps[start..].join("/")
-        }
-        None => "—".to_string(),
-    }
+fn tail_path(path: &Path, n: usize) -> String {
+    let comps: Vec<String> = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    let start = comps.len().saturating_sub(n);
+    comps[start..].join("/")
 }
 
-fn path_depth(cwd: Option<&str>) -> usize {
-    match cwd {
-        Some(p) => p
-            .trim_end_matches('/')
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .count(),
-        None => 1,
-    }
+fn path_depth(path: &Path) -> usize {
+    path.components()
+        .filter(|component| matches!(component, std::path::Component::Normal(_)))
+        .count()
 }
 
 /// Sort: Busy first, Idle second, then remaining by latest update (newest first).
@@ -216,13 +236,18 @@ pub fn provider_sessions(all: &[Session], provider: Provider, cutoff_ms: i64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::SessionState;
+    use crate::domain::{Project, SessionState};
 
     fn sess(cwd: &str) -> Session {
+        let path = PathBuf::from(cwd);
         Session {
             provider: Provider::ClaudeCode,
             id: cwd.into(),
-            project: basename_of(Some(cwd)),
+            project: Some(Project {
+                label: tail_path(&path, 1),
+                identity: ProjectIdentity::CanonicalCwd(path),
+            }),
+            worktree: None,
             cwd: Some(cwd.into()),
             latest_model: None,
             state: SessionState::Idle,
@@ -243,8 +268,8 @@ mod tests {
             sess("/Users/x/solo"),
         ];
         disambiguate_projects(&mut s);
-        assert_eq!(s[0].project, "dex/backend");
-        assert_eq!(s[1].project, "pay/backend");
-        assert_eq!(s[2].project, "solo"); // unique, untouched
+        assert_eq!(s[0].project_label(), "dex/backend");
+        assert_eq!(s[1].project_label(), "pay/backend");
+        assert_eq!(s[2].project_label(), "solo"); // unique, untouched
     }
 }

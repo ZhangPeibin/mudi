@@ -45,7 +45,13 @@ fn main() -> anyhow::Result<()> {
         let ps: Vec<_> = sessions.iter().filter(|s| s.provider == p).collect();
         let busy = ps.iter().filter(|s| s.state == SessionState::Busy).count();
         let idle = ps.iter().filter(|s| s.state == SessionState::Idle).count();
-        println!("== {} ==  {} sessions  ({} busy, {} idle)", p.label(), ps.len(), busy, idle);
+        println!(
+            "== {} ==  {} sessions  ({} busy, {} idle)",
+            p.label(),
+            ps.len(),
+            busy,
+            idle
+        );
         for s in ps.iter().take(8) {
             let state = match s.state {
                 SessionState::Busy => "BUSY",
@@ -55,7 +61,7 @@ fn main() -> anyhow::Result<()> {
             println!(
                 "  {:<4} {:<24} {:<16} ctx {:<14} {:<8} cmp={}",
                 state,
-                truncate(&s.project, 24),
+                truncate(s.project_label(), 24),
                 truncate(s.latest_model.as_deref().unwrap_or("—"), 16),
                 fmt_context(s),
                 fmt_cost(s.cost),
@@ -63,7 +69,10 @@ fn main() -> anyhow::Result<()> {
             );
         }
         let total: u64 = ps.iter().map(|s| s.usage.total()).sum();
-        println!("  lifetime tokens across shown provider: {}\n", fmt_tokens(total));
+        println!(
+            "  lifetime tokens across shown provider: {}\n",
+            fmt_tokens(total)
+        );
     }
 
     Ok(())

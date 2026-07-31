@@ -4,6 +4,7 @@
 //! `providers/`. Everything here speaks the vocabulary from `CONTEXT.md`.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// A provider-native session source. Sessions are never merged across providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -121,14 +122,53 @@ pub struct Compaction {
     pub pre_tokens: Option<u64>,
 }
 
+/// Stable identity for a Project. Git Projects use their canonical common
+/// directory; standalone non-Git Projects use their canonical working directory.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ProjectIdentity {
+    GitCommonDir(PathBuf),
+    CanonicalCwd(PathBuf),
+}
+
+impl ProjectIdentity {
+    /// Stable path used when deriving a human-readable Project label.
+    pub fn display_path(&self) -> &std::path::Path {
+        match self {
+            ProjectIdentity::GitCommonDir(path) => path
+                .file_name()
+                .filter(|name| *name == ".git")
+                .and_then(|_| path.parent())
+                .unwrap_or(path),
+            ProjectIdentity::CanonicalCwd(path) => path,
+        }
+    }
+}
+
+/// A resolved Project and its display label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Project {
+    pub identity: ProjectIdentity,
+    pub label: String,
+}
+
+/// A resolved Git Worktree. Its canonical root is its stable identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Worktree {
+    pub root: PathBuf,
+    pub branch: Option<String>,
+    pub writable: bool,
+}
+
 /// One normalized session. This is what the UI renders.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub provider: Provider,
     /// Native provider session id.
     pub id: String,
-    /// Display project label (basename, disambiguated across visible sessions).
-    pub project: String,
+    /// Canonical Project identity and display label, if resolution succeeded.
+    pub project: Option<Project>,
+    /// Canonical Git Worktree metadata. `None` for non-Git or unavailable identity.
+    pub worktree: Option<Worktree>,
     /// Absolute working directory of the session, if known.
     pub cwd: Option<String>,
     /// Latest model used by the session.
@@ -146,15 +186,10 @@ pub struct Session {
 }
 
 impl Session {
-    /// Project label: basename of cwd (disambiguation happens at snapshot build time).
-    pub fn project_basename(&self) -> String {
-        match &self.cwd {
-            Some(p) => std::path::Path::new(p)
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| p.clone()),
-            None => "—".to_string(),
-        }
+    pub fn project_label(&self) -> &str {
+        self.project
+            .as_ref()
+            .map_or("—", |project| project.label.as_str())
     }
 
     pub fn compaction_count(&self) -> usize {
