@@ -13,7 +13,10 @@ See `CONTEXT.md` for the authoritative domain vocabulary.
 
 - Rust + Ratatui + Crossterm + Tokio, macOS only.
 - Read-only access to `~/.claude` and `~/.codex` logs.
-- Three tabs: `All`, `Claude Code`, `Codex CLI`.
+- Three directly addressable pages: `[1]` All, `[2]` Claude Code, `[3]` Codex CLI.
+- First-use Help persisted per local Profile outside the disposable Session index.
+- Six semantic Themes with runtime cycling, Profile persistence, and a process-only
+  `--theme <name>` override.
 - Live polling ~every 2s; incremental updates, no full rescans on append.
 - Native session IDs; providers never merged.
 - Current Context per session; Busy/Idle/exited state.
@@ -35,17 +38,26 @@ exit; Linux/Windows; JSON/non-interactive output; other agents; predicting next 
 - **All** — compact comparison dashboard. Claude and Codex totals kept separate, plus a
   combined dollar estimate and session count. No per-session context bars. A
   `Context Alerts` panel counting open sessions over Warning/Critical thresholds.
-- **Provider tab** — dense session list. Columns: status, project, latest model, context,
+- **Provider page** — dense session list. Columns: status, project, latest model, context,
   dollars, last update, compaction badge. Sort Busy first, Idle second, then remaining by
   latest update. `Enter` opens Usage detail.
-- **Detail** — context; input/output; cache read/write; dollar estimate; per-model
-  breakdown; compaction timeline. No prompt or tool content.
+- **Detail** — full-page child view addressed by Provider plus native Session ID while
+  keeping numeric navigation visible. Shows Current Context, transcript-lifetime
+  input/output/cache Usage, dollar estimate, per-model Usage, and Compactions. It has no
+  Recent Signals, prompt, or tool content.
 
 Footer note when prices shown: `Estimated using API rates`. Unknown price → `N/A`.
 Unknown context window → show token count, limit/percent `N/A`.
 
 ## Keys
 
-`Tab`/`Shift+Tab` switch tabs · `1/2/3` jump to tab · `f` cycle time filter ·
-`↑/↓` or `j/k` move selection · `Enter` open detail · `Esc` close detail · `r` force
-rescan · `q` quit.
+`1/2/3` open All, Claude Code, and Codex CLI · `Tab`/`Shift+Tab` move focus within the
+current page and are no-ops when only one region is focusable · `f` cycles the time
+filter on top-level pages · `t` cycles Themes · `Up/Down` or `j/k` move selection or
+scroll Detail · `Enter` opens Detail · `?` opens Help · `Esc` returns from Detail or
+closes the current layer · `r` forces a rescan · `q` quits.
+
+Theme cycle order: `tokenplay`, `catppuccin`, `dracula`, `gruvbox`, `light`, then
+`high-contrast`. `tokenplay` is the default. Runtime selection is saved in the local
+Profile unless `--theme <name>` supplied the process-local override. Unknown Theme names
+fall back to `tokenplay` without preventing startup.
