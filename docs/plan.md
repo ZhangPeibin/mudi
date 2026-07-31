@@ -38,7 +38,9 @@ state detector (state.rs, macOS)      SQLite index (index/) — disposable, rebu
 - `providers/state.rs` — macOS process detection (`ps`, `lsof`).
 - `index/mod.rs` — SQLite schema, upsert, reconcile, rebuild.
 - `alerts.rs` — threshold crossing + de-dup + `osascript` notifications.
-- `app.rs` — tabs, filters, selection, snapshot assembly.
+- `signals.rs` — process-lifetime transition detection, de-duplication, and five-item
+  retention.
+- `app.rs` — tabs, selection, snapshot assembly.
 - `ui/` — `all.rs`, `provider.rs`, `detail.rs`, shared widgets.
 
 ## Build order (test-first where it pays)

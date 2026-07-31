@@ -2,7 +2,8 @@
 
 A fully local, read-only **macOS TUI** for observing **Claude Code** and **Codex CLI**
 coding sessions in one terminal — current context pressure, live Busy/Idle/exited state,
-historical usage with API-rate dollar estimates, and compaction history.
+meaningful recent transitions, Current Run and Transcript Lifetime Usage with API-rate
+dollar estimates, and compaction history.
 
 > Metadata only. TokenPlay never reads prompts, tool calls, or file content into storage.
 
@@ -17,7 +18,9 @@ before any public release.
   `high-contrast`, selectable without changing Session semantics.
 - **Accurate context semantics** per provider (see `CONTEXT.md`).
 - **Live lifecycle:** Busy / Idle / exited, with PID-reuse-safe detection on macOS.
-- **Historical usage + API-rate dollar estimates** (bundled, versioned, overridable).
+- **Recent Signals:** five process-lifetime Session, Context, and Compaction transitions.
+- **Scoped Usage:** Current Run for Open Sessions beside complete Transcript Lifetime
+  Usage, with API-rate dollar estimates (bundled, versioned, overridable).
 - **Compaction history** (count badge + detail timeline).
 - **Context Alerts** at 70% (warning) / 85% (critical) with macOS notifications.
 - **Disposable SQLite index**, rebuildable from source logs; incremental, no full rescans.
@@ -29,10 +32,10 @@ cargo run --release        # opens the TUI
 cargo run --release -- --theme dracula  # one-process Theme override
 ```
 
-Keys: `1-3` open pages · `Tab`/`Shift+Tab` move focus within a page · `f` cycles the
-time filter on top-level pages · `t` cycles Themes · `Up/Down` or `j/k` move selection
-or scroll Detail · `Enter` opens Detail · `?` opens Help · `Esc` returns from Detail or
-closes the current layer · `r` rescans · `q` quits.
+Keys: `1-3` open pages · `Tab`/`Shift+Tab` move focus within a page · `t` cycles Themes ·
+`Up/Down` or `j/k` move selection or scroll Detail · `Enter` inspects a Session or toggles
+`OLDER SESSIONS` · `?` opens Help · `Esc` returns from Detail or closes the current layer ·
+`r` rescans · `q` quits.
 
 ### Non-interactive checks
 
@@ -75,7 +78,7 @@ src/
   index/            disposable, incremental SQLite index
   collector.rs      discover → index → build normalized snapshot
   alerts.rs         threshold crossings + macOS notifications
-  app.rs            tabs, filters, snapshot, formatting
+  app.rs            tabs, snapshot, formatting
   ui/               Ratatui rendering (All / provider / detail)
   main.rs           tokio background loop + crossterm event loop
 ```

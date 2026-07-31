@@ -3,9 +3,9 @@
 ## What it is
 
 A fully local, read-only macOS terminal UI that observes Claude Code and Codex CLI
-sessions side by side: current context pressure, live Busy/Idle/exited state, historical
-usage with API-rate dollar estimates, and compaction history. Metadata only — no prompts,
-tools, or file content are ever read into storage.
+sessions side by side: current context pressure, live Busy/Idle/exited state, Current Run
+and Transcript Lifetime Usage with API-rate dollar estimates, and compaction history.
+Metadata only — no prompts, tools, or file content are ever read into storage.
 
 See `CONTEXT.md` for the authoritative domain vocabulary.
 
@@ -20,8 +20,9 @@ See `CONTEXT.md` for the authoritative domain vocabulary.
 - Live polling ~every 2s; incremental updates, no full rescans on append.
 - Native session IDs; providers never merged.
 - Current Context per session; Busy/Idle/exited state.
-- Time filters over activity time; matched sessions show full lifetime usage.
-- Token categories + estimated dollars (API rates).
+- Provider pages group Sessions by Project with direct rolling-seven-day rows and
+  independent per-Project `OLDER SESSIONS` disclosures.
+- Current Run and Transcript Lifetime token categories + estimated dollars (API rates).
 - Compaction count badge + detail timeline.
 - SQLite incremental index, rebuildable from source.
 - macOS notifications while the TUI runs.
@@ -35,16 +36,20 @@ exit; Linux/Windows; JSON/non-interactive output; other agents; predicting next 
 
 ## Screens
 
-- **All** — compact comparison dashboard. Claude and Codex totals kept separate, plus a
-  combined dollar estimate and session count. No per-session context bars. A
-  `Context Alerts` panel counting open sessions over Warning/Critical thresholds.
-- **Provider page** — dense session list. Columns: status, project, latest model, context,
-  dollars, last update, compaction badge. Sort Busy first, Idle second, then remaining by
-  latest update. `Enter` opens Usage detail.
+- **All** — cross-provider `NOW`, grouped by Project and Worktree, beside a bounded
+  process-lifetime `RECENT SIGNALS` list. `NOW` contains Open Sessions and current
+  Attention evidence; Signals contain only meaningful Session, Context, and Compaction
+  transitions observed after the silent initial baseline.
+- **Provider page** — Sessions grouped by canonical Project identity. Project groups and
+  their Sessions sort by latest activity. Sessions from the rolling seven-day window render
+  directly; older Sessions live in an independent collapsed disclosure under their Project.
+  Every Session row retains complete transcript-lifetime Usage and opens shared Detail.
 - **Detail** — full-page child view addressed by Provider plus native Session ID while
-  keeping numeric navigation visible. Shows Current Context, transcript-lifetime
-  input/output/cache Usage, dollar estimate, per-model Usage, and Compactions. It has no
-  Recent Signals, prompt, or tool content.
+  keeping numeric navigation visible. Open Sessions show separately labelled Current Run
+  Usage and Transcript Lifetime Usage, including every provider-reported category,
+  per-model splits, and API price estimates. An unavailable validated Run boundary shows
+  Current Run Usage as `N/A`; Exited Sessions omit Current Run Usage. Detail also shows
+  Current Context and Compactions, with no Recent Signals, prompt, or tool content.
 
 Footer note when prices shown: `Estimated using API rates`. Unknown price → `N/A`.
 Unknown context window → show token count, limit/percent `N/A`.
@@ -52,10 +57,10 @@ Unknown context window → show token count, limit/percent `N/A`.
 ## Keys
 
 `1/2/3` open All, Claude Code, and Codex CLI · `Tab`/`Shift+Tab` move focus within the
-current page and are no-ops when only one region is focusable · `f` cycles the time
-filter on top-level pages · `t` cycles Themes · `Up/Down` or `j/k` move selection or
-scroll Detail · `Enter` opens Detail · `?` opens Help · `Esc` returns from Detail or
-closes the current layer · `r` forces a rescan · `q` quits.
+current page and are no-ops when only one region is focusable · `t` cycles Themes ·
+`Up/Down` or `j/k` move selection or scroll Detail · `Enter` opens Detail or toggles a
+Project's `OLDER SESSIONS` · `?` opens Help · `Esc` returns from Detail or closes the
+current layer · `r` forces a rescan · `q` quits.
 
 Theme cycle order: `tokenplay`, `catppuccin`, `dracula`, `gruvbox`, `light`, then
 `high-contrast`. `tokenplay` is the default. Runtime selection is saved in the local
