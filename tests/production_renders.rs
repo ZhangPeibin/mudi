@@ -511,19 +511,17 @@ fn all_page_labels_the_project_region_and_uses_theme_foreground_for_project_name
 }
 
 #[test]
-fn all_page_worktree_rows_start_with_the_path_without_an_abbreviation() {
+fn all_page_keeps_multiple_worktrees_below_the_project_without_context() {
     let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
     let worktree = rendered
         .text
         .lines()
-        .find(|line| line.contains("@ main | Context 90%"))
-        .expect("All page should render the shared Worktree");
+        .find(|line| line.contains("WARNING Shared Worktree Risk x2"))
+        .expect("All page should render the shared Worktree below its Project");
 
-    assert!(
-        worktree.starts_with("│  ..."),
-        "unexpected Worktree row: {worktree}"
-    );
-    assert!(!worktree.starts_with("│  W "));
+    assert!(worktree.starts_with("│  "));
+    assert!(worktree.contains("| main"));
+    assert!(!worktree.contains("Context"));
 }
 
 #[test]
@@ -552,7 +550,13 @@ fn all_page_abbreviates_the_current_users_home_in_worktree_paths() {
 
     assert!(rendered
         .text
-        .contains("  ~/code/sessionmesh @ main | Context 50%"));
+        .contains("sessionmesh | ~/code/sessionmesh | main"));
+    assert!(!rendered
+        .text
+        .lines()
+        .find(|line| line.starts_with("│sessionmesh |"))
+        .unwrap()
+        .contains("Context"));
     assert!(!rendered.text.contains(root_text.as_ref()));
 }
 

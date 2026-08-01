@@ -981,17 +981,15 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     }
 
     for project in now {
-        lines.push(Line::from(Span::styled(
-            project.label().to_string(),
-            Style::default()
-                .fg(theme.foreground)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(now_project_line(&project, &attention, content_width, theme));
+        let indent_worktrees = project.worktrees.len() > 1;
         for worktree in project.worktrees {
-            lines.push(Line::from(Span::styled(
-                now_worktree_line(&worktree, &attention, content_width),
-                Style::default().fg(theme.muted),
-            )));
+            if indent_worktrees {
+                lines.push(Line::from(Span::styled(
+                    now_worktree_line(&worktree, &attention, content_width, true),
+                    Style::default().fg(theme.muted),
+                )));
+            }
             for session in worktree.sessions {
                 lines.push(now_session_line(
                     session,
@@ -1507,29 +1505,60 @@ fn now_session_line(
     ])
 }
 
+fn now_project_line(
+    project: &NowProject<'_>,
+    attention: &AttentionSnapshot,
+    width: usize,
+    theme: Theme,
+) -> Line<'static> {
+    let label = project.label().to_string();
+    let label_width = label.chars().count();
+    let mut spans = vec![Span::styled(
+        label,
+        Style::default()
+            .fg(theme.foreground)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if project.worktrees.len() == 1 {
+        spans.push(Span::styled(" | ", Style::default().fg(theme.border)));
+        spans.push(Span::styled(
+            now_worktree_line(
+                &project.worktrees[0],
+                attention,
+                width.saturating_sub(label_width + 3),
+                false,
+            ),
+            Style::default().fg(theme.muted),
+        ));
+    }
+    Line::from(spans)
+}
+
 fn now_worktree_line(
     group: &NowWorktree<'_>,
     attention: &AttentionSnapshot,
     width: usize,
+    indented: bool,
 ) -> String {
     let branch = group.worktree.branch.as_deref().unwrap_or("detached HEAD");
-    let context_pressure = highest_context_pressure(&group.sessions);
-    let mut evidence = format!("Context {context_pressure}");
-    if let Some(risk) = attention.shared_worktree_risk(&group.worktree.root) {
-        evidence.push_str(&format!(
-            " | WARNING Shared Worktree Risk x{}",
-            risk.contributing_sessions.len()
-        ));
-    }
-    let identity_width = width.saturating_sub(8 + evidence.chars().count());
+    let evidence = attention
+        .shared_worktree_risk(&group.worktree.root)
+        .map(|risk| {
+            format!(
+                " | WARNING Shared Worktree Risk x{}",
+                risk.contributing_sessions.len()
+            )
+        })
+        .unwrap_or_default();
+    let prefix = if indented { "  " } else { "" };
+    let identity_width = width.saturating_sub(prefix.len() + 3 + evidence.chars().count());
     let path_width = identity_width.saturating_mul(3) / 5;
     let branch_width = identity_width.saturating_sub(path_width);
     let path = home_relative_path(&group.worktree.root);
     format!(
-        "  {} @ {} | {}",
+        "{prefix}{} | {}{evidence}",
         shorten_end(&path, path_width),
         shorten_start(branch, branch_width),
-        evidence,
     )
 }
 
@@ -1589,14 +1618,6 @@ fn now_context_evidence(session: &Session) -> String {
         }
         None => "[----------] N/A".into(),
     }
-}
-
-fn highest_context_pressure(sessions: &[&Session]) -> String {
-    sessions
-        .iter()
-        .filter_map(|session| session.context.percent())
-        .max_by(f64::total_cmp)
-        .map_or_else(|| "N/A".into(), |percent| format!("{percent:.0}%"))
 }
 
 // ---- Provider page ----
@@ -3246,7 +3267,7 @@ mod tests {
         let codex = page.find("codex-member").unwrap();
 
         assert!(risk_line.contains("sessionmesh"));
-        assert!(risk_line.contains("@ main"));
+        assert!(risk_line.contains("| main"));
         assert!(risk < claude && risk < codex);
         assert_eq!(
             page.lines()
@@ -3405,25 +3426,48 @@ mod tests {
     }
 
     #[test]
-    fn now_shows_the_worktrees_highest_current_context_pressure() {
+    fn now_merges_a_single_worktree_into_the_project_without_context() {
         let mut snapshot = demo_snapshot();
         snapshot.sessions[0].worktree.as_mut().unwrap().branch = Some("feature/shared".into());
-        snapshot.sessions[0].context.tokens = 80_000;
-        let mut higher_pressure = snapshot.sessions[0].clone();
-        higher_pressure.provider = Provider::CodexCli;
-        higher_pressure.id = "higher-pressure".into();
-        higher_pressure.context.tokens = 170_000;
-        snapshot.sessions.push(higher_pressure);
         let ui = Ui::default();
 
         let page = rendered_rows_at(&ui, &snapshot, 120, 30);
-        let worktree = page
+        let project = page
             .lines()
-            .find(|line| line.contains("WARNING Shared Worktree Risk x2"))
+            .find(|line| line.starts_with("│sessionmesh |"))
             .unwrap();
 
-        assert!(worktree.contains("@ feature..."));
-        assert!(worktree.contains("Context 85%"));
+        assert!(project.contains("/Users/x/code/sessionmesh | feature/shared"));
+        assert!(!project.contains("Context"));
+    }
+
+    #[test]
+    fn now_keeps_multiple_worktrees_below_the_project_without_context() {
+        let mut snapshot = demo_snapshot();
+        let mut feature = snapshot.sessions[0].clone();
+        feature.id = "feature-session".into();
+        feature.worktree = Some(Worktree {
+            root: PathBuf::from("/Users/x/worktrees/sessionmesh-feature"),
+            branch: Some("feature".into()),
+            writable: true,
+        });
+        feature.cwd = Some("/Users/x/worktrees/sessionmesh-feature".into());
+        snapshot.sessions.push(feature);
+
+        let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
+        let mut lines = page.lines();
+        let project = lines.find(|line| line.starts_with("│sessionmesh")).unwrap();
+        let main = lines.find(|line| line.contains("| main")).unwrap();
+        let feature = lines.find(|line| line.contains("| feature")).unwrap();
+
+        assert_eq!(
+            project.split("││").next().unwrap().trim_end(),
+            "│sessionmesh"
+        );
+        assert!(main.starts_with("│  "));
+        assert!(feature.starts_with("│  "));
+        assert!(!main.contains("Context"));
+        assert!(!feature.contains("Context"));
     }
 
     #[test]
@@ -3913,7 +3957,7 @@ mod tests {
             .unwrap();
 
         assert!(worktree.contains("prototype/q-007"));
-        assert!(worktree.contains("Context 75%"));
+        assert!(!worktree.contains("Context"));
         for evidence in [
             "WARNING",
             "Busy",

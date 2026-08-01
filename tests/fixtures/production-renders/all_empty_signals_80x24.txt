@@ -1,14 +1,14 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
 ┌ PROJECTS 1 ───────────────────────────────────────────────── 5 OPEN SESSIONS ┐
 │sessionmesh                                                                   │
-│  .../sessionmesh @ main | Context 90% | WARNING Shared Worktree Risk x2      │
+│  ...ure/code/sessionmesh | main | WARNING Shared Worktree Risk x2            │
 │> CRITICAL Busy  Claude [#########-] 90%  claude-opus-4-8    30s       Inspect│
 │  SHARED   Busy  Codex  [####------] 40%  gpt-5-codex        1m        Inspect│
-│  ...fixture/code/sessionmesh-warning @ warning | Context 75%                 │
+│  /Users/fixture/code/sessionmesh-warning | warning                           │
 │  WARNING  Busy  Claude [########--] 75%  claude-sonnet-4-5  2m        Inspect│
-│  ...rs/fixture/code/sessionmesh-idle @ idle | Context 30%                    │
+│  /Users/fixture/code/sessionmesh-idle | idle                                 │
 │  IDLE     Idle  Codex  [###-------] 30%  gpt-5.2-codex      Idle 3m   Inspect│
-│  ...fixture/code/sessionmesh-healthy @ healthy | Context 20%                 │
+│  /Users/fixture/code/sessionmesh-healthy | healthy                           │
 │  BUSY     Busy  Claude [##--------] 20%  claude-haiku-4-5   4m        Inspect│
 │                                                                              │
 │                                                                              │

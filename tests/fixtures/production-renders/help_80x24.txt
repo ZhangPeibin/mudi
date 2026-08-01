@@ -1,14 +1,14 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
 ┌ PROJECTS 1 ───────────────────────────────────────────────── 5 OPEN SESSIONS ┐
 │sessionmesh                                                                   │
-│  .../sessionmesh @ main | Context 90% | WARNING Shared Worktree Risk x2      │
+│  ...ure/code/sessionmesh | main | WARNING Shared Worktree Risk x2            │
 │> CRITICAL Busy  Claude [#########-] 90%  claude-opus-4-8    30s       Inspect│
 │  SHARED  ┌ Help - Esc to close ───────────────────────────────────┐   Inspect│
-│  ...fixtu│Pages                                                   │          │
+│  /Users/f│Pages                                                   │          │
 │  WARNING │  [1] All    [2] Claude Code    [3] Codex CLI           │   Inspect│
-│  ...rs/fi│                                                        │          │
+│  /Users/f│                                                        │          │
 │  IDLE    │Controls                                                │   Inspect│
-│  ...fixtu│  Tab / Shift+Tab  Focus where available                │          │
+│  /Users/f│  Tab / Shift+Tab  Focus where available                │          │
 │  BUSY    │  Up/Down or j/k   Move selection                       │   Inspect│
 │          │  Enter            Inspect                              │          │
 │          │  t  Theme      r  Refresh                              │          │
