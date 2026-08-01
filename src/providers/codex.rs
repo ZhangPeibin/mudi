@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn latest_boundary_is_read_from_the_source_when_needed() {
         use std::fs;
-        let path = std::env::temp_dir().join("tokenplay-codex-boundary-test.jsonl");
+        let path = std::env::temp_dir().join("sessionmesh-codex-boundary-test.jsonl");
         let started = r#"
 {"type":"event_msg","timestamp":"2026-05-29T08:30:53.150Z","payload":{"type":"task_started"}}
 {"type":"event_msg","timestamp":"2026-05-29T08:30:57.899Z","payload":{"type":"token_count","info":{}}}

@@ -1,13 +1,13 @@
 [package]
-name = "tokenplay"
+name = "sessionmesh"
 version = "0.1.0"
 edition = "2021"
 description = "Local, read-only TUI for observing Claude Code and Codex CLI sessions"
 license = "MIT"
-default-run = "tokenplay"
+default-run = "sessionmesh"
 
 [[bin]]
-name = "tokenplay"
+name = "sessionmesh"
 path = "src/main.rs"
 
 [dependencies]

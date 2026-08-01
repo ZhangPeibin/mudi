@@ -1,9 +1,9 @@
-use tokenplay::attention::SessionIdentity;
-use tokenplay::domain::{
+use sessionmesh::attention::SessionIdentity;
+use sessionmesh::domain::{
     Compaction, ContextState, Project, ProjectIdentity, Provider, Session, SessionState, Usage,
     Worktree,
 };
-use tokenplay::signals::{
+use sessionmesh::signals::{
     ContextAlertLevel, RecentSignal, RecentSignalKind, RecentSignalsEngine,
     SharedWorktreeRiskChange,
 };
@@ -14,11 +14,11 @@ fn session(id: &str, state: SessionState, context_tokens: u64) -> Session {
         id: id.into(),
         source: Default::default(),
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd("/tmp/tokenplay".into()),
-            label: "tokenplay".into(),
+            identity: ProjectIdentity::CanonicalCwd("/tmp/sessionmesh".into()),
+            label: "sessionmesh".into(),
         }),
         worktree: None,
-        cwd: Some("/tmp/tokenplay".into()),
+        cwd: Some("/tmp/sessionmesh".into()),
         latest_model: Some("claude-opus-4-1".into()),
         state,
         context: ContextState {
@@ -61,7 +61,7 @@ fn initial_snapshot_establishes_a_silent_baseline() {
 #[test]
 fn shared_worktree_risk_detection_emits_one_worktree_scoped_signal() {
     let mut engine = RecentSignalsEngine::default();
-    let worktree_root = "/tmp/tokenplay-shared";
+    let worktree_root = "/tmp/sessionmesh-shared";
     let mut claude = session("claude-session", SessionState::Busy, 80_000);
     claude.worktree = Some(Worktree {
         root: worktree_root.into(),
@@ -102,7 +102,7 @@ fn shared_worktree_risk_detection_emits_one_worktree_scoped_signal() {
 #[test]
 fn shared_worktree_risk_clear_emits_once_with_remaining_open_membership() {
     let mut engine = RecentSignalsEngine::default();
-    let worktree_root = "/tmp/tokenplay-shared";
+    let worktree_root = "/tmp/sessionmesh-shared";
     let mut claude = session("claude-session", SessionState::Busy, 80_000);
     claude.worktree = Some(Worktree {
         root: worktree_root.into(),
@@ -161,7 +161,7 @@ fn membership_changes_while_worktree_risk_remains_do_not_emit_a_signal() {
     let mut engine = RecentSignalsEngine::default();
     let mut first = session("first", SessionState::Busy, 80_000);
     first.worktree = Some(Worktree {
-        root: "/tmp/tokenplay-shared".into(),
+        root: "/tmp/sessionmesh-shared".into(),
         branch: Some("main".into()),
         writable: true,
     });

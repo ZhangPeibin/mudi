@@ -3,13 +3,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tokenplay::collector::build_sessions;
-use tokenplay::config::Config;
-use tokenplay::domain::{ContextState, ProjectIdentity, Provider, Usage};
-use tokenplay::index::{Fingerprint, Index};
-use tokenplay::pricing::RateCard;
-use tokenplay::project::resolve;
-use tokenplay::providers::ParsedSession;
+use sessionmesh::collector::build_sessions;
+use sessionmesh::config::Config;
+use sessionmesh::domain::{ContextState, ProjectIdentity, Provider, Usage};
+use sessionmesh::index::{Fingerprint, Index};
+use sessionmesh::pricing::RateCard;
+use sessionmesh::project::resolve;
+use sessionmesh::providers::ParsedSession;
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -19,7 +19,7 @@ impl TempDir {
     fn new() -> Self {
         let suffix = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "tokenplay-project-resolution-{}-{suffix}",
+            "sessionmesh-project-resolution-{}-{suffix}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&path);
@@ -61,9 +61,9 @@ fn repository_with_commit(path: &Path) {
         path,
         &[
             "-c",
-            "user.name=TokenPlay Tests",
+            "user.name=SessionMesh Tests",
             "-c",
-            "user.email=tokenplay@example.invalid",
+            "user.email=sessionmesh@example.invalid",
             "commit",
             "-m",
             "fixture",
@@ -88,8 +88,8 @@ fn parsed_session(id: &str, cwd: &Path) -> ParsedSession {
 #[test]
 fn linked_worktrees_share_project_identity_and_keep_worktree_metadata() {
     let temp = TempDir::new();
-    let repository = temp.path().join("tokenplay");
-    let linked = temp.path().join("tokenplay-feature");
+    let repository = temp.path().join("sessionmesh");
+    let linked = temp.path().join("sessionmesh-feature");
     repository_with_commit(&repository);
     git(
         &repository,
@@ -140,8 +140,8 @@ fn independent_clones_remain_distinct_projects_with_the_same_remote() {
     let origin = temp.path().join("origin");
     let first_parent = temp.path().join("first");
     let second_parent = temp.path().join("second");
-    let first = first_parent.join("tokenplay");
-    let second = second_parent.join("tokenplay");
+    let first = first_parent.join("sessionmesh");
+    let second = second_parent.join("sessionmesh");
     repository_with_commit(&origin);
     fs::create_dir_all(&first_parent).unwrap();
     fs::create_dir_all(&second_parent).unwrap();
@@ -158,8 +158,8 @@ fn independent_clones_remain_distinct_projects_with_the_same_remote() {
     let second = resolve(Some(&second)).project.unwrap();
 
     assert_ne!(first.identity, second.identity);
-    assert_eq!(first.label, "tokenplay");
-    assert_eq!(second.label, "tokenplay");
+    assert_eq!(first.label, "sessionmesh");
+    assert_eq!(second.label, "sessionmesh");
 }
 
 #[test]
@@ -176,9 +176,9 @@ fn unavailable_cwd_does_not_invent_project_or_worktree_identity() {
 #[test]
 fn symlink_and_nested_path_spellings_resolve_to_the_same_identities() {
     let temp = TempDir::new();
-    let repository = temp.path().join("tokenplay");
+    let repository = temp.path().join("sessionmesh");
     let nested = repository.join("src/domain");
-    let alias = temp.path().join("tokenplay-alias");
+    let alias = temp.path().join("sessionmesh-alias");
     repository_with_commit(&repository);
     fs::create_dir_all(&nested).unwrap();
     std::os::unix::fs::symlink(&repository, &alias).unwrap();
@@ -202,8 +202,8 @@ fn snapshot_carries_resolved_identity_and_disambiguates_distinct_projects() {
     let origin = temp.path().join("origin");
     let first_parent = temp.path().join("first");
     let second_parent = temp.path().join("second");
-    let first = first_parent.join("tokenplay");
-    let second = second_parent.join("tokenplay");
+    let first = first_parent.join("sessionmesh");
+    let second = second_parent.join("sessionmesh");
     repository_with_commit(&origin);
     fs::create_dir_all(&first_parent).unwrap();
     fs::create_dir_all(&second_parent).unwrap();
@@ -262,9 +262,9 @@ fn snapshot_carries_resolved_identity_and_disambiguates_distinct_projects() {
         first_a.project.as_ref().unwrap().identity,
         second.project.as_ref().unwrap().identity
     );
-    assert_eq!(first_a.project.as_ref().unwrap().label, "first/tokenplay");
-    assert_eq!(first_b.project.as_ref().unwrap().label, "first/tokenplay");
-    assert_eq!(second.project.as_ref().unwrap().label, "second/tokenplay");
+    assert_eq!(first_a.project.as_ref().unwrap().label, "first/sessionmesh");
+    assert_eq!(first_b.project.as_ref().unwrap().label, "first/sessionmesh");
+    assert_eq!(second.project.as_ref().unwrap().label, "second/sessionmesh");
     assert_eq!(
         first_a.worktree.as_ref().unwrap().root,
         fs::canonicalize(&first).unwrap()

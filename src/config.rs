@@ -40,24 +40,26 @@ impl Config {
     /// Resolve configuration from the environment, falling back to standard paths.
     ///
     /// Overrides:
-    /// - `TOKENPLAY_CLAUDE_DIR`
-    /// - `TOKENPLAY_CODEX_DIR`
-    /// - `TOKENPLAY_DATA_DIR`
-    /// - `TOKENPLAY_EXTRA_DIRS` (colon-separated)
+    /// - `SESSIONMESH_CLAUDE_DIR`
+    /// - `SESSIONMESH_CODEX_DIR`
+    /// - `SESSIONMESH_DATA_DIR`
+    /// - `SESSIONMESH_EXTRA_DIRS` (colon-separated)
     pub fn load() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
 
-        let claude_dir = env_path("TOKENPLAY_CLAUDE_DIR").unwrap_or_else(|| home.join(".claude"));
-        let codex_dir = env_path("TOKENPLAY_CODEX_DIR").unwrap_or_else(|| home.join(".codex"));
+        let claude_dir = env_path("SESSIONMESH_CLAUDE_DIR", "TOKENPLAY_CLAUDE_DIR")
+            .unwrap_or_else(|| home.join(".claude"));
+        let codex_dir = env_path("SESSIONMESH_CODEX_DIR", "TOKENPLAY_CODEX_DIR")
+            .unwrap_or_else(|| home.join(".codex"));
 
-        let data_dir = env_path("TOKENPLAY_DATA_DIR").unwrap_or_else(|| {
-            dirs::data_dir()
-                .unwrap_or_else(|| home.join(".local/share"))
-                .join("tokenplay")
-        });
+        let data_dir =
+            env_path("SESSIONMESH_DATA_DIR", "TOKENPLAY_DATA_DIR").unwrap_or_else(|| {
+                dirs::data_dir()
+                    .unwrap_or_else(|| home.join(".local/share"))
+                    .join("sessionmesh")
+            });
 
-        let extra_dirs = std::env::var("TOKENPLAY_EXTRA_DIRS")
-            .ok()
+        let extra_dirs = env_value("SESSIONMESH_EXTRA_DIRS", "TOKENPLAY_EXTRA_DIRS")
             .map(|v| {
                 v.split(':')
                     .filter(|s| !s.is_empty())
@@ -109,11 +111,15 @@ impl Config {
     }
 }
 
-fn env_path(key: &str) -> Option<PathBuf> {
-    std::env::var(key)
+fn env_path(primary_key: &str, legacy_key: &str) -> Option<PathBuf> {
+    env_value(primary_key, legacy_key).map(PathBuf::from)
+}
+
+fn env_value(primary_key: &str, legacy_key: &str) -> Option<String> {
+    std::env::var(primary_key)
         .ok()
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+        .or_else(|| std::env::var(legacy_key).ok().filter(|s| !s.is_empty()))
 }
 
 #[cfg(test)]
@@ -122,8 +128,24 @@ mod tests {
 
     #[test]
     fn theme_override_is_read_from_process_arguments() {
-        let args = ["tokenplay", "--theme", "dracula"];
+        let args = ["sessionmesh", "--theme", "dracula"];
 
         assert_eq!(theme_override_from_args(args), Some("dracula".to_string()));
+    }
+
+    #[test]
+    fn renamed_environment_variables_take_priority_over_legacy_values() {
+        let suffix = std::process::id();
+        let primary = format!("SESSIONMESH_TEST_PRIMARY_{suffix}");
+        let legacy = format!("SESSIONMESH_TEST_LEGACY_{suffix}");
+        std::env::set_var(&legacy, "/legacy");
+
+        assert_eq!(env_path(&primary, &legacy), Some(PathBuf::from("/legacy")));
+
+        std::env::set_var(&primary, "/renamed");
+        assert_eq!(env_path(&primary, &legacy), Some(PathBuf::from("/renamed")));
+
+        std::env::remove_var(primary);
+        std::env::remove_var(legacy);
     }
 }

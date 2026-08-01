@@ -1,15 +1,15 @@
 //! Render the TUI to an off-screen buffer against real logs and print it as text.
-//! Lets us eyeball the layout without a TTY. Respects TOKENPLAY_* overrides.
+//! Lets us eyeball the layout without a TTY. Respects SESSIONMESH_* overrides.
 
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
-use tokenplay::alerts;
-use tokenplay::app::{Snapshot, Tab};
-use tokenplay::collector;
-use tokenplay::config::Config;
-use tokenplay::index::Index;
-use tokenplay::pricing::RateCard;
-use tokenplay::ui::{draw, Ui};
+use sessionmesh::alerts;
+use sessionmesh::app::{Snapshot, Tab};
+use sessionmesh::collector;
+use sessionmesh::config::Config;
+use sessionmesh::index::Index;
+use sessionmesh::pricing::RateCard;
+use sessionmesh::ui::{draw, Ui};
 
 fn main() -> anyhow::Result<()> {
     let cfg = Config::load();

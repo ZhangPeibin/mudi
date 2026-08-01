@@ -1,4 +1,4 @@
-//! TokenPlay — local, read-only observability for Claude Code and Codex CLI sessions.
+//! SessionMesh — local, read-only observability for Claude Code and Codex CLI sessions.
 
 pub mod alerts;
 pub mod app;

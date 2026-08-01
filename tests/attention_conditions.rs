@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use tokenplay::attention::{AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity};
-use tokenplay::domain::{
+use sessionmesh::attention::{AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity};
+use sessionmesh::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, Worktree,
 };
 

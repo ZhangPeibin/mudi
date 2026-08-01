@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn each_adapter_discovers_only_its_own_files() {
         use std::fs;
-        let base = std::env::temp_dir().join("tokenplay-adapter-discover-test");
+        let base = std::env::temp_dir().join("sessionmesh-adapter-discover-test");
         let _ = fs::remove_dir_all(&base);
         let claude_dir = base.join("claude");
         let codex_dir = base.join("codex");

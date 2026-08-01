@@ -130,7 +130,7 @@ impl AlertEngine {
 /// Post a macOS notification via `osascript`. Best-effort; failures are ignored.
 fn notify(message: &str) {
     let script = format!(
-        "display notification {:?} with title \"TokenPlay\"",
+        "display notification {:?} with title \"SessionMesh\"",
         message
     );
     let _ = Command::new("osascript").arg("-e").arg(script).spawn();

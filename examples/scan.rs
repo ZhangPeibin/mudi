@@ -1,14 +1,14 @@
 //! Non-interactive verification harness: run the real collector pipeline against
 //! local logs and print a summary. Used to validate parsing/state/pricing without the
-//! TUI. Respects TOKENPLAY_* env overrides (point TOKENPLAY_DATA_DIR at a temp dir to
+//! TUI. Respects SESSIONMESH_* env overrides (point SESSIONMESH_DATA_DIR at a temp dir to
 //! keep the real index untouched).
 
-use tokenplay::app::{fmt_context, fmt_cost, fmt_tokens};
-use tokenplay::collector;
-use tokenplay::config::Config;
-use tokenplay::domain::{Provider, SessionState};
-use tokenplay::index::Index;
-use tokenplay::pricing::RateCard;
+use sessionmesh::app::{fmt_context, fmt_cost, fmt_tokens};
+use sessionmesh::collector;
+use sessionmesh::config::Config;
+use sessionmesh::domain::{Provider, SessionState};
+use sessionmesh::index::Index;
+use sessionmesh::pricing::RateCard;
 
 fn main() -> anyhow::Result<()> {
     let cfg = Config::load();

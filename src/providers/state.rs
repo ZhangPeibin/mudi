@@ -310,7 +310,7 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
         let dir = std::env::temp_dir().join(format!(
-            "tokenplay-claude-live-boundary-{}-{now_ms}",
+            "sessionmesh-claude-live-boundary-{}-{now_ms}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -338,7 +338,7 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
         let dir = std::env::temp_dir().join(format!(
-            "tokenplay-claude-missing-boundary-{}-{now_ms}",
+            "sessionmesh-claude-missing-boundary-{}-{now_ms}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();

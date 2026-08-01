@@ -25,14 +25,14 @@ pub(super) enum ThemeName {
     Gruvbox,
     Light,
     HighContrast,
-    #[serde(other)]
+    #[serde(rename = "sessionmesh", alias = "tokenplay", other)]
     #[default]
-    Tokenplay,
+    SessionMesh,
 }
 
 impl ThemeName {
     const ALL: [Self; 6] = [
-        Self::Tokenplay,
+        Self::SessionMesh,
         Self::Catppuccin,
         Self::Dracula,
         Self::Gruvbox,
@@ -42,7 +42,7 @@ impl ThemeName {
 
     pub(super) fn as_str(self) -> &'static str {
         match self {
-            Self::Tokenplay => "tokenplay",
+            Self::SessionMesh => "sessionmesh",
             Self::Catppuccin => "catppuccin",
             Self::Dracula => "dracula",
             Self::Gruvbox => "gruvbox",
@@ -52,6 +52,9 @@ impl ThemeName {
     }
 
     pub(super) fn from_name(name: &str) -> Option<Self> {
+        if name == "tokenplay" {
+            return Some(Self::SessionMesh);
+        }
         Self::ALL.into_iter().find(|theme| theme.as_str() == name)
     }
 
@@ -65,7 +68,7 @@ impl ThemeName {
 
     pub(super) fn palette(self) -> Theme {
         match self {
-            Self::Tokenplay => Theme {
+            Self::SessionMesh => Theme {
                 background: Color::Rgb(20, 22, 24),
                 foreground: Color::Rgb(224, 220, 210),
                 muted: Color::Rgb(132, 136, 141),
@@ -183,6 +186,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn legacy_default_theme_name_loads_as_sessionmesh() {
+        assert_eq!(
+            ThemeName::from_name("tokenplay"),
+            Some(ThemeName::SessionMesh)
+        );
+        assert_eq!(
+            serde_json::from_str::<ThemeName>(r#""tokenplay""#).unwrap(),
+            ThemeName::SessionMesh
+        );
+        assert_eq!(
+            serde_json::to_string(&ThemeName::SessionMesh).unwrap(),
+            r#""sessionmesh""#
+        );
     }
 
     fn contrast_ratio(foreground: Color, background: Color) -> f64 {

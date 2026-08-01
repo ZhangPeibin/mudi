@@ -2,7 +2,7 @@
   "version": "2026-07-29",
   "currency": "USD",
   "unit": "per_million_tokens",
-  "note": "API-equivalent public rates. Estimates only; not a subscription bill. Override locally via TOKENPLAY_DATA_DIR/pricing.json.",
+  "note": "API-equivalent public rates. Estimates only; not a subscription bill. Override locally via SESSIONMESH_DATA_DIR/pricing.json.",
   "models": {
     "claude-opus-4-8": { "input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75 },
     "claude-opus-4-1": { "input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75 },
