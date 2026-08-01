@@ -1,0 +1,24 @@
+┌ TokenPlay ───────────────────────────────────────────────────────────────────┐
+│ [1]   [2]   [3]                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Session detail - Esc to go back ─────────────────────────────────────────────┐
+│Session       claude-critical                                                 │
+│Model         claude-opus-4-8                                                 │
+│Context       180.0k / 200.0k (90.0%)                                         │
+│Attention Conditions                                                          │
+│  CRITICAL Current Context 90.0% >= 85%                                       │
+│  WARNING Shared Worktree Risk x2                                             │
+│Current Run Usage                                                             │
+│in 1.2k | out 230 | cache read 3.4k | cache create 45 | API est. $0.04        │
+│Transcript Lifetime Usage                                                     │
+│in 12.3k | out 2.3k | cache read 34.6k | cache create 456 | API est. $0.42    │
+│Worktree      /Users/fixture/code/tokenplay @ main                            │
+│cwd           /Users/fixture/code/tokenplay                                   │
+│Source log    /Users/fixture/.claude/projects/-Users-fixture-code-tokenplay/cl│
+│              aude-critical.jsonl                                             │
+│Source format JSONL                                                           │
+│Compactions (2)                                                               │
+│  1m ago  trigger=auto  pre=188.0k                                            │
+│  1m ago  trigger=manual  pre=181.0k                                          │
+└──────────────────────────────────────────────────────────── lines 3-20 of 20 ┘
+Esc Back | j/k Scroll | c Copy | q Quit                Estimated using API rates

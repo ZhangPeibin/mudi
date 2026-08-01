@@ -1,0 +1,24 @@
+┌ TokenPlay ───────────────────────────────────────────────────────────────────┐
+│ [1]   [2]   [3]                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ NOW ─────────────────────────────────────────────────────────────────────────┐
+│PROJECT  tokenplay                                                            │
+│  W .../tokenplay @ main | Context 90% | WARNING Shared Worktree Risk x2      │
+│> CRITICAL Busy  Claude [#########-] 90%  claude-opus-4-8    30s       Inspect│
+│  SHARED   Busy  Codex  [####------] 40%  gpt-5-codex        1m        Inspect│
+│  W .../fixture/code/tokenplay-warning @ warning | Context 75%                │
+│  WARNING  Busy  Claude [########--] 75%  claude-sonnet-4-5  2m        Inspect│
+│  W /Users/fixture/code/tokenplay-idle @ idle | Context 30%                   │
+│  IDLE     Idle  Codex  [###-------] 30%  gpt-5.2-codex      Idle 3m   Inspect│
+│  W .../fixture/code/tokenplay-healthy @ healthy | Context 20%                │
+│  BUSY     Busy  Claude [##--------] 20%  claude-haiku-4-5   4m        Inspect│
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ RECENT SIGNALS ──────────────────────────────────────────────────────────────┐
+│WT /Users/fixture/code/tokenplay  Risk detected                               │
+│CL claude-critical Ctx +Critical 160.0k>180.0k                                │
+│CL claude-critical Cmp auto 188.0k>100.0k -Critical                           │
+│CL claude-warning Ctx +Warning 120.0k>150.0k                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+j/k | Enter Inspect | ? Help | q Quit                              fixture ready

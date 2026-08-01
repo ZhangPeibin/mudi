@@ -1,0 +1,24 @@
+┌ TokenPlay ───────────────────────────────────────────────────────────────────┐
+│ [1]   [2]   [3]                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Session detail - Esc to go back ─────────────────────────────────────────────┐
+│Provider      Claude Code / Busy                                              │
+│Project       tokenplay                                                       │
+│Session       claude-critical                                                 │
+│Model┌ Copy source metadata ────────────────────────────────────────────┐     │
+│Conte│Choose one complete metadata value                                │     │
+│Atten│> Source log   /Users/fixture/.claude/projects/-Users-fixture-code│     │
+│  CRI│  Worktree     /Users/fixture/code/tokenplay                      │     │
+│  WAR│  cwd          /Users/fixture/code/tokenplay                      │     │
+│Curre│  Session ID   claude-critical                                    │     │
+│in 1.│                                                                  │     │
+│Trans│                                                                  │     │
+│in 12│                                                                  │2    │
+│Workt└───────────────────────────────────────── Enter Copy | Esc Cancel ┘     │
+│cwd           /Users/fixture/code/tokenplay                                   │
+│Source log    /Users/fixture/.claude/projects/-Users-fixture-code-tokenplay/cl│
+│              aude-critical.jsonl                                             │
+│Source format JSONL                                                           │
+│Compactions (2)                                                               │
+└──────────────────────────────────────────────────────────── lines 1-18 of 20 ┘
+j/k Select | Enter Copy | Esc Cancel                   Estimated using API rates
