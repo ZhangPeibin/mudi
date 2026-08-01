@@ -7,10 +7,10 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Last updated | 2026-07-30 |
+| Last updated | 2026-08-01 |
 | Product phase | Post-v1 exploration |
 | Related baseline | `docs/spec.md` |
-| Prototypes | `examples/attention_ui_prototype.rs`, `docs/prototype-attention/renders/` |
+| Production render evidence | `tests/fixtures/production-renders/` |
 
 ## 1. Document contract
 
@@ -554,11 +554,12 @@ Current Context percentage, selection, and Inspect remain available in the compa
 Below the hard minimum, render a terminal-too-small state with the required and current
 dimensions plus Quit; do not attempt the normal layout.
 
-The bounds were validated with the deterministic Ratatui prototype renders under
-`docs/prototype-attention/renders/`. Both sizes preserve the required hierarchy, state,
-Context percentage, selection, and primary action without overlap; compact Detail uses
-vertical scrolling only for lower-priority Compaction rows after identity, Usage, and
-complete wrapped source metadata remain available.
+The bounds are locked by deterministic production Ratatui renders under
+`tests/fixtures/production-renders/`, asserted through the public production UI in
+`tests/production_renders.rs`. Both sizes preserve the required hierarchy, state, Context
+percentage, selection, and primary action without overlap; compact Detail uses vertical
+scrolling only for lower-priority Compaction rows after identity, Usage, and complete
+wrapped source metadata remain available.
 
 ### UI-008 - Context progress bar
 
