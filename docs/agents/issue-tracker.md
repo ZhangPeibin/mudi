@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs live in GitHub Issues for `ZhangPeibin/TokenPlay`.
+Issues and PRDs live in GitHub Issues for `ZhangPeibin/SessionMesh`.
 Use the `gh` CLI for all operations.
 
 ## Conventions

@@ -1,4 +1,4 @@
-# TokenPlay Attention-First UI PRD
+# SessionMesh Attention-First UI PRD
 
 > Living document. This PRD captures the proposed product direction discussed after v1.
 > New requirement points should be reviewed here and marked with an explicit decision
@@ -44,7 +44,7 @@ deciding what to do.
 
 ## 3. Product position
 
-TokenPlay should evolve from a token and session monitor into a local attention console
+SessionMesh should evolve from a token and session monitor into a local attention console
 for concurrent AI coding sessions.
 
 The product promise is:
@@ -100,7 +100,7 @@ main-page region in the first attention-first implementation.
 
 **Status: Confirmed**
 
-At the beginning of use, TokenPlay presents a small dismissible Help overlay that explains
+At the beginning of use, SessionMesh presents a small dismissible Help overlay that explains
 the `1/2/3` mapping and essential keyboard controls. This keeps the persistent navigation
 compact without making the numeric mapping undiscoverable.
 
@@ -192,7 +192,7 @@ Items with the same rank use condition-specific evidence strength first:
 Remaining ties use the most recent relevant transition or activity, then canonical Project
 and Worktree path, then Provider plus native Session ID. If an Idle transition timestamp
 is unavailable, last activity is the permitted ordering fallback. These rules form a
-visible, deterministic lexicographic order; TokenPlay must not replace them with an opaque
+visible, deterministic lexicographic order; SessionMesh must not replace them with an opaque
 weighted score.
 
 ## 8. Main screen (`1`)
@@ -257,7 +257,7 @@ The count uses provider-native Session identity, not the number of discovered so
 paths.
 
 Sharing only a Project while using separate Worktrees does not create this risk. If
-Worktree identity cannot be resolved, the state is unknown and TokenPlay must not infer a
+Worktree identity cannot be resolved, the state is unknown and SessionMesh must not infer a
 risk. Shared Worktree Risk reports structural exposure only; it does not claim that the
 Sessions edit the same files or that a file-level or Git merge conflict has occurred.
 
@@ -275,7 +275,7 @@ History, filters, search, a timeline inspector, and long-term retention are Defe
 
 Recent Signals are process-lifetime only. The initial scan establishes a baseline and
 does not emit Signals for conditions that already exist. Only changes observed after that
-baseline are recorded; quitting TokenPlay clears the list, and the next launch starts with
+baseline are recorded; quitting SessionMesh clears the list, and the next launch starts with
 a new empty list. Current conditions discovered at launch still appear immediately in
 `NOW`.
 
@@ -292,11 +292,11 @@ It does not record Idle-to-Busy changes, Busy heartbeats, ordinary Context perce
 changes, Usage or Cost changes, source-file timestamp changes, unchanged polling
 observations, or `Possible Stall`.
 
-When one Compaction observation also clears a Context Alert, TokenPlay emits one compound
+When one Compaction observation also clears a Context Alert, SessionMesh emits one compound
 Recent Signal containing the Compaction evidence, Context before/after values, and cleared
 Alert rather than occupying multiple rows.
 
-`RECENT SIGNALS` retains at most the five newest Signals for the current TokenPlay process
+`RECENT SIGNALS` retains at most the five newest Signals for the current SessionMesh process
 and renders them newest first. A compact viewport may render fewer than five when required
 to preserve `NOW`; the region does not scroll, expand, or link to additional history. A
 new Signal is inserted at the top and evicts the oldest retained Signal when the limit is
@@ -334,14 +334,14 @@ Recent Signal; repeated observations of an unchanged Idle Session are not new si
 - `Enter` on a Session-scoped Recent Signal opens that Session's full-page Detail.
 - `Enter` on a Shared Worktree Risk Signal switches to page `1` and focuses the matching
   Worktree in `NOW`. If the risk has cleared and the Worktree no longer contains an Open
-  Session, TokenPlay stays on the Signal and briefly reports
+  Session, SessionMesh stays on the Signal and briefly reports
   `Worktree is no longer open` in the status line.
 - Duplicate polling observations do not produce duplicate Recent Signals.
 - A threshold crossing produces one Recent Signal per crossing and may produce another
   when the condition clears.
 - A Compaction and the Context Alert it clears appear as one compound Recent Signal.
 - Recent Signals never contain prompt, response, tool, or source-code content.
-- Restarting TokenPlay starts `RECENT SIGNALS` empty without affecting current conditions
+- Restarting SessionMesh starts `RECENT SIGNALS` empty without affecting current conditions
   shown in `NOW`.
 - The two remaining regions have no product label or behavior until separately confirmed.
 
@@ -411,7 +411,7 @@ Session detail remains the evidence surface and should contain:
 
 Session Detail does not repeat `RECENT SIGNALS`, add a Recent Transitions list, or expose
 a Signal timeline. Compactions remain because they are provider-recorded transcript
-metadata that can be rebuilt independently of TokenPlay's process-lifetime Signals.
+metadata that can be rebuilt independently of SessionMesh's process-lifetime Signals.
 
 ### UI-013 - Full-page Session Detail
 
@@ -473,7 +473,7 @@ Session detail should expose the exact local source metadata needed to locate a 
 
 The current implementation already indexes the source-log path and carries `cwd`, but the
 normalized UI `Session` does not retain the source path. Session Detail displays complete
-paths even when compact lists truncate them. TokenPlay must not read or display raw JSONL
+paths even when compact lists truncate them. SessionMesh must not read or display raw JSONL
 contents, prompt/response content, tool content, or source-code content through this view.
 
 Pressing `c` in Session Detail opens a Copy menu containing available values for source-log
@@ -498,14 +498,14 @@ Theme defines at least:
   Exited/unknown;
 - Context roles: normal, Warning, and Critical.
 
-TokenPlay ships with a built-in `tokenplay` Theme as the default. `t` cycles through the
+SessionMesh ships with a built-in `sessionmesh` Theme as the default. `t` cycles through the
 available built-in Themes at runtime, briefly reports `Theme: <name>` in the status line,
 and stores the choice as a local Profile preference outside the disposable Session index.
 The next launch restores that choice.
 
 The first implementation includes six built-in Themes in cycle order:
 
-1. `tokenplay` - the default dark Theme;
+1. `sessionmesh` - the default dark Theme;
 2. `catppuccin` - Catppuccin Mocha;
 3. `dracula`;
 4. `gruvbox` - Gruvbox Dark;
@@ -517,7 +517,7 @@ implementation. Additional built-in Themes may be added later without changing T
 semantics or keyboard behavior.
 
 `--theme <name>` overrides the saved Theme for the current process without changing the
-saved preference. An unknown or unavailable Theme name falls back to `tokenplay` instead
+saved preference. An unknown or unavailable Theme name falls back to `sessionmesh` instead
 of preventing startup.
 
 Theme changes affect presentation only. They never change thresholds, severity, ordering,
@@ -575,7 +575,7 @@ Theme roles for Open Sessions follow the Context thresholds:
 - 70% through 84% - Context Warning;
 - 85% and above - Context Critical.
 
-The default `tokenplay` Theme maps these roles to green, amber/yellow, and red. Other
+The default `sessionmesh` Theme maps these roles to green, amber/yellow, and red. Other
 Themes may use different accessible colors without changing the thresholds or labels.
 
 The percentage remains visible so color is not the only signal. When the context window
@@ -631,8 +631,8 @@ The existing privacy contract remains non-negotiable:
 - local processing only;
 - provider sessions remain distinct even when grouped by project.
 
-TokenPlay remains read-only. Labels such as `Resume`, `Stop`, or `Start fresh` must not
-imply that TokenPlay performs those actions. The primary action is `Inspect` unless a
+SessionMesh remains read-only. Labels such as `Resume`, `Stop`, or `Start fresh` must not
+imply that SessionMesh performs those actions. The primary action is `Inspect` unless a
 separate, explicitly approved command-launching capability is specified later.
 
 ## 14. Technical capability gaps
@@ -667,7 +667,7 @@ behavior; current Attention Conditions remain derived entirely from observable s
 Full Signal History is Deferred to a later requirement. The first implementation provides
 only the bounded `RECENT SIGNALS` list and does not include a History page or overlay,
 global/Project/Session filters, search, a timeline inspector, or long-term event retention.
-Recent Signals exist only for the current TokenPlay process and require no persistent event
+Recent Signals exist only for the current SessionMesh process and require no persistent event
 store.
 
 ## 15. Product success criteria
@@ -702,9 +702,9 @@ and direct usability observation.
 | 2026-07-30 | Introduce the numeric mapping and essential keys in a small startup Help overlay. | Confirmed | Preserves discoverability without permanent explanatory text. |
 | 2026-07-30 | Defer full Signal History and keep only `RECENT SIGNALS` in the first implementation. | Deferred | A bounded recent-change list covers the immediate return-to-terminal job without adding another view, filters, search, and long-term event retention. |
 | 2026-07-30 | Do not use a separate Attention Inbox as the default-screen structure. | Rejected | The main screen uses one non-duplicated current Session inventory instead. |
-| 2026-07-30 | Keep TokenPlay read-only and use `Inspect` as the primary action. | Confirmed | Preserves the existing v1 trust boundary. |
-| 2026-07-30 | Use Theme-defined semantic colors, with severity and state rather than Provider owning alert meaning. | Confirmed | A default Theme gives TokenPlay a coherent identity while runtime cycling, Profile persistence, and accessible alternatives can change presentation without changing behavior. |
-| 2026-07-30 | Ship six built-in Themes and defer user-authored palettes. | Confirmed | TokenPlay, Catppuccin, Dracula, Gruvbox, Light, and High Contrast cover mainstream dark, bright-terminal, and accessibility needs without expanding first-version configuration and validation across a large palette catalog. |
+| 2026-07-30 | Keep SessionMesh read-only and use `Inspect` as the primary action. | Confirmed | Preserves the existing v1 trust boundary. |
+| 2026-07-30 | Use Theme-defined semantic colors, with severity and state rather than Provider owning alert meaning. | Confirmed | A default Theme gives SessionMesh a coherent identity while runtime cycling, Profile persistence, and accessible alternatives can change presentation without changing behavior. |
+| 2026-07-30 | Ship six built-in Themes and defer user-authored palettes. | Confirmed | SessionMesh, Catppuccin, Dracula, Gruvbox, Light, and High Contrast cover mainstream dark, bright-terminal, and accessibility needs without expanding first-version configuration and validation across a large palette catalog. |
 | 2026-07-30 | Show complete working-directory and source-log metadata in Session Detail without exposing raw contents. | Confirmed | Local paths and native identity support investigation, while raw JSONL, prompt/response, tool, and source-code content remain outside the privacy boundary. |
 | 2026-07-30 | Group provider-page sessions by Project while retaining one row per Session. | Confirmed | Project supplies context without losing session-specific state or detail navigation. |
 | 2026-07-30 | Render Current Context as a percentage progress bar with threshold colors. | Confirmed | Makes context pressure scannable while retaining precise text and unknown-state handling. |
@@ -727,7 +727,7 @@ and direct usability observation.
 | 2026-07-30 | Integrate Project and Worktree organization into `NOW` instead of creating a separate Projects capability. | Confirmed | The main page already owns the cross-Provider Open Session inventory; a second view would duplicate the same Sessions and conflict with the fixed three-page navigation. |
 | 2026-07-30 | Keep Processed Usage and Estimated Cost off the main screen. | Confirmed | `NOW` prioritizes current action and evidence; Current Context remains because it is operational state, while cumulative usage and cost stay in Provider pages and Session detail. |
 | 2026-07-30 | Defer `Acknowledge` and `Snooze` to a later requirement. | Deferred | A factual current-state view does not yet need user-authored suppression state, expiry rules, persistence, or dedicated commands. |
-| 2026-07-30 | Keep `RECENT SIGNALS` process-lifetime only. | Confirmed | Live state transitions cannot be reconstructed reliably after TokenPlay was closed; an initial snapshot is a baseline, not a set of newly observed events. |
+| 2026-07-30 | Keep `RECENT SIGNALS` process-lifetime only. | Confirmed | Live state transitions cannot be reconstructed reliably after SessionMesh was closed; an initial snapshot is a baseline, not a set of newly observed events. |
 | 2026-07-30 | Limit Recent Signals to actionable lifecycle, Context, Compaction, and Shared Worktree Risk changes. | Confirmed | Excluding Idle-to-Busy, heartbeats, ordinary metric changes, and unchanged polls keeps the bounded list focused; a Compaction and its resulting Alert clear are one compound Signal. |
 | 2026-07-30 | Retain at most the five newest Recent Signals without scrolling or expansion. | Confirmed | Five changes provide short return-to-terminal context without recreating the Deferred Signal History capability; compact layouts yield space to `NOW` first. |
 | 2026-07-30 | Use `80x24` as the hard minimum and `120x30` as the full-layout target. | Confirmed | Deterministic interactive Ratatui renders at both sizes preserved the required hierarchy, state, Context, selection, actions, and complete Detail metadata without overlap; `79x23` correctly falls back to the terminal-too-small state. |

@@ -1,4 +1,4 @@
-# TokenPlay — product specification (v1)
+# SessionMesh — product specification (v1)
 
 ## What it is
 
@@ -62,7 +62,7 @@ current page and are no-ops when only one region is focusable · `t` cycles Them
 Project's `OLDER SESSIONS` · `?` opens Help · `Esc` returns from Detail or closes the
 current layer · `r` forces a rescan · `q` quits.
 
-Theme cycle order: `tokenplay`, `catppuccin`, `dracula`, `gruvbox`, `light`, then
-`high-contrast`. `tokenplay` is the default. Runtime selection is saved in the local
+Theme cycle order: `sessionmesh`, `catppuccin`, `dracula`, `gruvbox`, `light`, then
+`high-contrast`. `sessionmesh` is the default. Runtime selection is saved in the local
 Profile unless `--theme <name>` supplied the process-local override. Unknown Theme names
-fall back to `tokenplay` without preventing startup.
+fall back to `sessionmesh` without preventing startup.

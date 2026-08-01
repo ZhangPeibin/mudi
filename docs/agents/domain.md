@@ -1,6 +1,6 @@
 # Domain Docs
 
-TokenPlay is a single-context repository.
+SessionMesh is a single-context repository.
 
 ## Before exploring
 

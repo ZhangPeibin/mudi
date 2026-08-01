@@ -1,20 +1,17 @@
-# TokenPlay
+# SessionMesh
 
 A fully local, read-only **macOS TUI** for observing **Claude Code** and **Codex CLI**
 coding sessions in one terminal — current context pressure, live Busy/Idle/exited state,
 meaningful recent transitions, Current Run and Transcript Lifetime Usage with API-rate
 dollar estimates, and compaction history.
 
-> Metadata only. TokenPlay never reads prompts, tool calls, or file content into storage.
-
-`tokenplay` is a working name; unrelated Web3 products already use "TokenPlay". Revisit
-before any public release.
+> Metadata only. SessionMesh never reads prompts, tool calls, or file content into storage.
 
 ## Highlights
 
 - **Three numeric pages:** `[1]` All, `[2]` Claude Code, `[3]` Codex CLI.
 - **First-use Help:** opens once per local Profile and remains available through `?`.
-- **Six semantic Themes:** `tokenplay`, `catppuccin`, `dracula`, `gruvbox`, `light`, and
+- **Six semantic Themes:** `sessionmesh`, `catppuccin`, `dracula`, `gruvbox`, `light`, and
   `high-contrast`, selectable without changing Session semantics.
 - **Accurate context semantics** per provider (see `CONTEXT.md`).
 - **Live lifecycle:** Busy / Idle / exited, with PID-reuse-safe detection on macOS.
@@ -41,8 +38,8 @@ Keys: `1-3` open pages · `Tab`/`Shift+Tab` move focus within a page · `t` cycl
 
 ```sh
 cargo test                                   # unit + render smoke tests
-TOKENPLAY_DATA_DIR=$(mktemp -d) cargo run --example scan     # pipeline summary
-TOKENPLAY_DATA_DIR=$(mktemp -d) cargo run --example render   # off-screen TUI render
+SESSIONMESH_DATA_DIR=$(mktemp -d) cargo run --example scan     # pipeline summary
+SESSIONMESH_DATA_DIR=$(mktemp -d) cargo run --example render   # off-screen TUI render
 ```
 
 ## Configuration
@@ -51,18 +48,18 @@ Standard paths with environment overrides:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TOKENPLAY_CLAUDE_DIR` | `~/.claude` | Claude data root |
-| `TOKENPLAY_CODEX_DIR` | `~/.codex` | Codex data root |
-| `TOKENPLAY_DATA_DIR` | `~/Library/Application Support/tokenplay` | index, Profile, and pricing files |
-| `TOKENPLAY_EXTRA_DIRS` | — | colon-separated extra log dirs |
+| `SESSIONMESH_CLAUDE_DIR` | `~/.claude` | Claude data root |
+| `SESSIONMESH_CODEX_DIR` | `~/.codex` | Codex data root |
+| `SESSIONMESH_DATA_DIR` | `~/Library/Application Support/sessionmesh` | index, Profile, and pricing files |
+| `SESSIONMESH_EXTRA_DIRS` | — | colon-separated extra log dirs |
 
 Local pricing override: drop a `pricing.json` (same shape as `pricing/models.json`) in
-`TOKENPLAY_DATA_DIR`.
+`SESSIONMESH_DATA_DIR`.
 
 The disposable Session index is `index.db`. Local Profile preferences are stored
 separately in `profile.json`; deleting that file restores first-use Help and the default
-`tokenplay` Theme. `--theme <name>` overrides the saved Theme for one process without
-changing the Profile; unknown names fall back to `tokenplay`.
+`sessionmesh` Theme. `--theme <name>` overrides the saved Theme for one process without
+changing the Profile; unknown names fall back to `sessionmesh`.
 
 ## Layout
 

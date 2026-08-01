@@ -1,6 +1,6 @@
-# CONTEXT.md — TokenPlay domain model
+# CONTEXT.md — SessionMesh domain model
 
-TokenPlay is a fully local, read-only macOS TUI for observing **Claude Code** and
+SessionMesh is a fully local, read-only macOS TUI for observing **Claude Code** and
 **Codex CLI** coding sessions. It is an AI coding-session *observability* tool, not a
 provider billing dashboard. Source JSONL logs are the source of truth; everything else
 is a disposable, rebuildable derivation.

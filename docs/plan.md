@@ -1,4 +1,4 @@
-# TokenPlay — implementation plan (v1)
+# SessionMesh — implementation plan (v1)
 
 ## Architecture
 
@@ -29,8 +29,8 @@ state detector (state.rs, macOS)      SQLite index (index/) — disposable, rebu
 
 ## Modules
 
-- `config.rs` — data dirs, env overrides (`TOKENPLAY_CLAUDE_DIR`, `TOKENPLAY_CODEX_DIR`,
-  `TOKENPLAY_DATA_DIR`, `TOKENPLAY_EXTRA_DIRS`), thresholds.
+- `config.rs` — data dirs, env overrides (`SESSIONMESH_CLAUDE_DIR`, `SESSIONMESH_CODEX_DIR`,
+  `SESSIONMESH_DATA_DIR`, `SESSIONMESH_EXTRA_DIRS`), thresholds.
 - `domain.rs` — `Provider`, `SessionState`, `Usage`, `ContextState`, `ModelUsage`,
   `Compaction`, `Session`, `Snapshot`.
 - `pricing.rs` — bundled rate card (embedded JSON) + local override + estimator.

@@ -16,7 +16,7 @@
   may legitimately be absent.
 - [Serde: Using derive](https://serde.rs/derive.html)
   Official Serde guide to generated serialization implementations. Use for: the
-  `Serialize` and `Deserialize` derives used by TokenPlay's domain types.
+  `Serialize` and `Deserialize` derives used by SessionMesh's domain types.
 - [Ratatui: `TestBackend`](https://docs.rs/ratatui/0.29.0/ratatui/backend/struct.TestBackend.html)
   Official API reference for rendering terminal widgets into an in-memory buffer. Use
   for: deterministic layout fixtures and terminal-size validation without a live TTY.
