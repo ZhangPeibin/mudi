@@ -6,7 +6,9 @@
 mod theme;
 
 use crate::app::{fmt_context, fmt_cost, fmt_datetime, fmt_relative, fmt_tokens, Snapshot, Tab};
-use crate::attention::{AttentionCondition, AttentionEngine, AttentionRank, AttentionSnapshot};
+use crate::attention::{
+    AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity, AttentionSnapshot,
+};
 use crate::clipboard::Clipboard;
 use crate::domain::{
     ModelUsage, Project, ProjectIdentity, Provider, Session, SessionState, Usage, Worktree,
@@ -28,6 +30,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use theme::{Theme, ThemeName};
+
+const MIN_TERMINAL_WIDTH: u16 = 80;
+const MIN_TERMINAL_HEIGHT: u16 = 24;
 
 /// Shared style for the currently-selected item.
 fn selected_style(theme: Theme) -> Style {
@@ -629,6 +634,10 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
         Block::default().style(Style::default().fg(theme.foreground).bg(theme.background)),
         f.area(),
     );
+    if f.area().width < MIN_TERMINAL_WIDTH || f.area().height < MIN_TERMINAL_HEIGHT {
+        draw_terminal_too_small(f, theme);
+        return;
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -662,6 +671,37 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     if ui.help_open {
         draw_help(f, theme);
     }
+}
+
+fn draw_terminal_too_small(f: &mut Frame, theme: Theme) {
+    let current = f.area();
+    let area = centered_rect(100, 40, current);
+    let lines = vec![
+        Line::from(Span::styled(
+            "Terminal too small",
+            Style::default()
+                .fg(theme.critical)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!(
+            "Required: {MIN_TERMINAL_WIDTH}x{MIN_TERMINAL_HEIGHT}"
+        )),
+        Line::from(format!("Current: {}x{}", current.width, current.height)),
+        Line::from(""),
+        Line::from("q Quit"),
+    ];
+    f.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(theme.foreground).bg(theme.background))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.critical)),
+            ),
+        area,
+    );
 }
 
 fn draw_copy_menu(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
@@ -814,7 +854,7 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     };
     let attention = current_attention(snap);
     let now = group_open_sessions(&snap.sessions, &attention);
-    let now_ms = Local::now().timestamp_millis();
+    let now_ms = snapshot_now_ms(snap);
     let content_width = now_area.width.saturating_sub(2) as usize;
     let mut lines = Vec::new();
     let mut selectable = 0usize;
@@ -902,6 +942,11 @@ fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], ui: 
         ))]
     } else {
         let mut lines = Vec::new();
+        let compact = signals
+            .iter()
+            .map(|signal| recent_signal_lines(signal, width).len())
+            .sum::<usize>()
+            > height;
         for (index, signal) in signals.iter().enumerate() {
             let style = if ui.all_region == AllRegion::RecentSignals && index == ui.signal_selected
             {
@@ -909,7 +954,11 @@ fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], ui: 
             } else {
                 Style::default().fg(theme.foreground)
             };
-            for text in recent_signal_lines(signal, width) {
+            let max_signal_lines = if compact { 1 } else { usize::MAX };
+            for text in recent_signal_lines(signal, width)
+                .into_iter()
+                .take(max_signal_lines)
+            {
                 if lines.len() == height {
                     break;
                 }
@@ -1092,13 +1141,16 @@ fn current_attention(snap: &Snapshot) -> Cow<'_, AttentionSnapshot> {
     match snap.attention.as_ref() {
         Some(attention) => Cow::Borrowed(attention),
         None => {
-            let observed_at_ms = if snap.generated_ms > 0 {
-                snap.generated_ms
-            } else {
-                Local::now().timestamp_millis()
-            };
-            Cow::Owned(AttentionEngine::default().update(&snap.sessions, observed_at_ms))
+            Cow::Owned(AttentionEngine::default().update(&snap.sessions, snapshot_now_ms(snap)))
         }
+    }
+}
+
+fn snapshot_now_ms(snap: &Snapshot) -> i64 {
+    if snap.generated_ms > 0 {
+        snap.generated_ms
+    } else {
+        Local::now().timestamp_millis()
     }
 }
 
@@ -1490,7 +1542,7 @@ fn provider_page_rows<'a>(
 
 fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let provider_rows = ui.provider_page_rows(snap);
-    let now = Local::now().timestamp_millis();
+    let now = snapshot_now_ms(snap);
     let theme = ui.theme.palette();
 
     if provider_rows.is_empty() {
@@ -1586,11 +1638,11 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         Constraint::Length(7),
         Constraint::Length(20),
         Constraint::Length(18),
-        Constraint::Length(15),
-        Constraint::Length(31),
-        Constraint::Length(8),
+        Constraint::Length(14),
+        Constraint::Length(34),
         Constraint::Length(7),
-        Constraint::Length(4),
+        Constraint::Length(7),
+        Constraint::Length(3),
     ];
 
     let table = Table::new(rows, widths)
@@ -1917,6 +1969,11 @@ fn draw_detail(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     };
     let theme = ui.theme.palette();
 
+    if area.width <= 120 {
+        draw_compact_detail(f, area, snap, ui, s, theme);
+        return;
+    }
+
     let mut lines: Vec<Line> = Vec::new();
     let hdr = |k: &str, v: String| {
         Line::from(vec![
@@ -2098,26 +2155,297 @@ fn draw_detail(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     f.render_widget(p, area);
 }
 
+fn draw_compact_detail(
+    f: &mut Frame,
+    area: Rect,
+    snap: &Snapshot,
+    ui: &Ui,
+    session: &Session,
+    theme: Theme,
+) {
+    let field = |key: &str, value: String| {
+        Line::from(vec![
+            Span::styled(format!("{key:<14}"), Style::default().fg(theme.muted)),
+            Span::styled(value, Style::default().fg(theme.foreground)),
+        ])
+    };
+    let section = |label: String| {
+        Line::from(Span::styled(
+            label,
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ))
+    };
+    let state = match session.state {
+        SessionState::Busy => "Busy",
+        SessionState::Idle => "Idle",
+        SessionState::Exited => "Exited",
+    };
+    let context = match session.context.percent() {
+        Some(percent) => format!(
+            "{} / {} ({percent:.1}%)",
+            fmt_tokens(session.context.tokens),
+            session
+                .context
+                .window
+                .map(fmt_tokens)
+                .unwrap_or_else(|| "N/A".into())
+        ),
+        None => format!("{} / N/A (N/A)", fmt_tokens(session.context.tokens)),
+    };
+    let usage_line = |usage: &Usage, cost: Option<f64>| {
+        format!(
+            "in {} | out {} | cache read {} | cache create {} | API est. {}",
+            fmt_tokens(usage.input),
+            fmt_tokens(usage.output),
+            fmt_tokens(usage.cache_read),
+            fmt_tokens(usage.cache_write),
+            fmt_cost(cost),
+        )
+    };
+
+    let mut lines = vec![
+        field(
+            "Provider",
+            format!("{} / {state}", session.provider.label()),
+        ),
+        field(
+            "Project",
+            session
+                .project
+                .as_ref()
+                .map(|project| project.label.clone())
+                .unwrap_or_else(|| "N/A".into()),
+        ),
+        field("Session", session.id.clone()),
+        field(
+            "Model",
+            session.latest_model.clone().unwrap_or_else(|| "N/A".into()),
+        ),
+        field("Context", context),
+        section("Attention Conditions".into()),
+    ];
+    let attention = current_attention(snap);
+    let conditions = attention.conditions_for(session);
+    if session.state == SessionState::Exited {
+        lines.push(Line::from(Span::styled(
+            "  None - Exited Session has no current Attention Conditions",
+            Style::default().fg(theme.muted),
+        )));
+    } else if conditions.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  None - healthy Busy Session",
+            Style::default().fg(theme.busy),
+        )));
+    } else {
+        for condition in conditions {
+            let (text, style) = match condition {
+                AttentionCondition::ContextAlert {
+                    severity,
+                    percentage,
+                    threshold_percent,
+                    ..
+                } => {
+                    let label = match severity {
+                        AttentionSeverity::Critical => "CRITICAL",
+                        AttentionSeverity::Warning => "WARNING",
+                    };
+                    let color = match severity {
+                        AttentionSeverity::Critical => theme.critical,
+                        AttentionSeverity::Warning => theme.warning,
+                    };
+                    (
+                        format!(
+                            "  {label} Current Context {percentage:.1}% >= {threshold_percent}%"
+                        ),
+                        Style::default().fg(color),
+                    )
+                }
+                AttentionCondition::SharedWorktreeRisk {
+                    contributing_sessions,
+                    ..
+                } => (
+                    format!("  WARNING Shared Worktree Risk x{contributing_sessions}"),
+                    Style::default().fg(theme.warning),
+                ),
+                AttentionCondition::Idle { since_ms, .. } => (
+                    format!(
+                        "  IDLE awaiting input for {}",
+                        fmt_relative(*since_ms, snapshot_now_ms(snap))
+                    ),
+                    Style::default().fg(theme.idle),
+                ),
+            };
+            lines.push(Line::from(Span::styled(text, style)));
+        }
+    }
+
+    if session.state.is_open() {
+        lines.push(section("Current Run Usage".into()));
+        match &session.current_run_usage {
+            Some(run) => lines.push(Line::from(usage_line(&run.usage, run.cost))),
+            None => lines.push(Line::from("N/A")),
+        }
+    }
+    lines.push(section("Transcript Lifetime Usage".into()));
+    lines.push(Line::from(usage_line(&session.usage, session.cost)));
+    let source_width = area.width.saturating_sub(2) as usize;
+    push_wrapped_detail_field(
+        &mut lines,
+        "Worktree",
+        &session.worktree.as_ref().map_or_else(
+            || "N/A".into(),
+            |worktree| {
+                format!(
+                    "{} @ {}",
+                    worktree.root.display(),
+                    worktree.branch.as_deref().unwrap_or("detached HEAD")
+                )
+            },
+        ),
+        source_width,
+        theme,
+    );
+    push_wrapped_detail_field(
+        &mut lines,
+        "cwd",
+        session.cwd.as_deref().unwrap_or("N/A"),
+        source_width,
+        theme,
+    );
+    let source_log = CopyField::SourceLog
+        .value(session)
+        .map(Cow::into_owned)
+        .unwrap_or_else(|| "N/A".into());
+    push_wrapped_detail_field(&mut lines, "Source log", &source_log, source_width, theme);
+    push_wrapped_detail_field(
+        &mut lines,
+        "Source format",
+        session.source.format.label(),
+        source_width,
+        theme,
+    );
+    lines.push(section(format!(
+        "Compactions ({})",
+        session.compaction_count()
+    )));
+    if session.compactions.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  none observed",
+            Style::default().fg(theme.muted),
+        )));
+    } else {
+        for compaction in &session.compactions {
+            lines.push(Line::from(format!(
+                "  {} ago  trigger={}  pre={}",
+                fmt_relative(compaction.at_ms, snapshot_now_ms(snap)),
+                compaction.trigger.as_deref().unwrap_or("N/A"),
+                compaction
+                    .pre_tokens
+                    .map(fmt_tokens)
+                    .unwrap_or_else(|| "N/A".into())
+            )));
+        }
+    }
+
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let wrap = Wrap { trim: false };
+    let total_lines = Paragraph::new(lines.clone())
+        .wrap(wrap)
+        .line_count(area.width.saturating_sub(2));
+    let max_scroll = total_lines.saturating_sub(inner_height);
+    let scroll = ui
+        .detail
+        .as_ref()
+        .map_or(0, |detail| detail.scroll.min(max_scroll));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(Span::styled(
+            " Session detail - Esc to go back ",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(
+                    " lines {}-{} of {} ",
+                    scroll + usize::from(total_lines > 0),
+                    (scroll + inner_height).min(total_lines),
+                    total_lines
+                ),
+                Style::default().fg(theme.muted),
+            ))
+            .right_aligned(),
+        );
+    f.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(theme.foreground).bg(theme.background))
+            .block(block)
+            .scroll((scroll as u16, 0))
+            .wrap(wrap),
+        area,
+    );
+}
+
+fn push_wrapped_detail_field(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    value: &str,
+    width: usize,
+    theme: Theme,
+) {
+    const LABEL_WIDTH: usize = 14;
+    let value_width = width.saturating_sub(LABEL_WIDTH).max(1);
+    let characters = value.chars().collect::<Vec<_>>();
+    let chunks = characters.chunks(value_width).collect::<Vec<_>>();
+    for (index, chunk) in chunks.iter().enumerate() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                if index == 0 {
+                    format!("{label:<LABEL_WIDTH$}")
+                } else {
+                    " ".repeat(LABEL_WIDTH)
+                },
+                Style::default().fg(theme.muted),
+            ),
+            Span::styled(
+                chunk.iter().collect::<String>(),
+                Style::default().fg(theme.foreground),
+            ),
+        ]));
+    }
+    if chunks.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("{label:<LABEL_WIDTH$}"),
+            Style::default().fg(theme.muted),
+        )));
+    }
+}
+
 // ---- footer ----
 
 fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
+    let compact = area.width < 100;
     let left = if ui.copy_menu_is_open() && area.width < 100 {
         "j/k Select | Enter Copy | Esc Cancel"
     } else if ui.copy_menu_is_open() {
         "Up/Down or j/k Select | Enter Copy | Esc Cancel"
     } else if ui.detail.is_some() && area.width < 100 {
-        "Esc Back | j/k Scroll | 1/2/3 Page"
+        "Esc Back | j/k Scroll | c Copy | q Quit"
     } else if ui.detail.is_some() {
-        "Esc Back | Up/Down or j/k Scroll | c Copy | 1/2/3 Page | t Theme | ? Help | q Quit"
+        "Esc | j/k Scroll | c Copy | 1/2/3 | t Theme | ? | q Quit"
     } else if area.width < 100 && ui.tab == Tab::All {
-        "j/k | Enter Inspect | 1/2/3 Page | t Theme | ? | q Quit"
+        "j/k | Enter Inspect | ? Help | q Quit"
     } else if area.width < 100 {
-        "j/k | Enter Inspect/Expand | t Theme | ? | q Quit"
+        "j/k | Enter Inspect/Expand | ? Help | q Quit"
     } else if ui.tab == Tab::All {
-        "j/k Move | Enter Inspect | 1/2/3 Page | r Scan | t Theme | ? Help | q Quit"
+        "j/k | Enter Inspect | 1/2/3 | r | t Theme | ? | q Quit"
     } else {
-        "j/k Move | Enter Inspect/Expand | 1/2/3 Page | t Theme | ? Help | q Quit"
+        "j/k | Enter Inspect/Expand | 1/2/3 | t Theme | ? | q Quit"
     };
     let now = Instant::now();
     let status_notice = ui
@@ -2133,15 +2461,32 @@ fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     } else {
         snap.status.clone()
     };
-    let right = if ui.tab == Tab::All && ui.detail.is_none() {
+    let shows_price_note = ui.tab != Tab::All || ui.detail.is_some();
+    let right = if compact && shows_price_note && status_notice.is_none() && !theme_notice {
+        "Estimated using API rates".to_string()
+    } else if ui.tab == Tab::All && ui.detail.is_none() {
         status
     } else {
         format!("{status}   ·   Estimated using API rates")
     };
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(area);
+    let cols = if compact {
+        let available = area
+            .width
+            .saturating_sub(left.chars().count() as u16)
+            .saturating_sub(1);
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length((right.chars().count() as u16).min(available)),
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(area)
+    };
     f.render_widget(
         Paragraph::new(Span::styled(left, Style::default().fg(theme.muted))),
         cols[0],
@@ -3409,7 +3754,7 @@ mod tests {
             .unwrap();
         let detail = render_terminal_with_snapshot(&ui, &snapshot);
         assert_eq!(
-            rendered_style_at(&detail, "Current Context").fg,
+            rendered_style_at(&detail, "Attention Conditions").fg,
             Some(Color::Rgb(25, 91, 130))
         );
         assert_eq!(
@@ -4379,24 +4724,21 @@ mod tests {
             "tokenplay",
             "Worktree",
             "/Users/x/code/tokenplay",
-            "Branch",
-            "main",
+            "@ main",
             "cwd",
             "Session",
             "demo-session",
-            "Latest model",
+            "Model",
             "claude-opus-4-8",
-            "State",
             "Busy",
-            "Current Context",
+            "Context",
             "150.0k / 200.0k (75.0%)",
             "Transcript Lifetime Usage",
-            "Input",
-            "Output",
-            "Cache read",
-            "Cache write",
-            "Transcript Lifetime per-model Usage",
-            "Est. API cost",
+            "in 1.0k",
+            "out 500",
+            "cache read 200",
+            "cache create 100",
+            "API est. $0.42",
             "$0.42",
             "Compactions (1)",
             "manual",
@@ -4441,7 +4783,7 @@ mod tests {
         ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
             .unwrap();
 
-        let detail = rendered_rows_at(&ui, &snapshot, 120, 44);
+        let detail = rendered_rows_at(&ui, &snapshot, 160, 44);
 
         for expected in [
             "Current Run Usage",
@@ -4469,7 +4811,7 @@ mod tests {
         ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
             .unwrap();
 
-        let detail = rendered_rows_at(&ui, &snapshot, 120, 40);
+        let detail = rendered_rows_at(&ui, &snapshot, 160, 40);
 
         assert!(detail.contains("Current Run Usage"));
         assert!(detail.contains("Usage           N/A"));
@@ -4526,7 +4868,7 @@ mod tests {
         let detail = rendered_with_snapshot(&ui, &snapshot);
 
         assert!(detail.contains("research-notes"));
-        assert!(detail.contains("N/A (non-Git Project)"));
+        assert!(detail.contains("Worktree      N/A"));
     }
 
     #[test]
@@ -4547,7 +4889,7 @@ mod tests {
 
         let detail = rendered_with_snapshot(&ui, &snapshot);
 
-        assert!(detail.contains("Project         N/A (identity unavailable)"));
+        assert!(detail.contains("Project       N/A"));
         assert!(detail.contains("/missing/session-cwd"));
     }
 
@@ -4567,7 +4909,7 @@ mod tests {
 
         let detail = rendered_with_snapshot(&ui, &snapshot);
 
-        assert!(detail.contains("Branch          N/A (detached HEAD)"));
+        assert!(detail.contains("@ detached HEAD"));
         assert!(detail.contains("/Users/x/code/tokenplay"));
     }
 
