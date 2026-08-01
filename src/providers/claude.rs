@@ -38,6 +38,12 @@ impl ProviderAdapter for ClaudeAdapter {
 
     fn context_window(&self, model: &str) -> Option<u64> {
         let m = model.to_ascii_lowercase();
+        if m.starts_with("gpt-5.6-sol")
+            || m.starts_with("gpt-5.6-terra")
+            || m.starts_with("gpt-5.6-luna")
+        {
+            return Some(1_050_000);
+        }
         if !m.starts_with("claude") {
             return None;
         }
@@ -341,6 +347,13 @@ mod tests {
         assert_eq!(s.context.tokens, 4500);
         assert_eq!(s.context.window, Some(1_000_000));
         assert_eq!(s.latest_model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn proxied_gpt_5_6_models_use_their_documented_context_window() {
+        for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            assert_eq!(ClaudeAdapter.context_window(model), Some(1_050_000));
+        }
     }
 
     #[test]

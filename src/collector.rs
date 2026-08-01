@@ -98,6 +98,14 @@ fn to_session(
     let adapter = providers::adapter_for(parsed.provider);
     let live = adapter.live_state(detector, &source_path);
     let state = live.state;
+    let mut context = parsed.context;
+    if let Some(window) = parsed
+        .latest_model
+        .as_deref()
+        .and_then(|model| adapter.context_window(model))
+    {
+        context.window = Some(window);
+    }
 
     let (per_model, cost) = price_models(
         parsed
@@ -126,7 +134,7 @@ fn to_session(
         cwd: parsed.cwd,
         latest_model: parsed.latest_model,
         state,
-        context: parsed.context,
+        context,
         usage: parsed.usage,
         per_model,
         current_run_usage,
@@ -297,12 +305,56 @@ mod tests {
     }
 
     #[test]
+    fn build_sessions_applies_new_context_window_rules_to_cached_sessions() {
+        let cfg = Config {
+            claude_dir: PathBuf::from("/missing/claude"),
+            codex_dir: PathBuf::from("/missing/codex"),
+            data_dir: PathBuf::from("/missing/data"),
+            extra_dirs: vec![],
+        };
+        let mut index = Index::open_in_memory().unwrap();
+        let cached = crate::providers::ParsedSession {
+            provider: Provider::ClaudeCode,
+            id: "cached-proxied-session".into(),
+            cwd: None,
+            latest_model: Some("gpt-5.6-sol".into()),
+            context: crate::domain::ContextState {
+                tokens: 378_229,
+                window: None,
+            },
+            usage: Default::default(),
+            per_model: vec![],
+            compactions: vec![],
+            last_activity_ms: 0,
+        };
+        index
+            .upsert(
+                &cached,
+                Path::new("/logs/cached-proxied-session.jsonl"),
+                crate::index::Fingerprint {
+                    mtime_ns: 1,
+                    size: 2,
+                },
+            )
+            .unwrap();
+
+        let sessions = build_sessions(&cfg, &index, &RateCard::load(None));
+        let session = sessions
+            .iter()
+            .find(|session| session.id == "cached-proxied-session")
+            .unwrap();
+
+        assert_eq!(session.context.tokens, 378_229);
+        assert_eq!(session.context.window, Some(1_050_000));
+    }
+
+    #[test]
     fn open_session_attaches_current_run_usage_from_the_validated_process_start() {
         let started = chrono::Utc::now();
         let started_at_ms = started.timestamp_millis();
         let nonce = started.timestamp_nanos_opt().unwrap();
         let root = std::env::temp_dir().join(format!(
-            "tokenplay-current-run-{}-{nonce}",
+            "sessionmesh-current-run-{}-{nonce}",
             std::process::id()
         ));
         let claude_dir = root.join("claude");
