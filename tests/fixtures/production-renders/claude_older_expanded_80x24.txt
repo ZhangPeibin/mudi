@@ -1,10 +1,8 @@
-┌ TokenPlay ───────────────────────────────────────────────────────────────────┐
-│ [1]   [2]   [3]                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
 ┌ CLAUDE CODE SESSIONS | grouped by Project ───────────────────────────────────┐
 │  State  Session             Model               Context                      │
 │         Transcript Lifetime Usage                 Est.$  Updated  Cmp        │
-│PROJECT  tokenplay                                                            │
+│PROJECT  sessionmesh                                                          │
 │  Busy   claude-critical   claude-opus-4-8   180.0k (90%)                     │
 │    I 12.3k  O 2.3k  CR 34.6k  CW 456  $0.42  30s  ⤳2                         │
 │  Busy   claude-warning    claude-sonnet-4-5 150.0k (75%)                     │
@@ -14,6 +12,8 @@
 │> - OLDER SESSIONS (1)  Collapse                                              │
 │  · —    claude-older      claude-sonnet-4-5 50.0k (25%)                      │
 │    I 12.3k  O 2.3k  CR 34.6k  CW 456  $0.42  8d  ·                           │
+│                                                                              │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

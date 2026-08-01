@@ -1,24 +1,24 @@
-┌ TokenPlay ───────────────────────────────────────────────────────────────────┐
-│ [1]   [2]   [3]                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-┌ NOW ─────────────────────────────────────────────────────────────────────────┐
-│PROJECT  tokenplay                                                            │
-│  W .../to┌ Help - Esc to close ───────────────────────────────────┐k x2      │
-│> CRITICAL│Pages                                                   │   Inspect│
-│  SHARED  │  [1] All    [2] Claude Code    [3] Codex CLI           │   Inspect│
-│  W .../fi│                                                        │          │
-│  WARNING │Controls                                                │   Inspect│
-│  W /Users│  Tab / Shift+Tab  Focus where available                │          │
-│  IDLE    │  Up/Down or j/k   Move selection                       │   Inspect│
-│  W .../fi│  Enter            Inspect                              │          │
-│  BUSY    │  t  Theme      r  Refresh                              │   Inspect│
-│          │  ?  Help      Esc  Close      q  Quit                  │          │
-│          │                                                        │          │
-└──────────│                                                        │──────────┘
-┌ RECENT SI│                                                        │──────────┐
-│WT /Users/└────────────────────────────────────────────────────────┘          │
-│CL claude-critical Ctx +Critical 160.0k>180.0k                                │
-│CL claude-critical Cmp auto 188.0k>100.0k -Critical                           │
+┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ PROJECTS 1 ───────────────────────────────────────────────── 5 OPEN SESSIONS ┐
+│sessionmesh                                                                   │
+│  .../sessionmesh @ main | Context 90% | WARNING Shared Worktree Risk x2      │
+│> CRITICAL Busy  Claude [#########-] 90%  claude-opus-4-8    30s       Inspect│
+│  SHARED  ┌ Help - Esc to close ───────────────────────────────────┐   Inspect│
+│  ...fixtu│Pages                                                   │          │
+│  WARNING │  [1] All    [2] Claude Code    [3] Codex CLI           │   Inspect│
+│  ...rs/fi│                                                        │          │
+│  IDLE    │Controls                                                │   Inspect│
+│  ...fixtu│  Tab / Shift+Tab  Focus where available                │          │
+│  BUSY    │  Up/Down or j/k   Move selection                       │   Inspect│
+│          │  Enter            Inspect                              │          │
+│          │  t  Theme      r  Refresh                              │          │
+└──────────│  ?  Help      Esc  Close      q  Quit                  │──────────┘
+┌ RECENT SI│                                                        │latest 5s ┐
+│WT /Users/│                                                        │          │
+│CL claude-│                                                        │          │
+│CL claude-└────────────────────────────────────────────────────────┘          │
 │CL claude-warning Ctx +Warning 120.0k>150.0k                                  │
+│CX codex-idle Busy -> Idle                                                    │
+│                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 j/k | Enter Inspect | ? Help | q Quit                              fixture ready

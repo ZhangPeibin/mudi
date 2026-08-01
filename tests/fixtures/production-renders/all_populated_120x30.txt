@@ -1,17 +1,17 @@
-┌ TokenPlay ───────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ [1]   [2]   [3]                                                                                                      │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ NOW ────────────────────────────────────────────────────────────────────────┐┌ RECENT SIGNALS ───────────────────────┐
-│PROJECT  tokenplay                                                           ││WT /Users/fixture/cod...  Risk detected│
-│  W .../tokenplay @ main | Context 90% | WARNING Shared Worktree Risk x2     ││Before 1: CL:claude-critical           │
+┌ SessionMesh | v0.1.0 | 1 2 3 ─────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
+┌ PROJECTS 1 ──────────────────────────────────────────────── 5 OPEN SESSIONS ┐┌ RECENT SIGNALS 5 ────────── latest 5s ┐
+│sessionmesh                                                                  ││WT /Users/fixture/cod...  Risk detected│
+│  ...sessionmesh @ main | Context 90% | WARNING Shared Worktree Risk x2      ││Before 1: CL:claude-critical           │
 │> CRITICAL Busy  Claude [#########-] 90%  claude-opus-4-8   30s       Inspect││... CL:claude-critical, CX:codex-shared│
 │  SHARED   Busy  Codex  [####------] 40%  gpt-5-codex       1m        Inspect││CL claud... Ctx +Critical 160.0k>180.0k│
-│  W ...fixture/code/tokenplay-warning @ warning | Context 75%                ││CL ... Cmp auto 188.0k>100.0k -Critical│
+│  ...ixture/code/sessionmesh-warning @ warning | Context 75%                 ││CL ... Cmp auto 188.0k>100.0k -Critical│
 │  WARNING  Busy  Claude [########--] 75%  claude-sonnet-4-5 2m        Inspect││CL claude... Ctx +Warning 120.0k>150.0k│
-│  W ...rs/fixture/code/tokenplay-idle @ idle | Context 30%                   ││CX codex-idle Busy -> Idle             │
+│  ...s/fixture/code/sessionmesh-idle @ idle | Context 30%                    ││CX codex-idle Busy -> Idle             │
 │  IDLE     Idle  Codex  [###-------] 30%  gpt-5.2-codex     Idle 3m   Inspect││                                       │
-│  W ...fixture/code/tokenplay-healthy @ healthy | Context 20%                ││                                       │
+│  ...ixture/code/sessionmesh-healthy @ healthy | Context 20%                 ││                                       │
 │  BUSY     Busy  Claude [##--------] 20%  claude-haiku-4-5  4m        Inspect││                                       │
+│                                                                             ││                                       │
+│                                                                             ││                                       │
 │                                                                             ││                                       │
 │                                                                             ││                                       │
 │                                                                             ││                                       │

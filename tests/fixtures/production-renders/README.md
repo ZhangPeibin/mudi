@@ -15,7 +15,7 @@ cargo test --test production_renders
 
 | Fixture | Production state covered |
 |---|---|
-| `all_populated_120x30.txt` | Full All page with side-by-side NOW and populated RECENT SIGNALS |
+| `all_populated_120x30.txt` | Full All page with side-by-side PROJECT and populated RECENT SIGNALS |
 | `all_populated_80x24.txt` | Stacked compact All page with Critical, Shared Worktree Risk, Warning, Idle, and healthy Busy states |
 | `all_empty_signals_80x24.txt` | Compact All page with the empty Signals state |
 | `claude_120x30.txt` | Full Claude provider inventory and complete lifetime Usage columns |
@@ -23,7 +23,7 @@ cargo test --test production_renders
 | `codex_80x24.txt` | Compact Codex provider inventory, including an Exited Session |
 | `detail_open_120x30.txt` | Full-target open Session Detail with Attention, scoped Usage, source metadata, and Compactions |
 | `detail_open_80x24.txt` | Compact open Session Detail before scrolling |
-| `detail_open_scrolled_80x24.txt` | Compact open Session Detail scrolled to both Compaction rows |
+| `detail_open_scrolled_80x24.txt` | Compact open Session Detail remains stable when all Compaction rows already fit |
 | `detail_exited_80x24.txt` | Compact exited Session Detail without Current Run or Last Run Usage |
 | `help_80x24.txt` | Compact Help overlay and essential keyboard mapping |
 | `copy_menu_80x24.txt` | Compact source-metadata Copy menu |

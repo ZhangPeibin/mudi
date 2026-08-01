@@ -18,9 +18,7 @@ use chrono::Local;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Wrap,
-};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -33,6 +31,7 @@ use theme::{Theme, ThemeName};
 
 const MIN_TERMINAL_WIDTH: u16 = 80;
 const MIN_TERMINAL_HEIGHT: u16 = 24;
+const PROVIDER_RECENT_SESSION_LIMIT: usize = 5;
 
 /// Shared style for the currently-selected item.
 fn selected_style(theme: Theme) -> Style {
@@ -108,17 +107,42 @@ struct ProviderProjectKey {
     project: Option<ProjectIdentity>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ProviderDisclosureKey {
+    MoreRecent(ProviderProjectKey),
+    Older(ProviderProjectKey),
+    UnavailableCwd(Provider),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderDisclosureKind {
+    MoreRecent,
+    Older,
+    UnavailableCwd,
+}
+
+impl ProviderDisclosureKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::MoreRecent => "MORE SESSIONS",
+            Self::Older => "OLDER SESSIONS",
+            Self::UnavailableCwd => "MISSING CWD",
+        }
+    }
+}
+
 #[derive(Clone)]
 enum ProviderTarget<'a> {
     Session(&'a Session),
-    Disclosure(ProviderProjectKey),
+    Disclosure(ProviderDisclosureKey),
 }
 
 enum ProviderPageRow<'a> {
     Project(Option<&'a Project>),
     Session(&'a Session),
-    OlderSessions {
-        key: ProviderProjectKey,
+    Disclosure {
+        key: ProviderDisclosureKey,
+        kind: ProviderDisclosureKind,
         count: usize,
         expanded: bool,
     },
@@ -129,7 +153,7 @@ impl<'a> ProviderPageRow<'a> {
         match self {
             ProviderPageRow::Project(_) => None,
             ProviderPageRow::Session(session) => Some(ProviderTarget::Session(session)),
-            ProviderPageRow::OlderSessions { key, .. } => Some(ProviderTarget::Disclosure(key)),
+            ProviderPageRow::Disclosure { key, .. } => Some(ProviderTarget::Disclosure(key)),
         }
     }
 }
@@ -141,7 +165,7 @@ pub struct Ui {
     all_region: AllRegion,
     signal_selected: usize,
     detail: Option<DetailView>,
-    expanded_older: HashSet<ProviderProjectKey>,
+    expanded_provider_disclosures: HashSet<ProviderDisclosureKey>,
     help_open: bool,
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
@@ -175,7 +199,7 @@ impl Default for Ui {
             all_region: AllRegion::Now,
             signal_selected: 0,
             detail: None,
-            expanded_older: HashSet::new(),
+            expanded_provider_disclosures: HashSet::new(),
             help_open: false,
             profile_path: None,
             profile: ProfilePreferences::default(),
@@ -532,7 +556,7 @@ impl Ui {
             &snap.sessions,
             provider,
             snap.generated_ms,
-            &self.expanded_older,
+            &self.expanded_provider_disclosures,
         )
     }
 
@@ -550,8 +574,8 @@ impl Ui {
                         copy_menu_selected: None,
                     });
                 }
-                Some(ProviderTarget::Disclosure(project)) => {
-                    self.toggle_older(project);
+                Some(ProviderTarget::Disclosure(disclosure)) => {
+                    self.toggle_provider_disclosure(disclosure);
                 }
                 None => {}
             }
@@ -620,9 +644,9 @@ impl Ui {
         }
     }
 
-    fn toggle_older(&mut self, project: ProviderProjectKey) {
-        if !self.expanded_older.remove(&project) {
-            self.expanded_older.insert(project);
+    fn toggle_provider_disclosure(&mut self, disclosure: ProviderDisclosureKey) {
+        if !self.expanded_provider_disclosures.remove(&disclosure) {
+            self.expanded_provider_disclosures.insert(disclosure);
         }
     }
 }
@@ -641,13 +665,13 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // tabs
+            Constraint::Length(1), // global header
             Constraint::Min(3),    // content
             Constraint::Length(1), // footer
         ])
         .split(f.area());
 
-    draw_tabs(f, chunks[0], ui);
+    draw_header(f, chunks[0], snap, ui);
 
     if ui.detail.is_some() {
         draw_detail(f, chunks[1], snap, ui);
@@ -808,29 +832,100 @@ fn draw_help(f: &mut Frame, theme: Theme) {
     );
 }
 
-fn draw_tabs(f: &mut Frame, area: Rect, ui: &Ui) {
+fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
-    let titles: Vec<Line> = Tab::ALL
+    let wide = area.width >= 100;
+    let compact_projects = area.width < 88;
+    let mut left = vec![
+        Span::styled(
+            " SessionMesh ",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("| ", Style::default().fg(theme.border)),
+        Span::styled(
+            format!("v{} ", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(theme.muted),
+        ),
+        Span::styled("| ", Style::default().fg(theme.border)),
+    ];
+    for (index, tab) in Tab::ALL.iter().copied().enumerate() {
+        if index > 0 {
+            left.push(Span::raw(" "));
+        }
+        left.push(Span::styled(
+            (tab.index() + 1).to_string(),
+            if tab == ui.tab {
+                selected_style(theme)
+            } else {
+                Style::default().fg(theme.foreground)
+            },
+        ));
+    }
+    left.push(Span::raw(" "));
+
+    let (input, output) = snap
+        .sessions
         .iter()
-        .map(|t| Line::from(format!("[{}]", t.index() + 1)))
-        .collect();
-    let tabs = Tabs::new(titles)
-        .divider(" ")
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border))
-                .title(Span::styled(
-                    " TokenPlay ",
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        )
-        .select(ui.tab.index())
-        .style(Style::default().fg(theme.foreground))
-        .highlight_style(selected_style(theme));
-    f.render_widget(tabs, area);
+        .fold((0_u64, 0_u64), |totals, session| {
+            (
+                totals.0.saturating_add(session.usage.input),
+                totals.1.saturating_add(session.usage.output),
+            )
+        });
+    let project_count = snap
+        .sessions
+        .iter()
+        .filter_map(|session| session.project.as_ref())
+        .map(|project| &project.identity)
+        .collect::<HashSet<_>>()
+        .len();
+    let mut right = vec![
+        Span::styled(" In ", Style::default().fg(theme.muted)),
+        Span::styled(
+            fmt_tokens(input),
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            if wide { "  Out " } else { " Out " },
+            Style::default().fg(theme.muted),
+        ),
+        Span::styled(
+            fmt_tokens(output),
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" | ", Style::default().fg(theme.border)),
+    ];
+    if compact_projects {
+        right.push(Span::styled("P ", Style::default().fg(theme.muted)));
+        right.push(Span::styled(
+            project_count.to_string(),
+            Style::default().fg(theme.foreground),
+        ));
+    } else {
+        right.push(Span::styled(
+            format!(
+                "{project_count} Project{}",
+                if project_count == 1 { "" } else { "s" }
+            ),
+            Style::default().fg(theme.foreground),
+        ));
+    }
+    right.push(Span::raw(" "));
+
+    f.render_widget(
+        Block::default()
+            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+            .border_style(Style::default().fg(theme.border))
+            .title(Line::from(left))
+            .title(Line::from(right).right_aligned()),
+        area,
+    );
 }
 
 // ---- All page ----
@@ -855,6 +950,21 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let attention = current_attention(snap);
     let now = group_open_sessions(&snap.sessions, &attention);
     let now_ms = snapshot_now_ms(snap);
+    let open_project_count = now
+        .iter()
+        .filter(|project| project.project.is_some())
+        .count();
+    let open_session_count = now
+        .iter()
+        .map(|project| {
+            project.direct_sessions.len()
+                + project
+                    .worktrees
+                    .iter()
+                    .map(|worktree| worktree.sessions.len())
+                    .sum::<usize>()
+        })
+        .sum::<usize>();
     let content_width = now_area.width.saturating_sub(2) as usize;
     let mut lines = Vec::new();
     let mut selectable = 0usize;
@@ -872,9 +982,9 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
 
     for project in now {
         lines.push(Line::from(Span::styled(
-            format!("PROJECT  {}", project.label()),
+            project.label().to_string(),
             Style::default()
-                .fg(theme.accent)
+                .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
         )));
         for worktree in project.worktrees {
@@ -916,22 +1026,50 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 } else {
                     theme.border
                 }))
-                .title(Span::styled(
-                    " NOW ",
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                )),
+                .title(Line::from(vec![
+                    Span::styled(
+                        " PROJECTS ",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{open_project_count} "),
+                        Style::default()
+                            .fg(theme.foreground)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]))
+                .title(
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(
+                            open_session_count.to_string(),
+                            Style::default()
+                                .fg(theme.foreground)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            if open_session_count == 1 {
+                                " OPEN SESSION "
+                            } else {
+                                " OPEN SESSIONS "
+                            },
+                            Style::default().fg(theme.muted),
+                        ),
+                    ])
+                    .right_aligned(),
+                ),
         ),
         now_area,
     );
 
     if let Some(signals_area) = signals_area {
-        draw_recent_signals(f, signals_area, &snap.recent_signals, ui);
+        draw_recent_signals(f, signals_area, &snap.recent_signals, now_ms, ui);
     }
 }
 
-fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], ui: &Ui) {
+fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], now_ms: i64, ui: &Ui) {
     let theme = ui.theme.palette();
     let width = area.width.saturating_sub(2) as usize;
     let height = area.height.saturating_sub(2) as usize;
@@ -970,26 +1108,42 @@ fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], ui: 
         }
         lines
     };
-    f.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(
-                    Style::default().fg(if ui.all_region == AllRegion::RecentSignals {
-                        theme.accent
-                    } else {
-                        theme.border
-                    }),
-                )
-                .title(Span::styled(
-                    " RECENT SIGNALS ",
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        ),
-        area,
-    );
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(
+            Style::default().fg(if ui.all_region == AllRegion::RecentSignals {
+                theme.accent
+            } else {
+                theme.border
+            }),
+        )
+        .title(Line::from(vec![
+            Span::styled(
+                " RECENT SIGNALS ",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{} ", signals.len()),
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    if let Some(latest_at_ms) = signals.iter().map(RecentSignal::observed_at_ms).max() {
+        block = block.title(
+            Line::from(vec![
+                Span::styled(" latest ", Style::default().fg(theme.muted)),
+                Span::styled(
+                    format!("{} ", fmt_relative(latest_at_ms, now_ms)),
+                    Style::default().fg(theme.foreground),
+                ),
+            ])
+            .right_aligned(),
+        );
+    }
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn recent_signal_lines(signal: &RecentSignal, width: usize) -> Vec<String> {
@@ -1367,15 +1521,30 @@ fn now_worktree_line(
             risk.contributing_sessions.len()
         ));
     }
-    let identity_width = width.saturating_sub(10 + evidence.chars().count());
+    let identity_width = width.saturating_sub(8 + evidence.chars().count());
     let path_width = identity_width.saturating_mul(3) / 5;
     let branch_width = identity_width.saturating_sub(path_width);
+    let path = home_relative_path(&group.worktree.root);
     format!(
-        "  W {} @ {} | {}",
-        shorten_end(&group.worktree.root.to_string_lossy(), path_width),
+        "  {} @ {} | {}",
+        shorten_end(&path, path_width),
         shorten_start(branch, branch_width),
         evidence,
     )
+}
+
+fn home_relative_path(path: &Path) -> Cow<'_, str> {
+    let Some(home) = dirs::home_dir() else {
+        return path.to_string_lossy();
+    };
+    let Ok(relative) = path.strip_prefix(home) else {
+        return path.to_string_lossy();
+    };
+    if relative.as_os_str().is_empty() {
+        Cow::Borrowed("~")
+    } else {
+        Cow::Owned(format!("~/{}", relative.to_string_lossy()))
+    }
 }
 
 fn shorten_start(value: &str, width: usize) -> String {
@@ -1438,19 +1607,32 @@ struct ProviderProject<'a> {
     older_sessions: Vec<&'a Session>,
 }
 
-fn provider_projects(
+struct ProviderInventory<'a> {
+    projects: Vec<ProviderProject<'a>>,
+    unavailable_cwd: Vec<&'a Session>,
+}
+
+fn provider_inventory(
     sessions: &[Session],
     provider: Provider,
     now_ms: i64,
-) -> Vec<ProviderProject<'_>> {
+) -> ProviderInventory<'_> {
     const SEVEN_DAYS_MS: i64 = 7 * 86_400_000;
     let cutoff_ms = now_ms - SEVEN_DAYS_MS;
     let mut projects: Vec<ProviderProject<'_>> = Vec::new();
+    let mut unavailable_cwd = Vec::new();
 
     for session in sessions
         .iter()
         .filter(|session| session.provider == provider)
     {
+        if is_system_temporary_cwd(session.cwd.as_deref()) {
+            continue;
+        }
+        if !session.state.is_open() && session.project.is_none() {
+            unavailable_cwd.push(session);
+            continue;
+        }
         let project = projects.iter_mut().find(|group| {
             group.project.map(|project| &project.identity)
                 == session.project.as_ref().map(|project| &project.identity)
@@ -1498,32 +1680,75 @@ fn provider_projects(
                 .cmp(right.project.map_or("—", |project| project.label.as_str()))
         })
     });
-    projects
+    unavailable_cwd.sort_by_key(|session| Reverse(session.last_activity_ms));
+    ProviderInventory {
+        projects,
+        unavailable_cwd,
+    }
+}
+
+fn is_system_temporary_cwd(cwd: Option<&str>) -> bool {
+    let Some(cwd) = cwd.filter(|cwd| !cwd.is_empty()).map(Path::new) else {
+        return false;
+    };
+    [
+        Path::new("/private/var/folders"),
+        Path::new("/var/folders"),
+        Path::new("/private/tmp"),
+        Path::new("/tmp"),
+    ]
+    .iter()
+    .any(|root| cwd.starts_with(root))
 }
 
 fn provider_page_rows<'a>(
     sessions: &'a [Session],
     provider: Provider,
     now_ms: i64,
-    expanded_older: &HashSet<ProviderProjectKey>,
+    expanded_disclosures: &HashSet<ProviderDisclosureKey>,
 ) -> Vec<ProviderPageRow<'a>> {
     let mut rows = Vec::new();
-    for project in provider_projects(sessions, provider, now_ms) {
+    let inventory = provider_inventory(sessions, provider, now_ms);
+    for project in inventory.projects {
         rows.push(ProviderPageRow::Project(project.project));
+        let project_key = ProviderProjectKey {
+            provider,
+            project: project.project.map(|project| project.identity.clone()),
+        };
         rows.extend(
             project
                 .recent_sessions
-                .into_iter()
+                .iter()
+                .take(PROVIDER_RECENT_SESSION_LIMIT)
+                .copied()
                 .map(ProviderPageRow::Session),
         );
-        if !project.older_sessions.is_empty() {
-            let key = ProviderProjectKey {
-                provider,
-                project: project.project.map(|project| project.identity.clone()),
-            };
-            let expanded = expanded_older.contains(&key);
-            rows.push(ProviderPageRow::OlderSessions {
+        if project.recent_sessions.len() > PROVIDER_RECENT_SESSION_LIMIT {
+            let key = ProviderDisclosureKey::MoreRecent(project_key.clone());
+            let expanded = expanded_disclosures.contains(&key);
+            rows.push(ProviderPageRow::Disclosure {
                 key,
+                kind: ProviderDisclosureKind::MoreRecent,
+                count: project.recent_sessions.len() - PROVIDER_RECENT_SESSION_LIMIT,
+                expanded,
+            });
+            if expanded {
+                rows.extend(
+                    project
+                        .recent_sessions
+                        .iter()
+                        .skip(PROVIDER_RECENT_SESSION_LIMIT)
+                        .copied()
+                        .map(ProviderPageRow::Session),
+                );
+            }
+        }
+        if !project.older_sessions.is_empty() {
+            let key = ProviderDisclosureKey::Older(project_key);
+            let expanded = expanded_disclosures.contains(&key);
+            rows.push(ProviderPageRow::Disclosure {
+                key,
+                kind: ProviderDisclosureKind::Older,
                 count: project.older_sessions.len(),
                 expanded,
             });
@@ -1535,6 +1760,24 @@ fn provider_page_rows<'a>(
                         .map(ProviderPageRow::Session),
                 );
             }
+        }
+    }
+    if !inventory.unavailable_cwd.is_empty() {
+        let key = ProviderDisclosureKey::UnavailableCwd(provider);
+        let expanded = expanded_disclosures.contains(&key);
+        rows.push(ProviderPageRow::Disclosure {
+            key,
+            kind: ProviderDisclosureKind::UnavailableCwd,
+            count: inventory.unavailable_cwd.len(),
+            expanded,
+        });
+        if expanded {
+            rows.extend(
+                inventory
+                    .unavailable_cwd
+                    .into_iter()
+                    .map(ProviderPageRow::Session),
+            );
         }
     }
     rows
@@ -1612,8 +1855,11 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 rows.push(session_row(session, now, theme));
                 selectable += 1;
             }
-            ProviderPageRow::OlderSessions {
-                count, expanded, ..
+            ProviderPageRow::Disclosure {
+                kind,
+                count,
+                expanded,
+                ..
             } => {
                 if selectable == ui.selected {
                     selected_row = rows.len();
@@ -1622,8 +1868,9 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                     Row::new(vec![
                         Cell::from(""),
                         Cell::from(format!(
-                            "{} OLDER SESSIONS ({count})  {}",
+                            "{} {} ({count})  {}",
                             if expanded { "-" } else { "+" },
+                            kind.label(),
                             if expanded { "Collapse" } else { "Expand" }
                         )),
                     ])
@@ -1792,8 +2039,11 @@ fn draw_compact_provider(
                 ));
                 selectable += 1;
             }
-            ProviderPageRow::OlderSessions {
-                count, expanded, ..
+            ProviderPageRow::Disclosure {
+                kind,
+                count,
+                expanded,
+                ..
             } => {
                 let selected = selectable == ui.selected;
                 if selected {
@@ -1801,9 +2051,10 @@ fn draw_compact_provider(
                 }
                 lines.push(Line::from(Span::styled(
                     format!(
-                        "{} {} OLDER SESSIONS ({count})  {}",
+                        "{} {} {} ({count})  {}",
                         if selected { ">" } else { " " },
                         if expanded { "-" } else { "+" },
+                        kind.label(),
                         if expanded { "Collapse" } else { "Expand" }
                     ),
                     if selected {
@@ -2552,7 +2803,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "tokenplay-{name}-{}-{nonce}-profile.json",
+            "sessionmesh-{name}-{}-{nonce}-profile.json",
             std::process::id(),
         ))
     }
@@ -2631,16 +2882,16 @@ mod tests {
             source: Default::default(),
             project: Some(Project {
                 identity: ProjectIdentity::GitCommonDir(PathBuf::from(
-                    "/Users/x/code/tokenplay/.git",
+                    "/Users/x/code/sessionmesh/.git",
                 )),
-                label: "tokenplay".into(),
+                label: "sessionmesh".into(),
             }),
             worktree: Some(Worktree {
-                root: PathBuf::from("/Users/x/code/tokenplay"),
+                root: PathBuf::from("/Users/x/code/sessionmesh"),
                 branch: Some("main".into()),
                 writable: true,
             }),
-            cwd: Some("/Users/x/code/tokenplay".into()),
+            cwd: Some("/Users/x/code/sessionmesh".into()),
             latest_model: Some("claude-opus-4-8".into()),
             state: SessionState::Busy,
             context: ContextState {
@@ -2698,18 +2949,18 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_tokenplay_and_cycles_themes_in_the_confirmed_order() {
+    fn defaults_to_sessionmesh_and_cycles_themes_in_the_confirmed_order() {
         let mut ui = Ui::default();
         let snapshot = Snapshot::default();
 
-        assert_eq!(ui.active_theme_name(), "tokenplay");
+        assert_eq!(ui.active_theme_name(), "sessionmesh");
         for expected in [
             "catppuccin",
             "dracula",
             "gruvbox",
             "light",
             "high-contrast",
-            "tokenplay",
+            "sessionmesh",
         ] {
             ui.handle_key(
                 KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
@@ -2745,14 +2996,7 @@ mod tests {
 
         for index in 0..6 {
             let terminal = render_terminal(&ui);
-            let selected_page = terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .find(|cell| cell.symbol() == "1")
-                .unwrap();
-            selected_backgrounds.push(selected_page.style().bg);
+            selected_backgrounds.push(rendered_style_at(&terminal, "1 2 3").bg);
 
             if index < 5 {
                 ui.handle_key(
@@ -2777,7 +3021,7 @@ mod tests {
     }
 
     #[test]
-    fn tokenplay_uses_semantic_busy_and_critical_context_roles() {
+    fn sessionmesh_uses_semantic_busy_and_critical_context_roles() {
         let mut snapshot = demo_snapshot();
         snapshot.sessions[0].context.tokens = 180_000;
         let now = Local::now().timestamp_millis();
@@ -2807,7 +3051,7 @@ mod tests {
     }
 
     #[test]
-    fn tokenplay_uses_semantic_idle_exited_and_warning_roles() {
+    fn sessionmesh_uses_semantic_idle_exited_and_warning_roles() {
         let mut snapshot = demo_snapshot();
         let now = Local::now().timestamp_millis();
         snapshot.sessions[0].last_activity_ms = now;
@@ -2867,7 +3111,7 @@ mod tests {
         assert_eq!(top_left.style().bg, Some(Color::Rgb(250, 249, 246)));
         assert_eq!(top_left.style().fg, Some(Color::Rgb(126, 130, 133)));
         assert_eq!(
-            rendered_style_at(&terminal, "TokenPlay").fg,
+            rendered_style_at(&terminal, "SessionMesh").fg,
             Some(Color::Rgb(25, 91, 130))
         );
         assert_eq!(
@@ -2895,13 +3139,18 @@ mod tests {
         snapshot.sessions.extend([codex, exited]);
 
         let page = rendered_rows_at(&ui, &snapshot, 120, 30);
-        let project = page.find("PROJECT  tokenplay").unwrap();
+        let project = page.find("\n│sessionmesh").unwrap();
         let worktree = page.find("WARNING Shared Worktree Risk x2").unwrap();
         let claude = page.find("claude-open-model").unwrap();
         let codex = page.find("codex-open-model").unwrap();
 
         assert!(project < worktree && worktree < claude && claude < codex);
-        assert_eq!(page.matches("PROJECT  tokenplay").count(), 1);
+        assert_eq!(
+            page.lines()
+                .filter(|line| line.starts_with("│sessionmesh"))
+                .count(),
+            1
+        );
         let session_rows = page
             .lines()
             .filter(|line| line.contains("open-model"))
@@ -2950,13 +3199,13 @@ mod tests {
         snapshot.attention = Some(AttentionEngine::default().update(&snapshot.sessions, 2_000));
 
         let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
-        let priority_project = page.find("PROJECT  priority").unwrap();
+        let priority_project = page.find("\n│priority").unwrap();
         let critical_worktree = page.find("WARNING Shared Worktree Risk x2").unwrap();
         let critical_session = page.find("critical-model").unwrap();
         let shared_session = page.find("shared-model").unwrap();
         let warning_worktree = page.find("/worktrees/a-warning").unwrap();
         let warning_session = page.find("warning-model").unwrap();
-        let healthy_project = page.find("PROJECT  healthy").unwrap();
+        let healthy_project = page.find("\n│healthy").unwrap();
         let healthy_session = page.find("healthy-model").unwrap();
 
         assert!(priority_project < critical_worktree);
@@ -2996,7 +3245,7 @@ mod tests {
         let claude = page.find("claude-member").unwrap();
         let codex = page.find("codex-member").unwrap();
 
-        assert!(risk_line.contains("tokenplay"));
+        assert!(risk_line.contains("sessionmesh"));
         assert!(risk_line.contains("@ main"));
         assert!(risk < claude && risk < codex);
         assert_eq!(
@@ -3173,12 +3422,12 @@ mod tests {
             .find(|line| line.contains("WARNING Shared Worktree Risk x2"))
             .unwrap();
 
-        assert!(worktree.contains("@ featur..."));
+        assert!(worktree.contains("@ feature..."));
         assert!(worktree.contains("Context 85%"));
     }
 
     #[test]
-    fn all_page_has_no_time_filter_or_usage_cost_surface() {
+    fn all_page_has_global_usage_without_a_time_filter_or_cost_surface() {
         let mut snapshot = demo_snapshot();
         snapshot.sessions[0].cost = Some(123.45);
         snapshot.sessions[0].usage = Usage {
@@ -3202,13 +3451,15 @@ mod tests {
             "All Sessions",
             "Estimated using API rates",
             "$123",
-            "987.7k",
         ] {
             assert!(
                 !page.contains(excluded),
                 "unexpected All-page text: {excluded}"
             );
         }
+        let header = page.lines().next().unwrap();
+        assert!(header.contains("In 987.7k"));
+        assert!(header.contains("Out 123.5k"));
     }
 
     #[test]
@@ -3217,7 +3468,10 @@ mod tests {
         let ui = Ui::default();
 
         let wide = rendered_rows_at(&ui, &snapshot, 120, 30);
-        let wide_top = wide.lines().find(|line| line.contains(" NOW ")).unwrap();
+        let wide_top = wide
+            .lines()
+            .find(|line| line.contains(" PROJECTS "))
+            .unwrap();
         assert_eq!(
             wide_top.chars().position(|character| character == '┐'),
             Some(78)
@@ -3229,7 +3483,7 @@ mod tests {
                 .lines()
                 .enumerate()
                 .find_map(|(index, line)| (index > 2 && line.starts_with('└')).then_some(index)),
-            Some(16)
+            Some(14)
         );
 
         assert!(wide.contains("RECENT SIGNALS"));
@@ -3572,7 +3826,7 @@ mod tests {
     #[test]
     fn compact_page_yields_recent_signal_rows_before_reducing_now() {
         let mut snapshot = demo_snapshot();
-        snapshot.recent_signals = (1..=5)
+        snapshot.recent_signals = (1..=7)
             .map(|position| RecentSignal::Session {
                 observed_at_ms: 3_000 - position,
                 provider: Provider::ClaudeCode,
@@ -3587,10 +3841,12 @@ mod tests {
         let page = rendered_rows_at(&Ui::default(), &snapshot, 80, 24);
 
         assert!(page.contains("claude-opus-4-8"));
-        for visible in ["signal-1", "signal-2", "signal-3", "signal-4"] {
+        for visible in [
+            "signal-1", "signal-2", "signal-3", "signal-4", "signal-5", "signal-6",
+        ] {
             assert!(page.contains(visible));
         }
-        assert!(!page.contains("signal-5"));
+        assert!(!page.contains("signal-7"));
     }
 
     #[test]
@@ -3637,7 +3893,7 @@ mod tests {
     fn compact_now_shortens_long_identity_before_operational_evidence() {
         let mut snapshot = demo_snapshot();
         snapshot.sessions[0].worktree = Some(Worktree {
-            root: PathBuf::from("/Users/x/code/tokenplay-worktrees/attention-layout-prototype"),
+            root: PathBuf::from("/Users/x/code/sessionmesh-worktrees/attention-layout-prototype"),
             branch: Some("prototype/q-007-responsive-terminal-layout".into()),
             writable: true,
         });
@@ -3675,15 +3931,15 @@ mod tests {
 
     #[test]
     fn changing_theme_does_not_change_rendered_product_semantics() {
-        let tokenplay_path = unused_profile_path("tokenplay-semantics");
+        let sessionmesh_path = unused_profile_path("sessionmesh-semantics");
         let light_path = unused_profile_path("light-semantics");
         std::fs::write(
-            &tokenplay_path,
-            br#"{"help_seen":true,"theme":"tokenplay"}"#,
+            &sessionmesh_path,
+            br#"{"help_seen":true,"theme":"sessionmesh"}"#,
         )
         .unwrap();
         std::fs::write(&light_path, br#"{"help_seen":true,"theme":"light"}"#).unwrap();
-        let mut tokenplay = Ui::load(&tokenplay_path, None).unwrap();
+        let mut sessionmesh = Ui::load(&sessionmesh_path, None).unwrap();
         let mut light = Ui::load(&light_path, None).unwrap();
         let mut snapshot = demo_snapshot();
         snapshot.sessions[0].last_activity_ms = Local::now().timestamp_millis();
@@ -3693,18 +3949,18 @@ mod tests {
         };
 
         assert_eq!(
-            rendered_with_snapshot(&tokenplay, &snapshot),
+            rendered_with_snapshot(&sessionmesh, &snapshot),
             rendered_with_snapshot(&light, &snapshot)
         );
 
-        tokenplay.tab = Tab::Claude;
+        sessionmesh.tab = Tab::Claude;
         light.tab = Tab::Claude;
         assert_eq!(
-            rendered_with_snapshot(&tokenplay, &snapshot),
+            rendered_with_snapshot(&sessionmesh, &snapshot),
             rendered_with_snapshot(&light, &snapshot)
         );
 
-        let _ = std::fs::remove_file(tokenplay_path);
+        let _ = std::fs::remove_file(sessionmesh_path);
         let _ = std::fs::remove_file(light_path);
     }
 
@@ -3882,7 +4138,7 @@ mod tests {
             .unwrap();
 
         let overridden = Ui::load(&profile_path, Some("neon")).unwrap();
-        assert_eq!(overridden.active_theme_name(), "tokenplay");
+        assert_eq!(overridden.active_theme_name(), "sessionmesh");
 
         let reloaded = Ui::load(&profile_path, None).unwrap();
         assert_eq!(reloaded.active_theme_name(), "catppuccin");
@@ -3891,13 +4147,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_profile_theme_falls_back_to_tokenplay_without_blocking_startup() {
+    fn unknown_profile_theme_falls_back_to_sessionmesh_without_blocking_startup() {
         let profile_path = unused_profile_path("unknown-profile-theme");
         std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"neon"}"#).unwrap();
 
         let ui = Ui::load(&profile_path, None).unwrap();
 
-        assert_eq!(ui.active_theme_name(), "tokenplay");
+        assert_eq!(ui.active_theme_name(), "sessionmesh");
         let _ = std::fs::remove_file(profile_path);
     }
 
@@ -4007,25 +4263,21 @@ mod tests {
         let snapshot = Snapshot::default();
         let mut ui = Ui::default();
         let terminal = render_terminal(&ui);
-        let navigation_cells = &terminal.backend().buffer().content()[..80 * 3];
+        let navigation_cells = &terminal.backend().buffer().content()[..80];
         let navigation: String = navigation_cells.iter().map(|cell| cell.symbol()).collect();
 
-        for label in ["[1]", "[2]", "[3]"] {
-            assert_eq!(navigation.matches(label).count(), 1);
-        }
+        assert_eq!(navigation.matches("1 2 3").count(), 1);
         for page_name in ["All", "Claude Code", "Codex CLI"] {
             assert!(!navigation.contains(page_name));
         }
-        let first = navigation_cells
-            .iter()
-            .find(|cell| cell.symbol() == "1")
-            .unwrap();
-        let second = navigation_cells
-            .iter()
-            .find(|cell| cell.symbol() == "2")
-            .unwrap();
-        assert_eq!(first.style().bg, Some(Color::Rgb(68, 61, 43)));
-        assert_ne!(second.style().bg, Some(Color::Rgb(68, 61, 43)));
+        assert_eq!(
+            rendered_style_at(&terminal, "1 2 3").bg,
+            Some(Color::Rgb(68, 61, 43))
+        );
+        assert_ne!(
+            rendered_style_at(&terminal, "2 3").bg,
+            Some(Color::Rgb(68, 61, 43))
+        );
 
         ui.handle_key(
             KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
@@ -4033,12 +4285,10 @@ mod tests {
         )
         .unwrap();
         let terminal = render_terminal(&ui);
-        let navigation_cells = &terminal.backend().buffer().content()[..80 * 3];
-        let second = navigation_cells
-            .iter()
-            .find(|cell| cell.symbol() == "2")
-            .unwrap();
-        assert_eq!(second.style().bg, Some(Color::Rgb(68, 61, 43)));
+        assert_eq!(
+            rendered_style_at(&terminal, "2 3").bg,
+            Some(Color::Rgb(68, 61, 43))
+        );
     }
 
     #[test]
@@ -4129,6 +4379,106 @@ mod tests {
         assert!(page.contains("same-project-model"));
         assert!(page.contains("older-model"));
         assert!(!page.contains("codex-must-not-render"));
+    }
+
+    #[test]
+    fn provider_project_folds_recent_sessions_after_five_and_enter_expands() {
+        let now = Local::now().timestamp_millis();
+        let mut snapshot = demo_snapshot();
+        snapshot.generated_ms = now;
+        snapshot.sessions = (0..7)
+            .map(|position| {
+                let mut session = snapshot.sessions[0].clone();
+                session.id = format!("recent-{position}");
+                session.latest_model = Some(format!("recent-model-{position}"));
+                session.last_activity_ms = now - position * 1_000;
+                session
+            })
+            .collect();
+        let mut ui = Ui {
+            tab: Tab::Claude,
+            selected: 5,
+            ..Ui::default()
+        };
+
+        let collapsed = rendered_rows_at(&ui, &snapshot, 120, 30);
+        for visible in 0..5 {
+            assert!(collapsed.contains(&format!("recent-model-{visible}")));
+        }
+        assert!(!collapsed.contains("recent-model-5"));
+        assert!(!collapsed.contains("recent-model-6"));
+        assert!(collapsed.contains("+ MORE SESSIONS (2)"));
+
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        let expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
+
+        assert!(expanded.contains("recent-model-5"));
+        assert!(expanded.contains("recent-model-6"));
+        assert!(expanded.contains("- MORE SESSIONS (2)"));
+    }
+
+    #[test]
+    fn provider_page_collapses_unavailable_cwds_and_hides_only_system_temp_sessions() {
+        let now = Local::now().timestamp_millis();
+        let mut snapshot = demo_snapshot();
+        snapshot.generated_ms = now;
+        snapshot.sessions[0].last_activity_ms = now;
+
+        let mut real_private = snapshot.sessions[0].clone();
+        real_private.id = "real-private".into();
+        real_private.project = Some(test_project("real-private"));
+        real_private.cwd = Some("/private/repos/real-project".into());
+        real_private.latest_model = Some("real-private-model".into());
+        real_private.state = SessionState::Exited;
+        real_private.last_activity_ms = now - 1_000;
+
+        let mut missing = snapshot.sessions[0].clone();
+        missing.id = "missing-cwd".into();
+        missing.project = None;
+        missing.worktree = None;
+        missing.cwd = Some("/deleted/worktree".into());
+        missing.latest_model = Some("missing-cwd-model".into());
+        missing.state = SessionState::Exited;
+        missing.last_activity_ms = now - 2_000;
+
+        let mut no_cwd = missing.clone();
+        no_cwd.id = "no-cwd".into();
+        no_cwd.cwd = None;
+        no_cwd.latest_model = Some("no-cwd-model".into());
+        no_cwd.last_activity_ms = now - 3_000;
+
+        let mut system_temp = snapshot.sessions[0].clone();
+        system_temp.id = "system-temp".into();
+        system_temp.project = Some(test_project("system-temp"));
+        system_temp.cwd = Some("/private/var/folders/zz/agent-workspace".into());
+        system_temp.latest_model = Some("system-temp-model".into());
+        system_temp.last_activity_ms = now - 4_000;
+
+        snapshot
+            .sessions
+            .extend([real_private, missing, no_cwd, system_temp]);
+        let mut ui = Ui {
+            tab: Tab::Claude,
+            selected: 2,
+            ..Ui::default()
+        };
+
+        let collapsed = rendered_rows_at(&ui, &snapshot, 120, 30);
+        assert!(collapsed.contains("real-private-model"));
+        assert!(collapsed.contains("+ MISSING CWD (2)"));
+        assert!(!collapsed.contains("missing-cwd-model"));
+        assert!(!collapsed.contains("no-cwd-model"));
+        assert!(!collapsed.contains("system-temp-model"));
+
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        let expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
+
+        assert!(expanded.contains("- MISSING CWD (2)"));
+        assert!(expanded.contains("missing-cwd-model"));
+        assert!(expanded.contains("no-cwd-model"));
+        assert!(!expanded.contains("system-temp-model"));
     }
 
     #[test]
@@ -4369,7 +4719,7 @@ mod tests {
         let page = rendered_rows_at(&ui, &snapshot, 160, 30);
 
         for fact in [
-            "PROJECT  tokenplay",
+            "PROJECT  sessionmesh",
             "demo-session",
             "Busy",
             "claude-opus-4-8",
@@ -4402,7 +4752,7 @@ mod tests {
         let page = rendered_rows_at(&ui, &snapshot, 80, 24);
 
         for fact in [
-            "PROJECT  tokenplay",
+            "PROJECT  sessionmesh",
             "demo-session",
             "Busy",
             "claude-opus-4-8",
@@ -4534,19 +4884,17 @@ mod tests {
 
         let terminal = render_terminal_with_snapshot(&ui, &snapshot);
         let buffer = terminal.backend().buffer();
-        let navigation: String = buffer.content()[..80 * 3]
+        let navigation: String = buffer.content()[..80]
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(navigation.contains("[1]"));
-        assert!(navigation.contains("[2]"));
-        assert!(navigation.contains("[3]"));
-        let content_top: String = buffer.content()[80 * 3..80 * 4]
+        assert!(navigation.contains("1 2 3"));
+        let content_top: String = buffer.content()[80..80 * 2]
             .iter()
             .map(|cell| cell.symbol())
             .collect();
         assert!(content_top.contains("Session detail"));
-        assert_eq!(buffer[(0, 3)].symbol(), "┌");
+        assert_eq!(buffer[(0, 1)].symbol(), "┌");
         let footer: String = buffer.content()[80 * 23..80 * 24]
             .iter()
             .map(|cell| cell.symbol())
@@ -4721,9 +5069,9 @@ mod tests {
             "Provider",
             "Claude Code",
             "Project",
-            "tokenplay",
+            "sessionmesh",
             "Worktree",
-            "/Users/x/code/tokenplay",
+            "/Users/x/code/sessionmesh",
             "@ main",
             "cwd",
             "Session",
@@ -4910,7 +5258,7 @@ mod tests {
         let detail = rendered_with_snapshot(&ui, &snapshot);
 
         assert!(detail.contains("@ detached HEAD"));
-        assert!(detail.contains("/Users/x/code/tokenplay"));
+        assert!(detail.contains("/Users/x/code/sessionmesh"));
     }
 
     #[test]

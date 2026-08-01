@@ -1,13 +1,13 @@
-┌ TokenPlay ───────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ [1]   [2]   [3]                                                                                                      │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ SessionMesh | v0.1.0 | 1 2 3 ─────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
 ┌ CLAUDE CODE SESSIONS | grouped by Project ───────────────────────────────────────────────────────────────────────────┐
 │ State   Session              Model              Context        Lifetime Usage                     Est. $  Updated Cmp│
-│ PROJECT  tokenplay                                                                                                   │
+│ PROJECT  sessionmesh                                                                                                 │
 │▌● Busy  claude-critical      claude-opus-4-8    180.0k (90%)   I 12.3k  O 2.3k  CR 34.6k  CW 456  $0.42   30s     ⤳2 │
 │ ● Busy  claude-warning       claude-sonnet-4-5  150.0k (75%)   I 12.3k  O 2.3k  CR 34.6k  CW 456  $0.42   2m      ·  │
 │ ● Busy  claude-healthy       claude-haiku-4-5   40.0k (20%)    I 12.3k  O 2.3k  CR 34.6k  CW 456  $0.42   4m      ·  │
 │         + OLDER SESSIONS (1)                                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

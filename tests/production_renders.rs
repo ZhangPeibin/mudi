@@ -1,18 +1,18 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::Terminal;
-use tokenplay::app::Snapshot;
-use tokenplay::attention::{AttentionEngine, SessionIdentity};
-use tokenplay::domain::{
+use sessionmesh::app::Snapshot;
+use sessionmesh::attention::{AttentionEngine, SessionIdentity};
+use sessionmesh::domain::{
     Compaction, ContextState, ModelUsage, Project, ProjectIdentity, Provider, Session,
     SessionState, SourceFormat, SourceMetadata, Usage, UsageSummary, Worktree,
 };
-use tokenplay::signals::{
+use sessionmesh::signals::{
     ContextAlertLevel, RecentSignal, RecentSignalKind, SharedWorktreeRiskChange,
 };
-use tokenplay::ui::{draw, Ui};
+use sessionmesh::ui::{draw, Ui};
 
 use std::path::PathBuf;
 
@@ -93,9 +93,9 @@ fn fixture_session(
         },
         project: Some(Project {
             identity: ProjectIdentity::GitCommonDir(PathBuf::from(
-                "/Users/fixture/code/tokenplay/.git",
+                "/Users/fixture/code/sessionmesh/.git",
             )),
-            label: "tokenplay".into(),
+            label: "sessionmesh".into(),
         }),
         worktree: Some(Worktree {
             root: PathBuf::from(worktree_root),
@@ -143,7 +143,7 @@ fn fixture_session(
 fn production_snapshot() -> Snapshot {
     const NOW: i64 = 1_700_000_000_000;
     const DAY: i64 = 86_400_000;
-    let shared_root = "/Users/fixture/code/tokenplay";
+    let shared_root = "/Users/fixture/code/sessionmesh";
     let mut critical = fixture_session(
         Provider::ClaudeCode,
         "claude-critical",
@@ -167,7 +167,7 @@ fn production_snapshot() -> Snapshot {
         },
     ];
     critical.source.path = PathBuf::from(
-        "/Users/fixture/.claude/projects/-Users-fixture-code-tokenplay/claude-critical.jsonl",
+        "/Users/fixture/.claude/projects/-Users-fixture-code-sessionmesh/claude-critical.jsonl",
     );
     let shared = fixture_session(
         Provider::CodexCli,
@@ -186,7 +186,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         150_000,
         NOW - 120_000,
-        "/Users/fixture/code/tokenplay-warning",
+        "/Users/fixture/code/sessionmesh-warning",
         "warning",
     );
     let idle = fixture_session(
@@ -196,7 +196,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Idle,
         60_000,
         NOW - 180_000,
-        "/Users/fixture/code/tokenplay-idle",
+        "/Users/fixture/code/sessionmesh-idle",
         "idle",
     );
     let healthy = fixture_session(
@@ -206,7 +206,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         40_000,
         NOW - 240_000,
-        "/Users/fixture/code/tokenplay-healthy",
+        "/Users/fixture/code/sessionmesh-healthy",
         "healthy",
     );
     let older = fixture_session(
@@ -216,7 +216,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Exited,
         50_000,
         NOW - 8 * DAY,
-        "/Users/fixture/code/tokenplay-older",
+        "/Users/fixture/code/sessionmesh-older",
         "archive",
     );
     let recent_exited = fixture_session(
@@ -226,7 +226,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Exited,
         70_000,
         NOW - DAY,
-        "/Users/fixture/code/tokenplay-exited",
+        "/Users/fixture/code/sessionmesh-exited",
         "done",
     );
     let sessions = vec![
@@ -344,6 +344,7 @@ fn assert_fixture(rendered: &ProductionRender, fixture: &str) {
         .text
         .chars()
         .any(|character| !character.is_whitespace()));
+
     assert_eq!(rendered.visible_text(), fixture.trim_end_matches('\n'));
 }
 
@@ -395,7 +396,13 @@ fn terminal_below_the_hard_minimum_renders_only_the_too_small_state() {
             "missing required fallback text: {required:?}"
         );
     }
-    for normal_ui in ["TokenPlay", "[1]", " NOW ", " RECENT SIGNALS ", "Theme"] {
+    for normal_ui in [
+        "SessionMesh",
+        "1 2 3",
+        " PROJECT ",
+        " RECENT SIGNALS ",
+        "Theme",
+    ] {
         assert!(
             !rendered.text.contains(normal_ui),
             "normal UI leaked into the fallback: {normal_ui:?}"
@@ -405,6 +412,148 @@ fn terminal_below_the_hard_minimum_renders_only_the_too_small_state() {
         &rendered,
         include_str!("fixtures/production-renders/too_small_79x23.txt"),
     );
+}
+
+#[test]
+fn global_header_combines_navigation_with_indexed_usage_and_project_totals() {
+    let snapshot = production_snapshot();
+
+    let wide = render(&snapshot, &Ui::default(), 120, 30);
+    let wide_header = wide.text.lines().next().unwrap();
+    assert!(wide_header.contains(&format!(
+        "SessionMesh | v{} | 1 2 3",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(!wide_header.contains("1 All"));
+    assert!(!wide_header.contains("2 Claude"));
+    assert!(!wide_header.contains("3 Codex"));
+    assert!(wide_header.contains("In 86.4k  Out 16.4k | 1 Project"));
+    assert!(wide
+        .text
+        .lines()
+        .nth(1)
+        .is_some_and(|line| line.contains("PROJECT") && line.contains("RECENT SIGNALS")));
+
+    let compact = render(&snapshot, &Ui::default(), 80, 24);
+    let compact_header = compact.text.lines().next().unwrap();
+    assert!(compact_header.contains(&format!(
+        "SessionMesh | v{} | 1 2 3",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(compact_header.contains("In 86.4k Out 16.4k | P 1"));
+    assert!(compact
+        .text
+        .lines()
+        .nth(1)
+        .is_some_and(|line| line.contains("PROJECT")));
+}
+
+#[test]
+fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
+    let snapshot = production_snapshot();
+    let rendered = render(&snapshot, &Ui::default(), 120, 30);
+    let titles = rendered.text.lines().nth(1).unwrap();
+
+    for expected in [
+        "PROJECTS 1",
+        "5 OPEN SESSIONS",
+        "RECENT SIGNALS 5",
+        "latest 5s",
+    ] {
+        assert!(
+            titles.contains(expected),
+            "missing frame summary: {expected}"
+        );
+    }
+
+    let mut empty = snapshot;
+    empty.recent_signals.clear();
+    let empty = render(&empty, &Ui::default(), 80, 24);
+    let signal_title = empty
+        .text
+        .lines()
+        .find(|line| line.contains("RECENT SIGNALS"))
+        .unwrap();
+    assert!(signal_title.contains("RECENT SIGNALS 0"));
+    assert!(!signal_title.contains("latest"));
+}
+
+#[test]
+fn all_page_labels_the_project_region_and_uses_theme_foreground_for_project_names() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+
+    let dark = render(&snapshot, &ui, 120, 30);
+    assert!(dark
+        .text
+        .lines()
+        .any(|line| line.contains(" PROJECTS ") && line.contains(" RECENT SIGNALS ")));
+    assert!(dark
+        .text
+        .lines()
+        .any(|line| line.starts_with("│sessionmesh")));
+    assert!(!dark.text.contains("PROJECT  sessionmesh"));
+    let dark_project = dark.style_at("sessionmesh");
+    assert_eq!(dark_project.fg, Some(Color::Rgb(224, 220, 210)));
+    assert!(dark_project.add_modifier.contains(Modifier::BOLD));
+
+    for _ in 0..6 {
+        if ui.active_theme_name() == "light" {
+            break;
+        }
+        press(&mut ui, &snapshot, KeyCode::Char('t'));
+    }
+    assert_eq!(ui.active_theme_name(), "light");
+    let light = render(&snapshot, &ui, 120, 30);
+    let light_project = light.style_at("sessionmesh");
+    assert_eq!(light_project.fg, Some(Color::Rgb(28, 31, 34)));
+    assert!(light_project.add_modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn all_page_worktree_rows_start_with_the_path_without_an_abbreviation() {
+    let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
+    let worktree = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("@ main | Context 90%"))
+        .expect("All page should render the shared Worktree");
+
+    assert!(
+        worktree.starts_with("│  ..."),
+        "unexpected Worktree row: {worktree}"
+    );
+    assert!(!worktree.starts_with("│  W "));
+}
+
+#[test]
+fn all_page_abbreviates_the_current_users_home_in_worktree_paths() {
+    let home = dirs::home_dir().expect("test environment should have a home directory");
+    let root = home.join("code/sessionmesh");
+    let root_text = root.to_string_lossy();
+    let session = fixture_session(
+        Provider::ClaudeCode,
+        "home-relative",
+        "claude-opus-4-8",
+        SessionState::Busy,
+        100_000,
+        1_700_000_000_000,
+        &root_text,
+        "main",
+    );
+    let snapshot = Snapshot {
+        sessions: vec![session],
+        generated_ms: 1_700_000_000_000,
+        ready: true,
+        ..Snapshot::default()
+    };
+
+    let rendered = render(&snapshot, &Ui::default(), 120, 30);
+
+    assert!(rendered
+        .text
+        .contains("  ~/code/sessionmesh @ main | Context 50%"));
+    assert!(!rendered.text.contains(root_text.as_ref()));
 }
 
 #[test]
@@ -471,10 +620,10 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
     let regions = rendered
         .text
         .lines()
-        .find(|line| line.contains("NOW") && line.contains("RECENT SIGNALS"));
+        .find(|line| line.contains("PROJECT") && line.contains("RECENT SIGNALS"));
     assert!(
         regions.is_some(),
-        "full All page should render NOW and RECENT SIGNALS side by side"
+        "full All page should render PROJECT and RECENT SIGNALS side by side"
     );
     for required in [
         "CRITICAL",
@@ -627,13 +776,13 @@ fn compact_open_detail_matches_the_reviewed_production_fixture() {
 }
 
 #[test]
-fn compact_open_detail_scrolls_to_reviewed_compaction_history() {
+fn compact_open_detail_stays_stable_when_complete_compaction_history_fits() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Enter);
     let initial = render(&snapshot, &ui, 80, 24);
-    assert!(!initial.text.contains("trigger=auto"));
-    assert!(!initial.text.contains("trigger=manual"));
+    assert!(initial.text.contains("trigger=auto"));
+    assert!(initial.text.contains("trigger=manual"));
 
     for _ in 0..100 {
         press(&mut ui, &snapshot, KeyCode::Down);
@@ -648,6 +797,7 @@ fn compact_open_detail_scrolls_to_reviewed_compaction_history() {
             rendered.visible_text()
         );
     }
+    assert_eq!(rendered.visible_text(), initial.visible_text());
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/detail_open_scrolled_80x24.txt"),
@@ -768,7 +918,7 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
     let mut baseline_body = None;
 
     for expected_theme in [
-        "tokenplay",
+        "sessionmesh",
         "catppuccin",
         "dracula",
         "gruvbox",

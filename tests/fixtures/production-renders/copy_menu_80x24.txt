@@ -1,24 +1,24 @@
-┌ TokenPlay ───────────────────────────────────────────────────────────────────┐
-│ [1]   [2]   [3]                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
 ┌ Session detail - Esc to go back ─────────────────────────────────────────────┐
 │Provider      Claude Code / Busy                                              │
-│Project       tokenplay                                                       │
+│Project       sessionmesh                                                     │
 │Session       claude-critical                                                 │
-│Model┌ Copy source metadata ────────────────────────────────────────────┐     │
-│Conte│Choose one complete metadata value                                │     │
-│Atten│> Source log   /Users/fixture/.claude/projects/-Users-fixture-code│     │
-│  CRI│  Worktree     /Users/fixture/code/tokenplay                      │     │
-│  WAR│  cwd          /Users/fixture/code/tokenplay                      │     │
-│Curre│  Session ID   claude-critical                                    │     │
-│in 1.│                                                                  │     │
-│Trans│                                                                  │     │
+│Model         claude-opus-4-8                                                 │
+│Context       180.0k / 200.0k (90.0%)                                         │
+│Atten┌ Copy source metadata ────────────────────────────────────────────┐     │
+│  CRI│Choose one complete metadata value                                │     │
+│  WAR│> Source log   /Users/fixture/.claude/projects/-Users-fixture-code│     │
+│Curre│  Worktree     /Users/fixture/code/sessionmesh                    │     │
+│in 1.│  cwd          /Users/fixture/code/sessionmesh                    │     │
+│Trans│  Session ID   claude-critical                                    │     │
 │in 12│                                                                  │2    │
-│Workt└───────────────────────────────────────── Enter Copy | Esc Cancel ┘     │
-│cwd           /Users/fixture/code/tokenplay                                   │
-│Source log    /Users/fixture/.claude/projects/-Users-fixture-code-tokenplay/cl│
-│              aude-critical.jsonl                                             │
+│Workt│                                                                  │     │
+│cwd  │                                                                  │     │
+│Sourc└───────────────────────────────────────── Enter Copy | Esc Cancel ┘mesh/│
+│              claude-critical.jsonl                                           │
 │Source format JSONL                                                           │
 │Compactions (2)                                                               │
-└──────────────────────────────────────────────────────────── lines 1-18 of 20 ┘
+│  1m ago  trigger=auto  pre=188.0k                                            │
+│  1m ago  trigger=manual  pre=181.0k                                          │
+└──────────────────────────────────────────────────────────── lines 1-20 of 20 ┘
 j/k Select | Enter Copy | Esc Cancel                   Estimated using API rates
