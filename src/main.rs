@@ -1,4 +1,4 @@
-//! TokenPlay entry point.
+//! SessionMesh entry point.
 //!
 //! The TUI opens immediately. A background task performs the initial (potentially long)
 //! historical index with visible progress, then keeps the index fresh with cheap
@@ -6,7 +6,7 @@
 //! snapshot from shared state each frame.
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -18,16 +18,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use tokenplay::alerts::{self, AlertEngine};
-use tokenplay::app::Snapshot;
-use tokenplay::attention::AttentionEngine;
-use tokenplay::clipboard::{Clipboard, MacosClipboard};
-use tokenplay::collector;
-use tokenplay::config::{theme_override_from_args, Config};
-use tokenplay::index::Index;
-use tokenplay::pricing::RateCard;
-use tokenplay::signals::RecentSignalsEngine;
-use tokenplay::ui::{draw, Ui, UiAction};
+use sessionmesh::alerts::{self, AlertEngine};
+use sessionmesh::app::Snapshot;
+use sessionmesh::attention::AttentionEngine;
+use sessionmesh::clipboard::{Clipboard, MacosClipboard};
+use sessionmesh::collector;
+use sessionmesh::config::{theme_override_from_args, Config};
+use sessionmesh::index::Index;
+use sessionmesh::pricing::RateCard;
+use sessionmesh::signals::RecentSignalsEngine;
+use sessionmesh::ui::{draw, Ui, UiAction};
 
 /// Shared snapshot updated by the collector, read by the UI.
 type Shared = Arc<Mutex<Snapshot>>;
@@ -131,7 +131,7 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
 fn run_tui(shared: Shared, rescan_tx: mpsc::UnboundedSender<()>, mut ui: Ui) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    enter_tui_screen(&mut stdout)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -139,9 +139,17 @@ fn run_tui(shared: Shared, rescan_tx: mpsc::UnboundedSender<()>, mut ui: Ui) -> 
     let res = event_loop(&mut terminal, &mut ui, &shared, &rescan_tx, &mut clipboard);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    leave_tui_screen(terminal.backend_mut())?;
     terminal.show_cursor()?;
     res
+}
+
+fn enter_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
+    execute!(writer, EnterAlternateScreen, EnableMouseCapture)
+}
+
+fn leave_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
+    execute!(writer, DisableMouseCapture, LeaveAlternateScreen)
 }
 
 fn event_loop<B: ratatui::backend::Backend>(
@@ -180,5 +188,27 @@ fn event_loop<B: ratatui::backend::Backend>(
             }
             UiAction::Quit => return Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tui_terminal_commands_capture_and_release_mouse_scrolling() {
+        let mut enter = Vec::new();
+        enter_tui_screen(&mut enter).unwrap();
+        let enter = String::from_utf8(enter).unwrap();
+        assert!(enter.contains("\x1b[?1049h"));
+        assert!(enter.contains("\x1b[?1000h"));
+        assert!(enter.contains("\x1b[?1006h"));
+
+        let mut leave = Vec::new();
+        leave_tui_screen(&mut leave).unwrap();
+        let leave = String::from_utf8(leave).unwrap();
+        assert!(leave.contains("\x1b[?1006l"));
+        assert!(leave.contains("\x1b[?1000l"));
+        assert!(leave.contains("\x1b[?1049l"));
     }
 }
