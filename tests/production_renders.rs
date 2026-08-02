@@ -558,6 +558,53 @@ fn all_page_labels_the_project_region_and_uses_theme_foreground_for_project_name
 }
 
 #[test]
+fn all_page_current_context_bars_use_one_color_for_each_semantic_role() {
+    let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
+
+    for (session, bar, percent, expected_color) in [
+        (
+            "codex-sh",
+            "[######---------]",
+            "40%",
+            Color::Rgb(120, 200, 154),
+        ),
+        (
+            "claude-w",
+            "[###########----]",
+            "75%",
+            Color::Rgb(238, 190, 70),
+        ),
+        (
+            "claude-c",
+            "[##############-]",
+            "90%",
+            Color::Rgb(255, 95, 109),
+        ),
+    ] {
+        let styles = rendered.styles_at_in_row(session, bar);
+        let filled = styles
+            .iter()
+            .skip(1)
+            .take_while(|style| style.fg != styles.last().unwrap().fg)
+            .map(|style| style.fg)
+            .collect::<Vec<_>>();
+
+        assert!(
+            !filled.is_empty(),
+            "{session} should have a filled Context bar"
+        );
+        assert!(
+            filled.iter().all(|color| *color == Some(expected_color)),
+            "{session} should use one Current Context role color, got {filled:?}"
+        );
+        assert_eq!(
+            rendered.style_at_in_row(session, percent).fg,
+            Some(expected_color)
+        );
+    }
+}
+
+#[test]
 fn all_page_keeps_multiple_worktrees_below_the_project_without_context() {
     let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
     let worktree = rendered
@@ -1050,25 +1097,27 @@ fn signals_guide_explains_every_recent_signal_and_retention_rule() {
 
     for required in [
         "Session lifecycle",
-        "Busy -> Idle",
-        "Busy -> Exited",
-        "Idle -> Exited",
-        "Exited -> Busy",
-        "Exited -> Idle",
-        "Ctx +Warning",
-        "Ctx +Critical",
-        "Ctx -Warning",
-        "Ctx -Critical",
+        "CX session1 Busy -> Idle",
+        "CX session1 Busy -> Exited",
+        "CX session1 Idle -> Exited",
+        "CX session1 Exited -> Busy",
+        "CX session1 Exited -> Idle",
+        "CL session1 Ctx +Warning 120.0k>150.0k",
+        "CL session1 Ctx +Critical 160.0k>180.0k",
+        "CL session1 Ctx -Warning 150.0k>120.0k",
+        "CL session1 Ctx -Critical 180.0k>160.0k",
         "Warning starts at 70%; Critical starts at 85%.",
-        "Cmp <trigger>",
-        "-Critical",
-        "Risk detected",
-        "Risk cleared",
+        "CL session1 Cmp auto 188.0k>100.0k",
+        "CL session1 Cmp auto 188.0k>100.0k -Critical",
+        "WT /project  Risk detected",
+        "WT /project  Risk cleared",
+        "Before 1: CL:session1",
+        "After 2: CL:session1, CX:session2",
         "CL  Claude Code",
         "CX  Codex CLI",
         "WT  Worktree",
         "Idle -> Busy is not recorded.",
-        "ordinary Context percentage changes",
+        "ordinary Current Context percentage changes",
         "source timestamps",
         "Possible Stall",
         "Only the five newest Signals are retained",
@@ -1096,7 +1145,7 @@ fn signals_guide_explains_context_evidence_and_scope() {
         .contains("before -> after Current Context values"));
     assert!(rendered
         .text
-        .contains("Only Open Sessions with a known Context percentage"));
+        .contains("Only Open Sessions with a known Current Context percentage"));
 }
 
 #[test]
@@ -1158,6 +1207,28 @@ fn overflowing_signals_guide_scrolls_and_reports_its_position() {
         .contains("prompt, response, tool, or source-code content"));
     assert!(!bottom.text.contains("Recent Signals answer"));
     assert!(!bottom.text.contains(" 1/"));
+}
+
+#[test]
+fn guide_scrolls_up_immediately_after_reaching_the_bottom() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    press(&mut ui, &snapshot, KeyCode::Tab);
+
+    for _ in 0..64 {
+        press(&mut ui, &snapshot, KeyCode::Char('j'));
+    }
+    let bottom = render(&snapshot, &ui, 80, 24);
+
+    press(&mut ui, &snapshot, KeyCode::Char('k'));
+    let one_line_up = render(&snapshot, &ui, 80, 24);
+
+    assert_ne!(
+        one_line_up.text, bottom.text,
+        "one Up key should move the Guide immediately after overscrolling the bottom"
+    );
 }
 
 #[test]
@@ -1439,26 +1510,16 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         let selected_critical = rendered.style_at_in_row("claude-c", "CRITICAL");
         let selected_busy = rendered.style_at_in_row("claude-c", "Busy");
         let critical_bar = rendered.styles_at_in_row("claude-c", "[##############-]");
-        let low_context = critical_bar[1];
-        let medium_context = critical_bar[8];
-        let warning_context = critical_bar[11];
-        let critical_context = critical_bar[14];
+        let critical_context = critical_bar[1];
         let unfilled_context = critical_bar[15];
-        for (role, style) in [
-            ("low Context", low_context),
-            ("medium Context", medium_context),
-            ("warning Context", warning_context),
-            ("critical Context", critical_context),
-        ] {
-            let ratio = contrast_ratio(style);
-            assert!(
-                ratio >= 4.5,
-                "Theme {expected_theme} rendered {role} at contrast {ratio:.2}"
-            );
-        }
-        assert_ne!(low_context.fg, medium_context.fg);
-        assert_ne!(medium_context.fg, warning_context.fg);
-        assert_ne!(warning_context.fg, critical_context.fg);
+        let ratio = contrast_ratio(critical_context);
+        assert!(
+            ratio >= 4.5,
+            "Theme {expected_theme} rendered Critical Current Context at contrast {ratio:.2}"
+        );
+        assert!(critical_bar[1..15]
+            .iter()
+            .all(|style| style.fg == critical_context.fg));
         assert_ne!(critical_context.fg, unfilled_context.fg);
         assert_eq!(
             rendered.style_at_in_row("claude-c", "90%").fg,
@@ -1466,7 +1527,7 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         );
         assert_eq!(
             rendered.style_at_in_row("claude-w", "75%").fg,
-            warning_context.fg
+            rendered.styles_at_in_row("claude-w", "[###########----]")[1].fg
         );
         for (role, style) in [("Busy state", busy), ("Idle state", idle)] {
             let ratio = contrast_ratio(style);

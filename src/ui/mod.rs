@@ -10,6 +10,7 @@ use crate::attention::{
     AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity, AttentionSnapshot,
 };
 use crate::clipboard::Clipboard;
+use crate::config::{CRIT_PCT, WARN_PCT};
 use crate::domain::{
     ModelUsage, Project, ProjectIdentity, Provider, Session, SessionState, Usage, Worktree,
 };
@@ -24,6 +25,7 @@ use ratatui::widgets::{
 use ratatui::Frame;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::cell::Cell as StateCell;
 use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::fs;
@@ -34,6 +36,7 @@ use theme::{Theme, ThemeName};
 const MIN_TERMINAL_WIDTH: u16 = 80;
 const MIN_TERMINAL_HEIGHT: u16 = 24;
 const PROVIDER_RECENT_SESSION_LIMIT: usize = 5;
+const UNMEASURED_GUIDE_MAX_SCROLL: usize = usize::MAX;
 
 /// Shared style for the currently-selected item.
 fn selected_style(theme: Theme) -> Style {
@@ -223,6 +226,8 @@ pub struct Ui {
     guide_category: GuideCategory,
     guide_pane: GuidePane,
     guide_scroll: usize,
+    // Wrapping depends on the rendered viewport, so draw records the latest usable limit.
+    guide_max_scroll: StateCell<usize>,
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
     theme: ThemeName,
@@ -258,6 +263,7 @@ impl Default for Ui {
             guide_category: GuideCategory::Overview,
             guide_pane: GuidePane::Categories,
             guide_scroll: 0,
+            guide_max_scroll: StateCell::new(UNMEASURED_GUIDE_MAX_SCROLL),
             profile_path: None,
             profile: ProfilePreferences::default(),
             theme: ThemeName::default(),
@@ -342,7 +348,7 @@ impl Ui {
             crossterm::event::KeyCode::Char('?') => {
                 self.guide_category = self.guide_category_for_context();
                 self.guide_pane = GuidePane::Categories;
-                self.guide_scroll = 0;
+                self.reset_guide_scroll();
                 self.guide_open = true;
             }
             crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::BackTab
@@ -463,23 +469,31 @@ impl Ui {
                 if self.guide_pane == GuidePane::Categories =>
             {
                 self.guide_category = self.guide_category.next();
-                self.guide_scroll = 0;
+                self.reset_guide_scroll();
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
                 if self.guide_pane == GuidePane::Categories =>
             {
                 self.guide_category = self.guide_category.previous();
-                self.guide_scroll = 0;
+                self.reset_guide_scroll();
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
                 if self.guide_pane == GuidePane::Content =>
             {
-                self.guide_scroll = self.guide_scroll.saturating_add(1);
+                let max_scroll = self.guide_max_scroll.get();
+                self.guide_scroll = self
+                    .guide_scroll
+                    .min(max_scroll)
+                    .saturating_add(1)
+                    .min(max_scroll);
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
                 if self.guide_pane == GuidePane::Content =>
             {
-                self.guide_scroll = self.guide_scroll.saturating_sub(1);
+                self.guide_scroll = self
+                    .guide_scroll
+                    .min(self.guide_max_scroll.get())
+                    .saturating_sub(1);
             }
             crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::Right
                 if self.guide_pane == GuidePane::Categories =>
@@ -494,6 +508,11 @@ impl Ui {
             _ => {}
         }
         Ok(())
+    }
+
+    fn reset_guide_scroll(&mut self) {
+        self.guide_scroll = 0;
+        self.guide_max_scroll.set(UNMEASURED_GUIDE_MAX_SCROLL);
     }
 
     fn set_tab(&mut self, tab: Tab) {
@@ -927,6 +946,7 @@ fn draw_guide(f: &mut Frame, ui: &Ui) {
         .wrap(wrap)
         .line_count(content_area.width);
     let max_scroll = total_lines.saturating_sub(content_area.height as usize);
+    ui.guide_max_scroll.set(max_scroll);
     let scroll = ui.guide_scroll.min(max_scroll);
     let mut block = base_block.title_bottom(
         Line::from(Span::styled(focus_hint, Style::default().fg(theme.muted))).left_aligned(),
@@ -1007,9 +1027,9 @@ fn guide_content(
                 .add_modifier(Modifier::BOLD),
         ))
     };
-    if category == GuideCategory::Overview {
-        return vec![
-            heading("Overview"),
+    match category {
+        GuideCategory::Overview => vec![
+            heading(category.label()),
             Line::from("SessionMesh is local to this Mac."),
             Line::from("Passive observation is the default."),
             Line::from("Control Operations require explicit authorization."),
@@ -1020,11 +1040,9 @@ fn guide_content(
             heading("Current and recent"),
             Line::from("NOW shows current conditions."),
             Line::from("Recent Signals show transitions."),
-        ];
-    }
-    if category == GuideCategory::Navigation {
-        return vec![
-            heading("Navigation"),
+        ],
+        GuideCategory::Navigation => vec![
+            heading(category.label()),
             Line::from("1 / 2 / 3  Open a page"),
             Line::from("Tab / Shift+Tab  Change region or Guide pane"),
             Line::from("Up/Down or j/k  Move or scroll"),
@@ -1034,11 +1052,9 @@ fn guide_content(
             Line::from("r  Refresh"),
             Line::from("?  Guide"),
             Line::from("q  Quit"),
-        ];
-    }
-    if category == GuideCategory::Sessions {
-        return vec![
-            heading("Sessions"),
+        ],
+        GuideCategory::Sessions => vec![
+            heading(category.label()),
             heading("Providers"),
             Line::from("CL  Claude Code"),
             Line::from("CX  Codex CLI"),
@@ -1049,13 +1065,11 @@ fn guide_content(
             heading("Current Context"),
             Line::from("Current Context is the latest known content occupying the model window."),
             Line::from("It is not cumulative Processed Usage."),
-            Line::from("Warning  70%"),
-            Line::from("Critical 85%"),
-        ];
-    }
-    if category == GuideCategory::Theme {
-        return vec![
-            heading("Theme"),
+            Line::from(format!("Warning  {WARN_PCT:.0}%")),
+            Line::from(format!("Critical {CRIT_PCT:.0}%")),
+        ],
+        GuideCategory::Theme => vec![
+            heading(category.label()),
             Line::from(format!("Active Theme  {active_theme_name}")),
             heading("Built-in Themes"),
             Line::from("sessionmesh  catppuccin  dracula"),
@@ -1064,63 +1078,72 @@ fn guide_content(
             Line::from("--theme <name>"),
             Line::from("Applies to one process and does not change the saved Theme."),
             heading("Semantics"),
-            Line::from("Colors distinguish Critical, Warning, Context, Idle, and Busy."),
+            Line::from("Current Context uses Normal, Warning, and Critical colors."),
+            Line::from("Idle and Busy use separate lifecycle colors."),
             Line::from("Theme changes presentation, never Session state or thresholds."),
-        ];
-    }
-    if category != GuideCategory::Signals {
-        return vec![
+        ],
+        GuideCategory::Signals => vec![
             heading(category.label()),
-            Line::from(""),
-            Line::from("SessionMesh keeps coding-session state visible in one terminal."),
-        ];
+            Line::from("Recent Signals answer: what just changed? They are not current state."),
+            heading("Session lifecycle"),
+            Line::from(
+                "CX session1 Busy -> Idle  Request ended; the Open Session is waiting for input.",
+            ),
+            Line::from("CX session1 Busy -> Exited  A running Provider process exited."),
+            Line::from("CX session1 Idle -> Exited  A waiting Provider process exited."),
+            Line::from("CX session1 Exited -> Busy  A Session resumed and is running."),
+            Line::from("CX session1 Exited -> Idle  A Session reopened and is waiting for input."),
+            heading("Current Context"),
+            Line::from("CL session1 Ctx +Warning 120.0k>150.0k  Current Context entered Warning."),
+            Line::from(
+                "CL session1 Ctx +Critical 160.0k>180.0k  Current Context entered Critical.",
+            ),
+            Line::from("CL session1 Ctx -Warning 150.0k>120.0k  The Warning condition cleared."),
+            Line::from(
+                "CL session1 Ctx -Critical 180.0k>160.0k  Critical cleared to Warning or normal.",
+            ),
+            Line::from("Signals show before -> after Current Context values."),
+            Line::from(
+                "Only Open Sessions with a known Current Context percentage cross thresholds.",
+            ),
+            Line::from(format!(
+                "Warning starts at {WARN_PCT:.0}%; Critical starts at {CRIT_PCT:.0}%."
+            )),
+            heading("Compaction"),
+            Line::from("CL session1 Cmp auto 188.0k>100.0k  Compaction observed."),
+            Line::from("CL session1 Cmp auto 188.0k>100.0k -Critical  Also cleared Critical."),
+            heading("Worktree"),
+            Line::from(
+                "WT /project  Risk detected  Two or more Open Sessions share a writable Worktree.",
+            ),
+            Line::from("WT /project  Risk cleared  Fewer than two Open Sessions remain there."),
+            Line::from("Before 1: CL:session1"),
+            Line::from("After 2: CL:session1, CX:session2"),
+            Line::from("Two Open Sessions trigger Shared Worktree Risk."),
+            Line::from("Evidence shows Open Session membership before -> after."),
+            Line::from("This is not proof of a file-level or Git conflict."),
+            heading("Prefixes"),
+            Line::from("CL  Claude Code"),
+            Line::from("CX  Codex CLI"),
+            Line::from("WT  Worktree"),
+            Line::from("Ctx Current Context"),
+            Line::from("Cmp Compaction"),
+            heading("Not recorded"),
+            Line::from("Idle -> Busy is not recorded."),
+            Line::from("Busy heartbeats and ordinary Current Context percentage changes."),
+            Line::from("Usage, Cost, source timestamps, or duplicate polls."),
+            Line::from("Possible Stall is not recorded."),
+            heading("Retention and privacy"),
+            Line::from("The first scan is a silent baseline and emits no Signals."),
+            Line::from("Recent Signals are metadata-only."),
+            Line::from(
+                "Only the five newest Signals are retained, newest first, for this process.",
+            ),
+            Line::from("Current state belongs in NOW."),
+            Line::from("Recent Signals never include:"),
+            Line::from("prompt, response, tool, or source-code content"),
+        ],
     }
-
-    vec![
-        heading("Signals"),
-        Line::from("Recent Signals answer: what just changed? They are not current state."),
-        heading("Session lifecycle"),
-        Line::from("Busy -> Idle  Request ended; the Open Session is waiting for input."),
-        Line::from("Busy -> Exited  A running Provider process exited."),
-        Line::from("Idle -> Exited  A waiting Provider process exited."),
-        Line::from("Exited -> Busy  A Session resumed and is running."),
-        Line::from("Exited -> Idle  A Session reopened and is waiting for input."),
-        heading("Context"),
-        Line::from("Ctx +Warning  Current Context entered Warning."),
-        Line::from("Ctx +Critical  Current Context entered Critical."),
-        Line::from("Ctx -Warning  The Warning condition cleared."),
-        Line::from("Ctx -Critical  Critical cleared to Warning or normal."),
-        Line::from("Signals show before -> after Current Context values."),
-        Line::from("Only Open Sessions with a known Context percentage cross thresholds."),
-        Line::from("Warning starts at 70%; Critical starts at 85%."),
-        heading("Compaction"),
-        Line::from("Cmp <trigger>  Compaction observed; values show Context before>after."),
-        Line::from("Cmp ... -Critical  The same Compaction also cleared Critical."),
-        heading("Worktree"),
-        Line::from("Risk detected  Two or more Open Sessions share a writable Worktree."),
-        Line::from("Risk cleared  Fewer than two Open Sessions remain there."),
-        Line::from("Two Open Sessions trigger Shared Worktree Risk."),
-        Line::from("Evidence shows Open Session membership before -> after."),
-        Line::from("This is not proof of a file-level or Git conflict."),
-        heading("Prefixes"),
-        Line::from("CL  Claude Code"),
-        Line::from("CX  Codex CLI"),
-        Line::from("WT  Worktree"),
-        Line::from("Ctx Current Context"),
-        Line::from("Cmp Compaction"),
-        heading("Not recorded"),
-        Line::from("Idle -> Busy is not recorded."),
-        Line::from("Busy heartbeats and ordinary Context percentage changes."),
-        Line::from("Usage, Cost, source timestamps, or duplicate polls."),
-        Line::from("Possible Stall is not recorded."),
-        heading("Retention and privacy"),
-        Line::from("The first scan is a silent baseline and emits no Signals."),
-        Line::from("Recent Signals are metadata-only."),
-        Line::from("Only the five newest Signals are retained, newest first, for this process."),
-        Line::from("Current state belongs in NOW."),
-        Line::from("Recent Signals never include:"),
-        Line::from("prompt, response, tool, or source-code content"),
-    ]
 }
 
 fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
@@ -1902,12 +1925,10 @@ fn shorten(value: &str, width: usize, keep_end: bool) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ContextPressureBand {
-    Low,
-    Medium,
+enum CurrentContextRole {
+    Normal,
     Warning,
     Critical,
-    Max,
 }
 
 const MIN_CONTEXT_BAR_WIDTH: usize = 12;
@@ -1930,42 +1951,28 @@ fn now_context_bar_width(terminal_width: u16, content_width: usize) -> usize {
     preferred_context_bar_width(terminal_width).min(available_cells)
 }
 
-fn context_pressure_band(percent: f64) -> ContextPressureBand {
-    if percent >= 95.0 {
-        ContextPressureBand::Max
-    } else if percent >= 85.0 {
-        ContextPressureBand::Critical
-    } else if percent >= 70.0 {
-        ContextPressureBand::Warning
-    } else if percent >= 50.0 {
-        ContextPressureBand::Medium
+fn current_context_role(percent: f64) -> CurrentContextRole {
+    if percent >= CRIT_PCT {
+        CurrentContextRole::Critical
+    } else if percent >= WARN_PCT {
+        CurrentContextRole::Warning
     } else {
-        ContextPressureBand::Low
+        CurrentContextRole::Normal
     }
 }
 
-fn context_pressure_style(band: ContextPressureBand, theme: Theme) -> Style {
-    let color = match band {
-        ContextPressureBand::Low => theme.context_low,
-        ContextPressureBand::Medium => theme.context_medium,
-        ContextPressureBand::Warning => theme.context_warning,
-        ContextPressureBand::Critical => theme.context_critical,
-        ContextPressureBand::Max => theme.context_max,
+fn current_context_style(role: CurrentContextRole, theme: Theme) -> Style {
+    let color = match role {
+        CurrentContextRole::Normal => theme.context_normal,
+        CurrentContextRole::Warning => theme.context_warning,
+        CurrentContextRole::Critical => theme.context_critical,
     };
     let style = Style::default().fg(color);
-    if matches!(
-        band,
-        ContextPressureBand::Critical | ContextPressureBand::Max
-    ) {
+    if role == CurrentContextRole::Critical {
         style.add_modifier(Modifier::BOLD)
     } else {
         style
     }
-}
-
-fn context_segment_band(index: usize, bar_width: usize) -> ContextPressureBand {
-    let segment_end_percent = ((index + 1) as f64 / bar_width as f64) * 100.0;
-    context_pressure_band(segment_end_percent)
 }
 
 fn now_context_evidence(session: &Session, bar_width: usize, theme: Theme) -> Vec<Span<'static>> {
@@ -1982,19 +1989,15 @@ fn now_context_evidence(session: &Session, bar_width: usize, theme: Theme) -> Ve
 
     let filled =
         ((percent.clamp(0.0, 100.0) / 100.0 * bar_width as f64).round() as usize).min(bar_width);
-    let current_band = context_pressure_band(percent);
+    let current_role = current_context_role(percent);
     let mut spans = Vec::with_capacity(bar_width + 4);
     spans.push(Span::styled("[", muted));
     for index in 0..bar_width {
         if index < filled {
-            let band = if index + 1 == filled {
-                current_band
-            } else if current_band == ContextPressureBand::Max && index + 2 == filled {
-                ContextPressureBand::Critical
-            } else {
-                context_segment_band(index, bar_width)
-            };
-            spans.push(Span::styled("#", context_pressure_style(band, theme)));
+            spans.push(Span::styled(
+                "#",
+                current_context_style(current_role, theme),
+            ));
         } else {
             spans.push(Span::styled("-", muted));
         }
@@ -2005,7 +2008,7 @@ fn now_context_evidence(session: &Session, bar_width: usize, theme: Theme) -> Ve
     let padding = evidence_width.saturating_sub(bar_width + 2 + percent_text.chars().count());
     spans.push(Span::styled(
         percent_text,
-        context_pressure_style(context_pressure_band(percent), theme),
+        current_context_style(current_context_role(percent), theme),
     ));
     spans.push(Span::styled(" ".repeat(padding), muted));
     spans
@@ -2348,7 +2351,7 @@ fn state_cell(state: SessionState, theme: Theme) -> Cell<'static> {
 
 fn context_style(s: &Session, theme: Theme) -> Style {
     match s.context.percent() {
-        Some(percent) => context_pressure_style(context_pressure_band(percent), theme),
+        Some(percent) => current_context_style(current_context_role(percent), theme),
         _ => Style::default().fg(theme.foreground),
     }
 }
@@ -3447,7 +3450,7 @@ mod tests {
         );
         assert_eq!(
             rendered_style_at(&terminal, "180.0k (90%)").fg,
-            Some(Color::Rgb(255, 138, 91))
+            Some(Color::Rgb(255, 95, 109))
         );
     }
 
@@ -3704,28 +3707,6 @@ mod tests {
         assert!(session.contains("Claude 12345678"));
         assert!(session.contains("sess"));
         assert!(!session.contains("remaining-id"));
-    }
-
-    #[test]
-    fn now_context_gradient_reaches_max_pressure_at_95_percent() {
-        let mut snapshot = demo_snapshot();
-        snapshot.sessions[0].context.tokens = 190_000;
-        let theme = ThemeName::SessionMesh.palette();
-
-        let spans = now_context_evidence(&snapshot.sessions[0], 20, theme);
-        let text = spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-
-        assert_eq!(text, "[###################-] 95%  ");
-        assert_eq!(spans[1].style.fg, Some(theme.context_low));
-        assert_eq!(spans[10].style.fg, Some(theme.context_medium));
-        assert_eq!(spans[14].style.fg, Some(theme.context_warning));
-        assert_eq!(spans[17].style.fg, Some(theme.context_critical));
-        assert_eq!(spans[19].style.fg, Some(theme.context_max));
-        assert_eq!(spans[22].style.fg, Some(theme.context_max));
-        assert!(spans[22].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
