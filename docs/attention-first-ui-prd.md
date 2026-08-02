@@ -31,7 +31,7 @@ screens, and the decision log in the same change.
 ## 2. Background
 
 The v1 UI is primarily a monitoring dashboard. It shows provider totals, session state,
-context pressure, historical usage, estimated cost, and compaction history.
+Current Context occupancy, historical usage, estimated cost, and compaction history.
 
 The higher-value user problem is not merely observing those metrics. A user running
 several Claude Code and Codex CLI sessions needs to answer:
@@ -159,7 +159,9 @@ detail view for every item:
 
 **Status: Confirmed**
 
-The selected row exposes one primary command, normally `Inspect`. Secondary commands such
+The persistent contextual Footer exposes one primary command for the selected item,
+normally `Enter Inspect` for a Session. The selected-row cursor identifies the command's
+target; do not repeat the same command text on every Session row. Secondary commands such
 as filtering must not compete visually with it. `Acknowledge` and `Snooze` are Deferred
 and do not appear as commands in the first attention-first implementation.
 
@@ -510,7 +512,7 @@ facts with independent evidence.
   distinct even when they share a remote URL.
 - Place non-Git Sessions directly in a standalone Project identified by canonical `cwd`,
   with Git-only fields unavailable.
-- Show branch, Worktree root, Shared Worktree Risk, and highest Context pressure at the
+- Show branch, Worktree root, Shared Worktree Risk, and highest Current Context role at the
   Worktree level. Keep state, Provider, model, Current Context progress, and last activity
   scannable in each Session row.
 - Render Current Context as the stable-width progress bar plus percentage defined by
@@ -564,8 +566,8 @@ The first version records these Recent Signals:
 - Compaction observed;
 - Shared Worktree Risk detected or cleared.
 
-It does not record Idle-to-Busy changes, Busy heartbeats, ordinary Context percentage
-changes, Usage or Cost changes, source-file timestamp changes, unchanged polling
+It does not record Idle-to-Busy changes, Busy heartbeats, ordinary Current Context
+percentage changes, Usage or Cost changes, source-file timestamp changes, unchanged polling
 observations, or `Possible Stall`.
 
 When one Compaction observation also clears a Context Alert, SessionMesh emits one compound
@@ -680,7 +682,7 @@ and Codex CLI respectively. They are the factual views behind attention classifi
 Session detail remains the evidence surface and should contain:
 
 - provider, native session ID, project, cwd/worktree, model, and current state;
-- current context occupancy and threshold state;
+- Current Context occupancy and threshold state;
 - Current Run Usage and Transcript Lifetime Usage as separate, explicitly labelled scopes;
 - per-model usage within the selected scope;
 - compaction timeline;
@@ -826,7 +828,9 @@ model, hide last activity, replace the Context bar with its percentage, then com
 Recent Signal evidence to one line.
 
 Attention kind and severity, Project and Worktree identity, Session State, Provider,
-Current Context percentage, selection, and Inspect remain available in the compact layout.
+Current Context percentage, selection, and access to Inspect through the persistent
+contextual Footer remain available in the compact layout. The Session row does not repeat
+the Footer's `Inspect` command text.
 Below the hard minimum, render a terminal-too-small state with the required and current
 dimensions plus Quit; do not attempt the normal layout.
 
@@ -993,7 +997,7 @@ and direct usability observation.
 | 2026-07-30 | Ship six built-in Themes and defer user-authored palettes. | Confirmed | SessionMesh, Catppuccin, Dracula, Gruvbox, Light, and High Contrast cover mainstream dark, bright-terminal, and accessibility needs without expanding first-version configuration and validation across a large palette catalog. |
 | 2026-07-30 | Show complete working-directory and source-log metadata in Session Detail without exposing raw contents. | Confirmed | Local paths and native identity support investigation, while raw JSONL, prompt/response, tool, and source-code content remain outside the privacy boundary. |
 | 2026-07-30 | Group provider-page sessions by Project while retaining one row per Session. | Confirmed | Project supplies context without losing session-specific state or detail navigation. |
-| 2026-07-30 | Render Current Context as a percentage progress bar with threshold colors. | Confirmed | Makes context pressure scannable while retaining precise text and unknown-state handling. |
+| 2026-07-30 | Render Current Context as a percentage progress bar with threshold colors. | Confirmed | Makes Current Context occupancy scannable while retaining precise text and unknown-state handling. |
 | 2026-07-30 | Divide the main terminal screen into regions, with `NOW` and `RECENT SIGNALS` as the only assigned regions. | Superseded | The lower row still owns observation, while the upper-right region is now assigned to `TASKS`. |
 | 2026-07-30 | Leave the other two proposed homepage regions unassigned. | Superseded | The upper-right region became `TASKS`; only the upper-left region remains deliberately empty. |
 | 2026-07-30 | Show Current Run Usage separately from Transcript Lifetime Usage in Session detail. | Confirmed | Current Run supports comparison with Claude Code `/usage`; transcript lifetime preserves inherited usage without presenting it as the same total. |
@@ -1022,6 +1026,7 @@ and direct usability observation.
 | 2026-07-30 | Auto-open Help once per local Profile and keep it available through `?`. | Superseded | The first-use persistence remains, but the small Help overlay is replaced by Guide. |
 | 2026-08-01 | Replace small Help with one global, contextual, two-pane Guide. | Confirmed | Every category remains available while the initial selection follows the user's current page or region. |
 | 2026-08-01 | Remove runtime `t` Theme cycling while preserving Theme loading and `--theme`. | Confirmed | Theme changes are low-frequency settings; removing the shortcut prevents accidental changes and frees footer space. |
+| 2026-08-02 | Expose the selected item's primary action in the persistent contextual Footer without repeating it on every Session row. | Confirmed | The selection cursor identifies the target and `Enter Inspect` teaches the command without consuming row width with repeated action text. |
 | 2026-07-30 | Render Session Detail as a full-page child view instead of a centered overlay. | Confirmed | Detail needs room for evidence, source metadata, scoped Usage, and Compactions; persistent numeric navigation and origin-state restoration keep it connected to the three top-level pages. |
 | 2026-07-30 | Add a `c` Copy menu for source paths and native Session ID in Session Detail. | Confirmed | Explicit field selection copies complete metadata values without exposing raw JSONL or modifying Provider Sessions. |
 | 2026-07-30 | Reserve `1/2/3` for top-level pages and use `Tab`/`Shift+Tab` for focus within the current page. | Confirmed | Numeric page navigation is already direct; local focus traversal makes the independent `NOW` and `RECENT SIGNALS` selections reachable without duplicating page navigation. |
