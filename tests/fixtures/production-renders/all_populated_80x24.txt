@@ -2,14 +2,14 @@
 ┌ PROJECTS 1 ───────────────────────────────────────────────── 5 OPEN SESSIONS ┐
 │sessionmesh                                                                   │
 │  ...ure/code/sessionmesh | main | WARNING Shared Worktree Risk x2            │
-│> CRITICAL Busy  Claude [#########-] 90%  claude-opus-4-8    30s       Inspect│
-│  SHARED   Busy  Codex  [####------] 40%  gpt-5-codex        1m        Inspect│
+│> CRITICAL Busy Claude claude-c [###########-] 90%  claude-opus-4-8   30s     │
+│  SHARED   Busy Codex  codex-sh [#####-------] 40%  gpt-5-codex       1m      │
 │  /Users/fixture/code/sessionmesh-warning | warning                           │
-│  WARNING  Busy  Claude [########--] 75%  claude-sonnet-4-5  2m        Inspect│
+│  WARNING  Busy Claude claude-w [#########---] 75%  claude-sonnet-4-5 2m      │
 │  /Users/fixture/code/sessionmesh-idle | idle                                 │
-│  IDLE     Idle  Codex  [###-------] 30%  gpt-5.2-codex      Idle 3m   Inspect│
+│  IDLE     Idle Codex  codex-id [####--------] 30%  gpt-5.2-codex     Idle 3m │
 │  /Users/fixture/code/sessionmesh-healthy | healthy                           │
-│  BUSY     Busy  Claude [##--------] 20%  claude-haiku-4-5   4m        Inspect│
+│  BUSY     Busy Claude claude-h [##----------] 20%  claude-haiku-4-5  4m      │
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -21,4 +21,4 @@
 │CX codex-idle Busy -> Idle                                                    │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-j/k | Enter Inspect | ? Help | q Quit                              fixture ready
+j/k | Enter Inspect | ? Guide | q Quit                             fixture ready

@@ -10,9 +10,10 @@ dollar estimates, and compaction history.
 ## Highlights
 
 - **Three numeric pages:** `[1]` All, `[2]` Claude Code, `[3]` Codex CLI.
-- **First-use Help:** opens once per local Profile and remains available through `?`.
+- **Contextual Guide:** opens once on first use and remains globally available through
+  `?`, with Overview, Navigation, Sessions, Signals, and Theme references.
 - **Six semantic Themes:** `sessionmesh`, `catppuccin`, `dracula`, `gruvbox`, `light`, and
-  `high-contrast`, selectable without changing Session semantics.
+  `high-contrast`, loaded from the local Profile or overridden for one process.
 - **Accurate context semantics** per provider (see `CONTEXT.md`).
 - **Live lifecycle:** Busy / Idle / exited, with PID-reuse-safe detection on macOS.
 - **Recent Signals:** five process-lifetime Session, Context, and Compaction transitions.
@@ -29,10 +30,14 @@ cargo run --release        # opens the TUI
 cargo run --release -- --theme dracula  # one-process Theme override
 ```
 
-Keys: `1-3` open pages · `Tab`/`Shift+Tab` move focus within a page · `t` cycles Themes ·
-`Up/Down` or `j/k` move selection or scroll Detail · `Enter` inspects a Session or toggles
-`OLDER SESSIONS` · `?` opens Help · `Esc` returns from Detail or closes the current layer ·
-`r` rescans · `q` quits.
+Keys: `1-3` open pages · `Tab`/`Shift+Tab` move focus within a page · `Up/Down` or `j/k`
+move selection or scroll Detail · `Enter` inspects a Session or toggles `OLDER SESSIONS` ·
+`?` opens Guide · `Esc` returns from Detail or closes the current layer · `r` rescans ·
+`q` quits.
+
+Guide opens on the category relevant to the current page or region while keeping every
+category available in its sidebar. Use `Up/Down` or `j/k` to choose a category, `Tab` or
+Right to enter its content, and `Shift+Tab` or Left to return to the sidebar.
 
 ### Non-interactive checks
 
@@ -57,9 +62,10 @@ Local pricing override: drop a `pricing.json` (same shape as `pricing/models.jso
 `SESSIONMESH_DATA_DIR`.
 
 The disposable Session index is `index.db`. Local Profile preferences are stored
-separately in `profile.json`; deleting that file restores first-use Help and the default
+separately in `profile.json`; deleting that file restores first-use Guide and the default
 `sessionmesh` Theme. `--theme <name>` overrides the saved Theme for one process without
-changing the Profile; unknown names fall back to `sessionmesh`.
+changing the Profile; unknown names fall back to `sessionmesh`. Runtime Theme switching is
+deferred to a future Settings feature.
 
 ## Layout
 

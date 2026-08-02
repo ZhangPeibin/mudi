@@ -27,4 +27,4 @@
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────── lines 1-19 of 19 ┘
-Esc | j/k Scroll | c Copy | 1/2/3 | t Theme | ? | q Quit                   fixture ready   ·   Estimated using API rates
+Esc | j/k Scroll | c Copy | 1/2/3 | ? Guide | q Quit                       fixture ready   ·   Estimated using API rates

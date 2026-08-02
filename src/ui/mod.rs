@@ -18,7 +18,9 @@ use chrono::Local;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarState, Table, TableState, Wrap,
+};
 use ratatui::Frame;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -101,6 +103,57 @@ enum AllRegion {
     RecentSignals,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuideCategory {
+    Overview,
+    Navigation,
+    Sessions,
+    Signals,
+    Theme,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuidePane {
+    Categories,
+    Content,
+}
+
+impl GuideCategory {
+    const ALL: [Self; 5] = [
+        Self::Overview,
+        Self::Navigation,
+        Self::Sessions,
+        Self::Signals,
+        Self::Theme,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Navigation => "Navigation",
+            Self::Sessions => "Sessions",
+            Self::Signals => "Signals",
+            Self::Theme => "Theme",
+        }
+    }
+
+    fn next(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|category| *category == self)
+            .unwrap_or(0);
+        Self::ALL[(index + 1).min(Self::ALL.len() - 1)]
+    }
+
+    fn previous(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|category| *category == self)
+            .unwrap_or(0);
+        Self::ALL[index.saturating_sub(1)]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ProviderProjectKey {
     provider: Provider,
@@ -166,12 +219,13 @@ pub struct Ui {
     signal_selected: usize,
     detail: Option<DetailView>,
     expanded_provider_disclosures: HashSet<ProviderDisclosureKey>,
-    help_open: bool,
+    guide_open: bool,
+    guide_category: GuideCategory,
+    guide_pane: GuidePane,
+    guide_scroll: usize,
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
     theme: ThemeName,
-    theme_override_active: bool,
-    theme_notice_until: Option<Instant>,
     status_notice: Option<(String, Instant)>,
 }
 
@@ -200,12 +254,13 @@ impl Default for Ui {
             signal_selected: 0,
             detail: None,
             expanded_provider_disclosures: HashSet::new(),
-            help_open: false,
+            guide_open: false,
+            guide_category: GuideCategory::Overview,
+            guide_pane: GuidePane::Categories,
+            guide_scroll: 0,
             profile_path: None,
             profile: ProfilePreferences::default(),
             theme: ThemeName::default(),
-            theme_override_active: false,
-            theme_notice_until: None,
             status_notice: None,
         }
     }
@@ -235,11 +290,10 @@ impl Ui {
                 }
             });
         Ok(Self {
-            help_open: !profile.help_seen,
+            guide_open: !profile.help_seen,
             profile_path: Some(profile_path),
             profile,
             theme,
-            theme_override_active: theme_override.is_some(),
             ..Self::default()
         })
     }
@@ -268,34 +322,29 @@ impl Ui {
         snap: &Snapshot,
     ) -> std::io::Result<UiAction> {
         self.clamp_selections(snap);
-        match key.code {
-            crossterm::event::KeyCode::Char('q') => return Ok(UiAction::Quit),
-            crossterm::event::KeyCode::Char('c')
-                if key
+        if key.code == crossterm::event::KeyCode::Char('q')
+            || (key.code == crossterm::event::KeyCode::Char('c')
+                && key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
-                return Ok(UiAction::Quit);
-            }
+                    .contains(crossterm::event::KeyModifiers::CONTROL))
+        {
+            return Ok(UiAction::Quit);
+        }
+        if self.guide_open {
+            self.handle_guide_key(key)?;
+            return Ok(UiAction::None);
+        }
+        match key.code {
             crossterm::event::KeyCode::Char('r') => return Ok(UiAction::Rescan),
             crossterm::event::KeyCode::Char('1') => self.set_tab(Tab::All),
             crossterm::event::KeyCode::Char('2') => self.set_tab(Tab::Claude),
             crossterm::event::KeyCode::Char('3') => self.set_tab(Tab::Codex),
-            crossterm::event::KeyCode::Char('?') => self.help_open = true,
-            crossterm::event::KeyCode::Char('t') => {
-                self.theme = self.theme.next();
-                if !self.theme_override_active {
-                    self.profile.theme = self.theme;
-                    self.save_profile()?;
-                }
-                self.theme_notice_until = Some(Instant::now() + Duration::from_secs(2));
+            crossterm::event::KeyCode::Char('?') => {
+                self.guide_category = self.guide_category_for_context();
+                self.guide_pane = GuidePane::Categories;
+                self.guide_scroll = 0;
+                self.guide_open = true;
             }
-            crossterm::event::KeyCode::Esc if self.help_open => {
-                self.profile.help_seen = true;
-                self.save_profile()?;
-                self.help_open = false;
-            }
-            _ if self.help_open => {}
             crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::BackTab
                 if self.detail.is_none() && self.tab == Tab::All =>
             {
@@ -403,12 +452,66 @@ impl Ui {
         Ok(UiAction::None)
     }
 
+    fn handle_guide_key(&mut self, key: crossterm::event::KeyEvent) -> std::io::Result<()> {
+        match key.code {
+            crossterm::event::KeyCode::Esc => {
+                self.profile.help_seen = true;
+                self.save_profile()?;
+                self.guide_open = false;
+            }
+            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
+                if self.guide_pane == GuidePane::Categories =>
+            {
+                self.guide_category = self.guide_category.next();
+                self.guide_scroll = 0;
+            }
+            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
+                if self.guide_pane == GuidePane::Categories =>
+            {
+                self.guide_category = self.guide_category.previous();
+                self.guide_scroll = 0;
+            }
+            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
+                if self.guide_pane == GuidePane::Content =>
+            {
+                self.guide_scroll = self.guide_scroll.saturating_add(1);
+            }
+            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
+                if self.guide_pane == GuidePane::Content =>
+            {
+                self.guide_scroll = self.guide_scroll.saturating_sub(1);
+            }
+            crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::Right
+                if self.guide_pane == GuidePane::Categories =>
+            {
+                self.guide_pane = GuidePane::Content;
+            }
+            crossterm::event::KeyCode::BackTab | crossterm::event::KeyCode::Left
+                if self.guide_pane == GuidePane::Content =>
+            {
+                self.guide_pane = GuidePane::Categories;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn set_tab(&mut self, tab: Tab) {
         self.tab = tab;
         self.selected = 0;
         self.all_region = AllRegion::Now;
         self.signal_selected = 0;
         self.detail = None;
+    }
+
+    fn guide_category_for_context(&self) -> GuideCategory {
+        if self.detail.is_some() || self.tab != Tab::All {
+            GuideCategory::Sessions
+        } else if self.all_region == AllRegion::RecentSignals {
+            GuideCategory::Signals
+        } else {
+            GuideCategory::Overview
+        }
     }
 
     fn copy_menu_is_open(&self) -> bool {
@@ -692,8 +795,8 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
         draw_copy_menu(f, snap, ui);
     }
 
-    if ui.help_open {
-        draw_help(f, theme);
+    if ui.guide_open {
+        draw_guide(f, ui);
     }
 }
 
@@ -789,47 +892,235 @@ fn draw_copy_menu(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     );
 }
 
-fn draw_help(f: &mut Frame, theme: Theme) {
-    let area = centered_rect(72, 62, f.area());
-    let lines = vec![
-        Line::from(Span::styled(
-            "Pages",
+fn draw_guide(f: &mut Frame, ui: &Ui) {
+    let theme = ui.theme.palette();
+    let area = centered_rect(80, 76, f.area());
+    let focus_hint = match ui.guide_pane {
+        GuidePane::Categories => " j/k Categories | Tab/Right Content | Esc Close ",
+        GuidePane::Content => " j/k Scroll | Shift+Tab/Left Categories | Esc Close ",
+    };
+    let base_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(Span::styled(
+            " Guide ",
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  [1] All    [2] Claude Code    [3] Codex CLI"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Controls",
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  Tab / Shift+Tab  Focus where available"),
-        Line::from("  Up/Down or j/k   Move selection"),
-        Line::from("  Enter            Inspect"),
-        Line::from("  t  Theme      r  Refresh"),
-        Line::from("  ?  Help      Esc  Close      q  Quit"),
-    ];
+        ));
+    let inner = base_block.inner(area);
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(24), Constraint::Percentage(76)])
+        .split(inner);
+    let content = guide_content(ui.guide_category, theme, ui.active_theme_name());
+    let wrap = Wrap { trim: false };
+    let initial_total_lines = Paragraph::new(content.clone())
+        .wrap(wrap)
+        .line_count(panes[1].width);
+    let overflow = initial_total_lines > panes[1].height as usize;
+    let content_area = Rect {
+        width: panes[1].width.saturating_sub(u16::from(overflow)),
+        ..panes[1]
+    };
+    let total_lines = Paragraph::new(content.clone())
+        .wrap(wrap)
+        .line_count(content_area.width);
+    let max_scroll = total_lines.saturating_sub(content_area.height as usize);
+    let scroll = ui.guide_scroll.min(max_scroll);
+    let mut block = base_block.title_bottom(
+        Line::from(Span::styled(focus_hint, Style::default().fg(theme.muted))).left_aligned(),
+    );
+    if overflow {
+        block = block.title_bottom(
+            Line::from(Span::styled(
+                format!(" {}/{} ", scroll + 1, total_lines),
+                Style::default().fg(theme.muted),
+            ))
+            .right_aligned(),
+        );
+    }
+    let categories = GuideCategory::ALL
+        .into_iter()
+        .map(|category| {
+            let selected = category == ui.guide_category;
+            Line::from(Span::styled(
+                format!("{} {}", if selected { '>' } else { ' ' }, category.label()),
+                if selected {
+                    selected_style(theme)
+                } else {
+                    Style::default().fg(theme.foreground)
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+
     f.render_widget(Clear, area);
+    f.render_widget(block, area);
     f.render_widget(
-        Paragraph::new(lines)
+        Paragraph::new(categories)
             .style(Style::default().fg(theme.foreground).bg(theme.background))
             .block(
                 Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.accent))
-                    .title(Span::styled(
-                        " Help - Esc to close ",
-                        Style::default()
-                            .fg(theme.accent)
-                            .add_modifier(Modifier::BOLD),
-                    )),
+                    .borders(Borders::RIGHT)
+                    .border_style(
+                        Style::default().fg(if ui.guide_pane == GuidePane::Categories {
+                            theme.accent
+                        } else {
+                            theme.border
+                        }),
+                    ),
             )
             .wrap(Wrap { trim: false }),
-        area,
+        panes[0],
     );
+    f.render_widget(
+        Paragraph::new(content)
+            .style(Style::default().fg(theme.foreground).bg(theme.background))
+            .scroll((scroll as u16, 0))
+            .wrap(wrap),
+        content_area,
+    );
+    if overflow {
+        let scrollbar = Scrollbar::default()
+            .begin_symbol(None)
+            .end_symbol(None)
+            .thumb_style(Style::default().fg(theme.accent))
+            .track_style(Style::default().fg(theme.border));
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(scroll)
+            .viewport_content_length(content_area.height as usize);
+        f.render_stateful_widget(scrollbar, panes[1], &mut scrollbar_state);
+    }
+}
+
+fn guide_content(
+    category: GuideCategory,
+    theme: Theme,
+    active_theme_name: &str,
+) -> Vec<Line<'static>> {
+    let heading = |text: &'static str| {
+        Line::from(Span::styled(
+            text,
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ))
+    };
+    if category == GuideCategory::Overview {
+        return vec![
+            heading("Overview"),
+            Line::from("SessionMesh is local to this Mac."),
+            Line::from("Passive observation is the default."),
+            Line::from("Control Operations require explicit authorization."),
+            heading("Pages"),
+            Line::from("1  All"),
+            Line::from("2  Claude Code"),
+            Line::from("3  Codex CLI"),
+            heading("Current and recent"),
+            Line::from("NOW shows current conditions."),
+            Line::from("Recent Signals show transitions."),
+        ];
+    }
+    if category == GuideCategory::Navigation {
+        return vec![
+            heading("Navigation"),
+            Line::from("1 / 2 / 3  Open a page"),
+            Line::from("Tab / Shift+Tab  Change region or Guide pane"),
+            Line::from("Up/Down or j/k  Move or scroll"),
+            Line::from("Enter  Inspect or expand"),
+            Line::from("Esc  Back or close"),
+            Line::from("c  Copy source metadata in Session Detail"),
+            Line::from("r  Refresh"),
+            Line::from("?  Guide"),
+            Line::from("q  Quit"),
+        ];
+    }
+    if category == GuideCategory::Sessions {
+        return vec![
+            heading("Sessions"),
+            heading("Providers"),
+            Line::from("CL  Claude Code"),
+            Line::from("CX  Codex CLI"),
+            heading("Open Session"),
+            Line::from("Busy  A request is running."),
+            Line::from("Idle  The process is waiting for input."),
+            Line::from("Exited  No live Provider process is attached."),
+            heading("Current Context"),
+            Line::from("Current Context is the latest known content occupying the model window."),
+            Line::from("It is not cumulative Processed Usage."),
+            Line::from("Warning  70%"),
+            Line::from("Critical 85%"),
+        ];
+    }
+    if category == GuideCategory::Theme {
+        return vec![
+            heading("Theme"),
+            Line::from(format!("Active Theme  {active_theme_name}")),
+            heading("Built-in Themes"),
+            Line::from("sessionmesh  catppuccin  dracula"),
+            Line::from("gruvbox  light  high-contrast"),
+            heading("Command-line override"),
+            Line::from("--theme <name>"),
+            Line::from("Applies to one process and does not change the saved Theme."),
+            heading("Semantics"),
+            Line::from("Colors distinguish Critical, Warning, Context, Idle, and Busy."),
+            Line::from("Theme changes presentation, never Session state or thresholds."),
+        ];
+    }
+    if category != GuideCategory::Signals {
+        return vec![
+            heading(category.label()),
+            Line::from(""),
+            Line::from("SessionMesh keeps coding-session state visible in one terminal."),
+        ];
+    }
+
+    vec![
+        heading("Signals"),
+        Line::from("Recent Signals answer: what just changed? They are not current state."),
+        heading("Session lifecycle"),
+        Line::from("Busy -> Idle  Request ended; the Open Session is waiting for input."),
+        Line::from("Busy -> Exited  A running Provider process exited."),
+        Line::from("Idle -> Exited  A waiting Provider process exited."),
+        Line::from("Exited -> Busy  A Session resumed and is running."),
+        Line::from("Exited -> Idle  A Session reopened and is waiting for input."),
+        heading("Context"),
+        Line::from("Ctx +Warning  Current Context entered Warning."),
+        Line::from("Ctx +Critical  Current Context entered Critical."),
+        Line::from("Ctx -Warning  The Warning condition cleared."),
+        Line::from("Ctx -Critical  Critical cleared to Warning or normal."),
+        Line::from("Signals show before -> after Current Context values."),
+        Line::from("Only Open Sessions with a known Context percentage cross thresholds."),
+        Line::from("Warning starts at 70%; Critical starts at 85%."),
+        heading("Compaction"),
+        Line::from("Cmp <trigger>  Compaction observed; values show Context before>after."),
+        Line::from("Cmp ... -Critical  The same Compaction also cleared Critical."),
+        heading("Worktree"),
+        Line::from("Risk detected  Two or more Open Sessions share a writable Worktree."),
+        Line::from("Risk cleared  Fewer than two Open Sessions remain there."),
+        Line::from("Two Open Sessions trigger Shared Worktree Risk."),
+        Line::from("Evidence shows Open Session membership before -> after."),
+        Line::from("This is not proof of a file-level or Git conflict."),
+        heading("Prefixes"),
+        Line::from("CL  Claude Code"),
+        Line::from("CX  Codex CLI"),
+        Line::from("WT  Worktree"),
+        Line::from("Ctx Current Context"),
+        Line::from("Cmp Compaction"),
+        heading("Not recorded"),
+        Line::from("Idle -> Busy is not recorded."),
+        Line::from("Busy heartbeats and ordinary Context percentage changes."),
+        Line::from("Usage, Cost, source timestamps, or duplicate polls."),
+        Line::from("Possible Stall is not recorded."),
+        heading("Retention and privacy"),
+        Line::from("The first scan is a silent baseline and emits no Signals."),
+        Line::from("Recent Signals are metadata-only."),
+        Line::from("Only the five newest Signals are retained, newest first, for this process."),
+        Line::from("Current state belongs in NOW."),
+        Line::from("Recent Signals never include:"),
+        Line::from("prompt, response, tool, or source-code content"),
+    ]
 }
 
 fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
@@ -935,7 +1226,7 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let (now_area, signals_area) = if area.width >= 120 {
         let areas = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(66), Constraint::Percentage(34)])
+            .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
             .split(area);
         (areas[0], Some(areas[1]))
     } else if area.height >= 14 {
@@ -966,6 +1257,7 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         })
         .sum::<usize>();
     let content_width = now_area.width.saturating_sub(2) as usize;
+    let context_bar_width = now_context_bar_width(area.width, content_width);
     let mut lines = Vec::new();
     let mut selectable = 0usize;
 
@@ -996,6 +1288,7 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                     &attention,
                     now_ms,
                     content_width,
+                    context_bar_width,
                     ui.all_region == AllRegion::Now && selectable == ui.selected,
                     theme,
                 ));
@@ -1008,6 +1301,7 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 &attention,
                 now_ms,
                 content_width,
+                context_bar_width,
                 ui.all_region == AllRegion::Now && selectable == ui.selected,
                 theme,
             ));
@@ -1426,6 +1720,7 @@ fn now_session_line(
     attention: &AttentionSnapshot,
     now_ms: i64,
     width: usize,
+    context_bar_width: usize,
     selected: bool,
     theme: Theme,
 ) -> Line<'static> {
@@ -1438,12 +1733,16 @@ fn now_session_line(
         Provider::ClaudeCode => "Claude",
         Provider::CodexCli => "Codex",
     };
-    let model_width = width.saturating_sub(60).max(8);
+    let attention_rank = attention.rank_for(session);
+    let model_width = width
+        .saturating_sub(NON_MODEL_WIDTH_WITHOUT_CONTEXT_CELLS + context_bar_width)
+        .max(8);
     let model = shorten_start(
         session.latest_model.as_deref().unwrap_or("N/A"),
         model_width,
     );
-    let attention_label = match attention.rank_for(session) {
+    let session_id = session.id.chars().take(8).collect::<String>();
+    let attention_label = match attention_rank {
         AttentionRank::CriticalContext => "CRITICAL",
         AttentionRank::SharedWorktreeRisk => "SHARED",
         AttentionRank::WarningContext => "WARNING",
@@ -1460,49 +1759,46 @@ fn now_session_line(
             _ => None,
         })
         .unwrap_or_else(|| fmt_relative(session.last_activity_ms, now_ms));
-    let elapsed = shorten_start(&elapsed, 9);
-    let row_style = if selected {
-        selected_style(theme)
+    let elapsed = shorten_start(&elapsed, 8);
+    let cursor_style = if selected {
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
     } else {
-        match attention.rank_for(session) {
-            AttentionRank::CriticalContext => Style::default()
-                .fg(theme.critical)
-                .add_modifier(Modifier::BOLD),
-            AttentionRank::SharedWorktreeRisk | AttentionRank::WarningContext => {
-                Style::default().fg(theme.warning)
-            }
-            AttentionRank::Idle => Style::default().fg(theme.idle),
-            AttentionRank::HealthyBusy if session.context.percent().is_none() => {
-                Style::default().fg(theme.muted)
-            }
-            AttentionRank::HealthyBusy => Style::default().fg(theme.busy),
+        Style::default()
+    };
+    let base_style = Style::default().fg(theme.foreground);
+    let attention_style = match attention_rank {
+        AttentionRank::CriticalContext => Style::default()
+            .fg(theme.critical)
+            .add_modifier(Modifier::BOLD),
+        AttentionRank::SharedWorktreeRisk | AttentionRank::WarningContext => {
+            Style::default().fg(theme.warning)
         }
+        AttentionRank::Idle => Style::default().fg(theme.idle),
+        AttentionRank::HealthyBusy => Style::default().fg(theme.busy),
     };
-    let context_evidence = now_context_evidence(session);
-    let context_style = if selected {
-        row_style
-    } else if session.context.percent().is_none() {
-        Style::default().fg(theme.muted)
-    } else {
-        context_style(session, theme)
+    let lifecycle_style = match session.state {
+        SessionState::Busy => Style::default().fg(theme.busy).add_modifier(Modifier::BOLD),
+        SessionState::Idle => Style::default().fg(theme.idle),
+        SessionState::Exited => unreachable!("NOW contains only Open Sessions"),
     };
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(
-            format!(
-                "{} {:<8} {:<5} {:<6} ",
-                if selected { ">" } else { " " },
-                attention_label,
-                state,
-                provider,
-            ),
-            row_style,
+            format!("{} ", if selected { ">" } else { " " }),
+            cursor_style,
         ),
-        Span::styled(format!("{context_evidence:<17} "), context_style),
-        Span::styled(
-            format!("{model:<model_width$} {elapsed:<9} Inspect"),
-            row_style,
-        ),
-    ])
+        Span::styled(format!("{attention_label:<8} "), attention_style),
+        Span::styled(format!("{state:<4} "), lifecycle_style),
+        Span::styled(format!("{provider:<6} "), base_style),
+        Span::styled(format!("{session_id:<8} "), base_style),
+    ];
+    spans.extend(now_context_evidence(session, context_bar_width, theme));
+    spans.push(Span::styled(
+        format!("{model:<model_width$} {elapsed:<8}"),
+        base_style,
+    ));
+    Line::from(spans)
 }
 
 fn now_project_line(
@@ -1605,19 +1901,114 @@ fn shorten(value: &str, width: usize, keep_end: bool) -> String {
     }
 }
 
-fn now_context_evidence(session: &Session) -> String {
-    match session.context.percent() {
-        Some(percent) => {
-            let filled = ((percent.clamp(0.0, 100.0) / 10.0).round() as usize).min(10);
-            format!(
-                "[{}{}] {:.0}%",
-                "#".repeat(filled),
-                "-".repeat(10 - filled),
-                percent,
-            )
-        }
-        None => "[----------] N/A".into(),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextPressureBand {
+    Low,
+    Medium,
+    Warning,
+    Critical,
+    Max,
+}
+
+const MIN_CONTEXT_BAR_WIDTH: usize = 12;
+const MAX_CONTEXT_BAR_WIDTH: usize = 20;
+const COMPACT_TERMINAL_WIDTH: u16 = 80;
+const COLUMNS_PER_CONTEXT_CELL: u16 = 5;
+const PREFERRED_MODEL_WIDTH: usize = 14;
+const NON_MODEL_WIDTH_WITHOUT_CONTEXT_CELLS: usize = 49;
+
+fn preferred_context_bar_width(terminal_width: u16) -> usize {
+    let extra_cells =
+        terminal_width.saturating_sub(COMPACT_TERMINAL_WIDTH) / COLUMNS_PER_CONTEXT_CELL;
+    (MIN_CONTEXT_BAR_WIDTH + extra_cells as usize).min(MAX_CONTEXT_BAR_WIDTH)
+}
+
+fn now_context_bar_width(terminal_width: u16, content_width: usize) -> usize {
+    let available_cells = content_width
+        .saturating_sub(NON_MODEL_WIDTH_WITHOUT_CONTEXT_CELLS + PREFERRED_MODEL_WIDTH)
+        .max(MIN_CONTEXT_BAR_WIDTH);
+    preferred_context_bar_width(terminal_width).min(available_cells)
+}
+
+fn context_pressure_band(percent: f64) -> ContextPressureBand {
+    if percent >= 95.0 {
+        ContextPressureBand::Max
+    } else if percent >= 85.0 {
+        ContextPressureBand::Critical
+    } else if percent >= 70.0 {
+        ContextPressureBand::Warning
+    } else if percent >= 50.0 {
+        ContextPressureBand::Medium
+    } else {
+        ContextPressureBand::Low
     }
+}
+
+fn context_pressure_style(band: ContextPressureBand, theme: Theme) -> Style {
+    let color = match band {
+        ContextPressureBand::Low => theme.context_low,
+        ContextPressureBand::Medium => theme.context_medium,
+        ContextPressureBand::Warning => theme.context_warning,
+        ContextPressureBand::Critical => theme.context_critical,
+        ContextPressureBand::Max => theme.context_max,
+    };
+    let style = Style::default().fg(color);
+    if matches!(
+        band,
+        ContextPressureBand::Critical | ContextPressureBand::Max
+    ) {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
+}
+
+fn context_segment_band(index: usize, bar_width: usize) -> ContextPressureBand {
+    let segment_end_percent = ((index + 1) as f64 / bar_width as f64) * 100.0;
+    context_pressure_band(segment_end_percent)
+}
+
+fn now_context_evidence(session: &Session, bar_width: usize, theme: Theme) -> Vec<Span<'static>> {
+    let muted = Style::default().fg(theme.muted);
+    let evidence_width = bar_width + 8;
+    let Some(percent) = session.context.percent() else {
+        let text = format!("[{}] N/A", "-".repeat(bar_width));
+        let padding = evidence_width.saturating_sub(text.chars().count());
+        return vec![Span::styled(
+            format!("{text}{}", " ".repeat(padding)),
+            muted,
+        )];
+    };
+
+    let filled =
+        ((percent.clamp(0.0, 100.0) / 100.0 * bar_width as f64).round() as usize).min(bar_width);
+    let current_band = context_pressure_band(percent);
+    let mut spans = Vec::with_capacity(bar_width + 4);
+    spans.push(Span::styled("[", muted));
+    for index in 0..bar_width {
+        if index < filled {
+            let band = if index + 1 == filled {
+                current_band
+            } else if current_band == ContextPressureBand::Max && index + 2 == filled {
+                ContextPressureBand::Critical
+            } else {
+                context_segment_band(index, bar_width)
+            };
+            spans.push(Span::styled("#", context_pressure_style(band, theme)));
+        } else {
+            spans.push(Span::styled("-", muted));
+        }
+    }
+    spans.push(Span::styled("]", muted));
+
+    let percent_text = format!(" {:.0}%", percent);
+    let padding = evidence_width.saturating_sub(bar_width + 2 + percent_text.chars().count());
+    spans.push(Span::styled(
+        percent_text,
+        context_pressure_style(context_pressure_band(percent), theme),
+    ));
+    spans.push(Span::styled(" ".repeat(padding), muted));
+    spans
 }
 
 // ---- Provider page ----
@@ -1957,10 +2348,7 @@ fn state_cell(state: SessionState, theme: Theme) -> Cell<'static> {
 
 fn context_style(s: &Session, theme: Theme) -> Style {
     match s.context.percent() {
-        Some(p) if p >= 85.0 => Style::default()
-            .fg(theme.critical)
-            .add_modifier(Modifier::BOLD),
-        Some(p) if p >= 70.0 => Style::default().fg(theme.warning),
+        Some(percent) => context_pressure_style(context_pressure_band(percent), theme),
         _ => Style::default().fg(theme.foreground),
     }
 }
@@ -2702,39 +3090,40 @@ fn push_wrapped_detail_field(
 fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     let compact = area.width < 100;
-    let left = if ui.copy_menu_is_open() && area.width < 100 {
-        "j/k Select | Enter Copy | Esc Cancel"
-    } else if ui.copy_menu_is_open() {
-        "Up/Down or j/k Select | Enter Copy | Esc Cancel"
-    } else if ui.detail.is_some() && area.width < 100 {
-        "Esc Back | j/k Scroll | c Copy | q Quit"
-    } else if ui.detail.is_some() {
-        "Esc | j/k Scroll | c Copy | 1/2/3 | t Theme | ? | q Quit"
-    } else if area.width < 100 && ui.tab == Tab::All {
-        "j/k | Enter Inspect | ? Help | q Quit"
-    } else if area.width < 100 {
-        "j/k | Enter Inspect/Expand | ? Help | q Quit"
-    } else if ui.tab == Tab::All {
-        "j/k | Enter Inspect | 1/2/3 | r | t Theme | ? | q Quit"
-    } else {
-        "j/k | Enter Inspect/Expand | 1/2/3 | t Theme | ? | q Quit"
-    };
     let now = Instant::now();
     let status_notice = ui
         .status_notice
         .as_ref()
         .filter(|(_, until)| now < *until)
         .map(|(message, _)| message.clone());
-    let theme_notice = ui.theme_notice_until.is_some_and(|until| now < until);
+    let left = if compact && status_notice.is_some() {
+        ""
+    } else if ui.copy_menu_is_open() && area.width < 100 {
+        "j/k Select | Enter Copy | Esc Cancel"
+    } else if ui.copy_menu_is_open() {
+        "Up/Down or j/k Select | Enter Copy | Esc Cancel"
+    } else if ui.detail.is_some() && area.width < 100 {
+        "Esc Back | j/k Scroll | c Copy | ? Guide | q Quit"
+    } else if ui.detail.is_some() {
+        "Esc | j/k Scroll | c Copy | 1/2/3 | ? Guide | q Quit"
+    } else if area.width < 100 && ui.tab == Tab::All {
+        "j/k | Enter Inspect | ? Guide | q Quit"
+    } else if area.width < 100 {
+        "j/k | Enter Inspect/Expand | ? Guide | q Quit"
+    } else if ui.tab == Tab::All {
+        "j/k | Enter Inspect | 1/2/3 | r | ? Guide | q Quit"
+    } else {
+        "j/k | Enter Inspect/Expand | 1/2/3 | ? Guide | q Quit"
+    };
     let status = if let Some(status_notice) = status_notice.as_ref() {
         status_notice.clone()
-    } else if theme_notice {
-        format!("Theme: {}", ui.active_theme_name())
     } else {
         snap.status.clone()
     };
     let shows_price_note = ui.tab != Tab::All || ui.detail.is_some();
-    let right = if compact && shows_price_note && status_notice.is_none() && !theme_notice {
+    let right = if status_notice.is_some() {
+        status
+    } else if compact && shows_price_note {
         "Estimated using API rates".to_string()
     } else if ui.tab == Tab::All && ui.detail.is_none() {
         status
@@ -2763,7 +3152,7 @@ fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         Paragraph::new(Span::styled(left, Style::default().fg(theme.muted))),
         cols[0],
     );
-    let status_color = if status_notice.is_some() || theme_notice {
+    let status_color = if status_notice.is_some() {
         theme.accent
     } else {
         theme.muted
@@ -2896,6 +3285,24 @@ mod tests {
         panic!("rendered text not found: {text}");
     }
 
+    fn now_cursor_style_at(terminal: &Terminal<TestBackend>, session_text: &str) -> Option<Style> {
+        let buffer = terminal.backend().buffer();
+        let width = buffer.area.width as usize;
+        let cell_count = session_text.chars().count();
+        for row in buffer.content().chunks(width) {
+            let Some(session_start) = row.windows(cell_count).position(|cells| {
+                cells.iter().map(|cell| cell.symbol()).collect::<String>() == session_text
+            }) else {
+                continue;
+            };
+            return row[..session_start]
+                .iter()
+                .find(|cell| cell.symbol() == ">")
+                .map(|cell| cell.style());
+        }
+        panic!("rendered Session not found: {session_text}");
+    }
+
     fn demo_snapshot() -> Snapshot {
         let session = Session {
             provider: Provider::ClaudeCode,
@@ -2970,75 +3377,48 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_sessionmesh_and_cycles_themes_in_the_confirmed_order() {
-        let mut ui = Ui::default();
-        let snapshot = Snapshot::default();
-
-        assert_eq!(ui.active_theme_name(), "sessionmesh");
-        for expected in [
-            "catppuccin",
-            "dracula",
-            "gruvbox",
-            "light",
-            "high-contrast",
-            "sessionmesh",
-        ] {
-            ui.handle_key(
-                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
-                &snapshot,
-            )
-            .unwrap();
-            assert_eq!(ui.active_theme_name(), expected);
-        }
-    }
-
-    #[test]
-    fn cycling_theme_briefly_reports_the_new_name() {
+    fn t_key_does_not_change_the_active_theme_or_show_a_notice() {
         let mut ui = Ui::default();
         let snapshot = Snapshot {
             status: "watching".into(),
             ..Snapshot::default()
         };
 
+        assert_eq!(ui.active_theme_name(), "sessionmesh");
         ui.handle_key(
             KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
             &snapshot,
         )
         .unwrap();
 
-        assert!(rendered_with_snapshot(&ui, &snapshot).contains("Theme: catppuccin"));
+        assert_eq!(ui.active_theme_name(), "sessionmesh");
+        assert!(!rendered_with_snapshot(&ui, &snapshot).contains("Theme:"));
     }
 
     #[test]
     fn each_theme_supplies_the_selected_page_structural_role() {
-        let mut ui = Ui::default();
-        let snapshot = Snapshot::default();
-        let mut selected_backgrounds = Vec::new();
-
-        for index in 0..6 {
+        for (name, selected_background) in [
+            ("sessionmesh", Color::Rgb(68, 61, 43)),
+            ("catppuccin", Color::Rgb(69, 71, 90)),
+            ("dracula", Color::Rgb(68, 71, 90)),
+            ("gruvbox", Color::Rgb(80, 73, 69)),
+            ("light", Color::Rgb(20, 84, 116)),
+            ("high-contrast", Color::Rgb(255, 255, 255)),
+        ] {
+            let profile_path = unused_profile_path(name);
+            std::fs::write(
+                &profile_path,
+                format!(r#"{{"help_seen":true,"theme":"{name}"}}"#),
+            )
+            .unwrap();
+            let ui = Ui::load(&profile_path, None).unwrap();
             let terminal = render_terminal(&ui);
-            selected_backgrounds.push(rendered_style_at(&terminal, "1 2 3").bg);
-
-            if index < 5 {
-                ui.handle_key(
-                    KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
-                    &snapshot,
-                )
-                .unwrap();
-            }
+            assert_eq!(
+                rendered_style_at(&terminal, "1 2 3").bg,
+                Some(selected_background)
+            );
+            let _ = std::fs::remove_file(profile_path);
         }
-
-        assert_eq!(
-            selected_backgrounds,
-            vec![
-                Some(Color::Rgb(68, 61, 43)),
-                Some(Color::Rgb(69, 71, 90)),
-                Some(Color::Rgb(68, 71, 90)),
-                Some(Color::Rgb(80, 73, 69)),
-                Some(Color::Rgb(20, 84, 116)),
-                Some(Color::Rgb(255, 255, 255)),
-            ]
-        );
     }
 
     #[test]
@@ -3067,7 +3447,7 @@ mod tests {
         );
         assert_eq!(
             rendered_style_at(&terminal, "180.0k (90%)").fg,
-            Some(Color::Rgb(245, 96, 96))
+            Some(Color::Rgb(255, 138, 91))
         );
     }
 
@@ -3115,15 +3495,10 @@ mod tests {
 
     #[test]
     fn light_theme_supplies_background_border_accent_and_muted_roles() {
-        let mut ui = Ui::default();
+        let profile_path = unused_profile_path("light-roles");
+        std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"light"}"#).unwrap();
+        let mut ui = Ui::load(&profile_path, None).unwrap();
         let snapshot = Snapshot::default();
-        for _ in 0..4 {
-            ui.handle_key(
-                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
-                &snapshot,
-            )
-            .unwrap();
-        }
         ui.tab = Tab::Claude;
 
         let terminal = render_terminal_with_snapshot(&ui, &snapshot);
@@ -3139,6 +3514,7 @@ mod tests {
             rendered_style_at(&terminal, "Indexing… sessions will appear shortly.").fg,
             Some(Color::Rgb(96, 101, 106))
         );
+        let _ = std::fs::remove_file(profile_path);
     }
 
     #[test]
@@ -3162,8 +3538,8 @@ mod tests {
         let page = rendered_rows_at(&ui, &snapshot, 120, 30);
         let project = page.find("\n│sessionmesh").unwrap();
         let worktree = page.find("WARNING Shared Worktree Risk x2").unwrap();
-        let claude = page.find("claude-open-model").unwrap();
-        let codex = page.find("codex-open-model").unwrap();
+        let claude = page.find("Claude demo-ses").unwrap();
+        let codex = page.find("Codex  codex-op").unwrap();
 
         assert!(project < worktree && worktree < claude && claude < codex);
         assert_eq!(
@@ -3174,10 +3550,11 @@ mod tests {
         );
         let session_rows = page
             .lines()
-            .filter(|line| line.contains("open-model"))
+            .filter(|line| line.contains("demo-ses") || line.contains("codex-op"))
             .collect::<Vec<_>>();
         assert_eq!(session_rows.len(), 2);
-        assert!(session_rows.iter().all(|line| line.contains("Inspect")));
+        assert!(session_rows.iter().any(|line| line.contains("demo-ses")));
+        assert!(session_rows.iter().any(|line| line.contains("codex-op")));
         assert!(!page.contains("exited-model"));
     }
 
@@ -3270,9 +3647,7 @@ mod tests {
         assert!(risk_line.contains("| main"));
         assert!(risk < claude && risk < codex);
         assert_eq!(
-            page.lines()
-                .filter(|line| line.contains("member") && line.contains("Inspect"))
-                .count(),
+            page.lines().filter(|line| line.contains("member")).count(),
             2
         );
     }
@@ -3285,16 +3660,13 @@ mod tests {
         snapshot.attention = Some(AttentionEngine::default().update(&snapshot.sessions, 2_000));
 
         let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
-        let critical = page
-            .lines()
-            .find(|line| line.contains("critical-model"))
-            .unwrap();
+        let critical = page.lines().find(|line| line.contains("demo-ses")).unwrap();
 
         assert!(critical.contains("CRITICAL"));
-        assert!(critical.contains("[#########-] 90%"));
+        assert!(critical.contains("[##############-] 90%"));
         assert!(critical.contains("Busy"));
         assert!(critical.contains("Claude"));
-        assert!(critical.contains("Inspect"));
+        assert!(critical.contains("demo-ses"));
     }
 
     #[test]
@@ -3304,13 +3676,89 @@ mod tests {
         snapshot.attention = Some(AttentionEngine::default().update(&snapshot.sessions, 2_000));
 
         let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
-        let warning = page
-            .lines()
-            .find(|line| line.contains("warning-model"))
-            .unwrap();
+        let warning = page.lines().find(|line| line.contains("demo-ses")).unwrap();
 
         assert!(warning.contains("WARNING"));
-        assert!(warning.contains("[########--] 75%"));
+        assert!(warning.contains("[###########----] 75%"));
+    }
+
+    #[test]
+    fn now_context_bar_grows_without_displacing_the_model() {
+        assert_eq!(now_context_bar_width(80, 78), 12);
+        assert_eq!(now_context_bar_width(85, 83), 13);
+        assert_eq!(now_context_bar_width(100, 98), 16);
+        assert_eq!(now_context_bar_width(120, 78), 15);
+        assert_eq!(now_context_bar_width(160, 105), 20);
+        assert_eq!(preferred_context_bar_width(120), 20);
+    }
+
+    #[test]
+    fn now_shows_the_first_eight_native_session_id_characters() {
+        let mut snapshot = demo_snapshot();
+        snapshot.sessions[0].id = "12345678remaining-id".into();
+        snapshot.sessions[0].latest_model = Some("session-id-model".into());
+
+        let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
+        let session = page.lines().find(|line| line.contains("12345678")).unwrap();
+
+        assert!(session.contains("Claude 12345678"));
+        assert!(session.contains("sess"));
+        assert!(!session.contains("remaining-id"));
+    }
+
+    #[test]
+    fn now_context_gradient_reaches_max_pressure_at_95_percent() {
+        let mut snapshot = demo_snapshot();
+        snapshot.sessions[0].context.tokens = 190_000;
+        let theme = ThemeName::SessionMesh.palette();
+
+        let spans = now_context_evidence(&snapshot.sessions[0], 20, theme);
+        let text = spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert_eq!(text, "[###################-] 95%  ");
+        assert_eq!(spans[1].style.fg, Some(theme.context_low));
+        assert_eq!(spans[10].style.fg, Some(theme.context_medium));
+        assert_eq!(spans[14].style.fg, Some(theme.context_warning));
+        assert_eq!(spans[17].style.fg, Some(theme.context_critical));
+        assert_eq!(spans[19].style.fg, Some(theme.context_max));
+        assert_eq!(spans[22].style.fg, Some(theme.context_max));
+        assert!(spans[22].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn now_preserves_lifecycle_colors_when_attention_overrides_rank() {
+        let mut snapshot = demo_snapshot();
+        snapshot.sessions[0].context.tokens = 150_000;
+        let mut idle = snapshot.sessions[0].clone();
+        idle.id = "idle-warning".into();
+        idle.project = Some(test_project("idle-warning-project"));
+        idle.worktree = Some(Worktree {
+            root: PathBuf::from("/Users/x/code/idle-warning"),
+            branch: Some("main".into()),
+            writable: true,
+        });
+        idle.cwd = Some("/Users/x/code/idle-warning".into());
+        idle.state = SessionState::Idle;
+        snapshot.sessions.push(idle);
+        let ui = Ui {
+            selected: usize::MAX,
+            ..Ui::default()
+        };
+
+        let terminal = render_terminal_at(&ui, &snapshot, 120, 30);
+        let busy = rendered_style_at(&terminal, "Busy");
+        let idle = rendered_style_at(&terminal, "Idle");
+        let warning = rendered_style_at(&terminal, "WARNING");
+
+        assert_eq!(busy.fg, Some(Color::Rgb(120, 205, 120)));
+        assert!(busy.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(idle.fg, Some(Color::Rgb(105, 184, 220)));
+        assert_eq!(warning.fg, Some(Color::Rgb(238, 190, 70)));
+        assert_ne!(busy, warning);
+        assert_ne!(idle, warning);
     }
 
     #[test]
@@ -3374,10 +3822,10 @@ mod tests {
         ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
             .unwrap();
         let all = render_terminal_with_snapshot(&ui, &snapshot);
-        assert_eq!(
-            rendered_style_at(&all, "second-open-model").bg,
-            Some(Color::Rgb(68, 61, 43))
-        );
+        let cursor = now_cursor_style_at(&all, "second-open-model").unwrap();
+        assert_eq!(cursor.fg, Some(Color::Rgb(230, 180, 80)));
+        assert!(cursor.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(now_cursor_style_at(&all, "first-open-model"), None);
     }
 
     #[test]
@@ -3416,11 +3864,11 @@ mod tests {
             .find(|line| line.contains("unknown-model"))
             .unwrap();
 
-        assert!(known.contains("[#######---] 70%"));
-        assert!(unknown.contains("[----------] N/A"));
+        assert!(known.contains("[###########----] 70%"));
+        assert!(unknown.contains("[---------------] N/A"));
         assert_eq!(known.find("known-model"), unknown.find("unknown-model"));
         assert_eq!(
-            rendered_style_at(&terminal, "[----------] N/A").fg,
+            rendered_style_at(&terminal, "[---------------] N/A").fg,
             Some(Color::Rgb(132, 136, 141))
         );
     }
@@ -3518,7 +3966,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             wide_top.chars().position(|character| character == '┐'),
-            Some(78)
+            Some(79)
         );
 
         let compact = rendered_rows_at(&ui, &snapshot, 80, 24);
@@ -3645,7 +4093,6 @@ mod tests {
                 },
             ],
         }];
-        let selected_background = Some(Color::Rgb(68, 61, 43));
         let mut ui = Ui::default();
 
         ui.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &snapshot)
@@ -3655,17 +4102,12 @@ mod tests {
         let located = render_terminal_at(&ui, &snapshot, 120, 30);
 
         assert_eq!(ui.active_tab(), Tab::All);
-        assert_eq!(
-            rendered_style_at(&located, "recommended-model").bg,
-            selected_background
-        );
-        assert_ne!(
-            rendered_style_at(&located, "arbitrary-model").bg,
-            selected_background
-        );
+        let cursor = now_cursor_style_at(&located, "recommended...").unwrap();
+        assert_eq!(cursor.fg, Some(Color::Rgb(230, 180, 80)));
+        assert_eq!(now_cursor_style_at(&located, "arbitrary-m..."), None);
         assert_ne!(
             rendered_style_at(&located, "Risk detected").bg,
-            selected_background
+            Some(Color::Rgb(68, 61, 43))
         );
     }
 
@@ -3752,9 +4194,9 @@ mod tests {
             rendered_style_at(&signals_focused, "second-signal").bg,
             selected_background
         );
-        assert_ne!(
-            rendered_style_at(&signals_focused, "second-now-model").bg,
-            selected_background
+        assert_eq!(
+            now_cursor_style_at(&signals_focused, "second-now-..."),
+            None
         );
 
         ui.handle_key(
@@ -3763,10 +4205,8 @@ mod tests {
         )
         .unwrap();
         let now_focused = render_terminal_at(&ui, &snapshot, 120, 30);
-        assert_eq!(
-            rendered_style_at(&now_focused, "second-now-model").bg,
-            selected_background
-        );
+        let cursor = now_cursor_style_at(&now_focused, "second-now-...").unwrap();
+        assert_eq!(cursor.fg, Some(Color::Rgb(230, 180, 80)));
         assert_ne!(
             rendered_style_at(&now_focused, "second-signal").bg,
             selected_background
@@ -3828,10 +4268,8 @@ mod tests {
         )
         .unwrap();
         let restored_now = render_terminal_at(&ui, &snapshot, 120, 30);
-        assert_eq!(
-            rendered_style_at(&restored_now, "target-now-model").bg,
-            selected_background
-        );
+        let cursor = now_cursor_style_at(&restored_now, "target-now-...").unwrap();
+        assert_eq!(cursor.fg, Some(Color::Rgb(230, 180, 80)));
     }
 
     #[test]
@@ -3920,14 +4358,14 @@ mod tests {
         let page = rendered_rows_at(&ui, &snapshot, 120, 30);
         let session = page
             .lines()
-            .find(|line| line.contains("healthy-busy-m..."))
+            .find(|line| line.contains("healthy-bus..."))
             .unwrap();
 
         assert!(session.contains("Busy"));
         assert!(session.contains("Claude"));
-        assert!(session.contains("[####------] 40%"));
-        assert!(session.contains("Inspect"));
-        assert_eq!(page.matches("healthy-busy-m...").count(), 1);
+        assert!(session.contains("[######---------] 40%"));
+        assert!(session.contains("demo-ses"));
+        assert_eq!(page.matches("healthy-bus...").count(), 1);
         for manufactured_condition in ["Alert", "ATTENTION", "Warning", "Critical"] {
             assert!(!page.contains(manufactured_condition));
         }
@@ -3962,9 +4400,9 @@ mod tests {
             "WARNING",
             "Busy",
             "Claude",
-            "[########--] 75%",
+            "demo-ses",
+            "[#########---] 75%",
             "0s",
-            "Inspect",
         ] {
             assert!(
                 session.contains(evidence),
@@ -4020,17 +4458,10 @@ mod tests {
         secondary.state = SessionState::Exited;
         secondary.last_activity_ms = now - 1_000;
         snapshot.sessions.push(secondary);
-        let mut ui = Ui {
-            tab: Tab::Claude,
-            ..Ui::default()
-        };
-        for _ in 0..4 {
-            ui.handle_key(
-                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
-                &snapshot,
-            )
-            .unwrap();
-        }
+        let profile_path = unused_profile_path("light-provider-roles");
+        std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"light"}"#).unwrap();
+        let mut ui = Ui::load(&profile_path, None).unwrap();
+        ui.tab = Tab::Claude;
 
         let inventory = render_terminal_with_snapshot(&ui, &snapshot);
         assert_eq!(
@@ -4065,45 +4496,39 @@ mod tests {
             rendered_style_at(&detail, "demo-session").fg,
             Some(Color::Rgb(28, 31, 34))
         );
+        let _ = std::fs::remove_file(profile_path);
     }
 
     #[test]
-    fn help_overlay_uses_the_active_theme_roles() {
-        let profile_path = unused_profile_path("themed-help");
+    fn guide_uses_the_active_theme_roles() {
+        let profile_path = unused_profile_path("themed-guide");
         let ui = Ui::load(&profile_path, Some("light")).unwrap();
 
         let terminal = render_terminal(&ui);
 
         assert_eq!(
-            rendered_style_at(&terminal, "Pages").fg,
+            rendered_style_at(&terminal, "> Overview").bg,
+            Some(Color::Rgb(20, 84, 116))
+        );
+        assert_eq!(
+            rendered_style_at(&terminal, "Guide").fg,
             Some(Color::Rgb(25, 91, 130))
         );
         assert_eq!(
-            rendered_style_at(&terminal, "[1] All").fg,
+            rendered_style_at(&terminal, "Passive observation is the default.").fg,
             Some(Color::Rgb(28, 31, 34))
-        );
-        assert_eq!(
-            rendered_style_at(&terminal, "Help - Esc to close").fg,
-            Some(Color::Rgb(25, 91, 130))
         );
 
         let _ = std::fs::remove_file(profile_path);
     }
 
     #[test]
-    fn footer_uses_theme_roles_and_exposes_theme_cycling() {
-        let mut ui = Ui {
-            tab: Tab::Claude,
-            ..Ui::default()
-        };
+    fn footer_uses_theme_roles_and_exposes_the_global_guide() {
+        let profile_path = unused_profile_path("light-footer");
+        std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"light"}"#).unwrap();
+        let mut ui = Ui::load(&profile_path, None).unwrap();
+        ui.tab = Tab::Claude;
         let snapshot = Snapshot::default();
-        for _ in 0..4 {
-            ui.handle_key(
-                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
-                &snapshot,
-            )
-            .unwrap();
-        }
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &snapshot, &ui)).unwrap();
@@ -4117,25 +4542,18 @@ mod tests {
             .collect();
         assert!(!rendered.contains("Active Today"));
         assert_eq!(
-            rendered_style_at(&terminal, "t Theme").fg,
+            rendered_style_at(&terminal, "? Guide").fg,
             Some(Color::Rgb(96, 101, 106))
         );
-        assert_eq!(
-            rendered_style_at(&terminal, "Theme: light").fg,
-            Some(Color::Rgb(25, 91, 130))
-        );
+        assert!(!rendered.contains("t Theme"));
+        assert!(!rendered.contains("Theme: light"));
+        let _ = std::fs::remove_file(profile_path);
     }
 
     #[test]
-    fn runtime_theme_selection_is_restored_from_the_profile() {
+    fn saved_theme_selection_is_restored_from_the_profile() {
         let profile_path = unused_profile_path("persisted-theme");
-        let mut ui = Ui::load(&profile_path, None).unwrap();
-
-        ui.handle_key(
-            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
-            &Snapshot::default(),
-        )
-        .unwrap();
+        std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"catppuccin"}"#).unwrap();
 
         let reloaded = Ui::load(&profile_path, None).unwrap();
         assert_eq!(reloaded.active_theme_name(), "catppuccin");
@@ -4146,23 +4564,10 @@ mod tests {
     #[test]
     fn process_theme_override_takes_precedence_without_changing_the_profile() {
         let profile_path = unused_profile_path("theme-override");
-        let mut saved = Ui::load(&profile_path, None).unwrap();
-        saved
-            .handle_key(
-                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
-                &Snapshot::default(),
-            )
-            .unwrap();
+        std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"catppuccin"}"#).unwrap();
 
-        let mut overridden = Ui::load(&profile_path, Some("dracula")).unwrap();
+        let overridden = Ui::load(&profile_path, Some("dracula")).unwrap();
         assert_eq!(overridden.active_theme_name(), "dracula");
-        overridden
-            .handle_key(
-                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
-                &Snapshot::default(),
-            )
-            .unwrap();
-        assert_eq!(overridden.active_theme_name(), "gruvbox");
 
         let reloaded = Ui::load(&profile_path, None).unwrap();
         assert_eq!(reloaded.active_theme_name(), "catppuccin");
@@ -4173,13 +4578,7 @@ mod tests {
     #[test]
     fn unknown_process_theme_falls_back_without_changing_the_profile() {
         let profile_path = unused_profile_path("unknown-theme-override");
-        let mut saved = Ui::load(&profile_path, None).unwrap();
-        saved
-            .handle_key(
-                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
-                &Snapshot::default(),
-            )
-            .unwrap();
+        std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"catppuccin"}"#).unwrap();
 
         let overridden = Ui::load(&profile_path, Some("neon")).unwrap();
         assert_eq!(overridden.active_theme_name(), "sessionmesh");
@@ -4202,14 +4601,14 @@ mod tests {
     }
 
     #[test]
-    fn first_use_profile_opens_help() {
+    fn first_use_profile_opens_guide_on_overview() {
         let ui = Ui::load(unused_profile_path("first-use"), None).unwrap();
 
-        assert!(rendered(&ui).contains("Help - Esc to close"));
+        assert!(rendered(&ui).contains("> Overview"));
     }
 
     #[test]
-    fn dismissing_first_use_help_is_remembered_by_the_profile() {
+    fn dismissing_first_use_guide_is_remembered_by_the_profile() {
         let profile_path = unused_profile_path("dismissed-help");
         let mut ui = Ui::load(&profile_path, None).unwrap();
 
@@ -4220,13 +4619,13 @@ mod tests {
         .unwrap();
 
         let reloaded = Ui::load(&profile_path, None).unwrap();
-        assert!(!rendered(&reloaded).contains("Help - Esc to close"));
+        assert!(!rendered(&reloaded).contains("> Overview"));
 
         let _ = std::fs::remove_file(profile_path);
     }
 
     #[test]
-    fn deleting_help_preference_restores_first_use_help() {
+    fn deleting_help_preference_restores_first_use_guide() {
         let profile_path = unused_profile_path("deleted-help-preference");
         let mut ui = Ui::load(&profile_path, None).unwrap();
         ui.handle_key(
@@ -4238,46 +4637,52 @@ mod tests {
 
         let reloaded = Ui::load(&profile_path, None).unwrap();
 
-        assert!(rendered(&reloaded).contains("Help - Esc to close"));
+        assert!(rendered(&reloaded).contains("> Overview"));
     }
 
     #[test]
-    fn help_can_be_reopened_and_closed_without_changing_the_active_page() {
-        let profile_path = unused_profile_path("reopened-help");
+    fn guide_can_be_reopened_and_closed_without_changing_the_active_page() {
+        let profile_path = unused_profile_path("reopened-guide");
         let mut ui = Ui::load(&profile_path, None).unwrap();
         let snapshot = Snapshot::default();
         ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
             .unwrap();
-        let page_before_help = rendered(&ui);
+        let page_before_guide = rendered(&ui);
 
         ui.handle_key(
             KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
             &snapshot,
         )
         .unwrap();
-        assert!(rendered(&ui).contains("Help - Esc to close"));
+        assert!(rendered(&ui).contains("> Overview"));
 
         ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
             .unwrap();
-        assert_eq!(rendered(&ui), page_before_help);
+        assert_eq!(rendered(&ui), page_before_guide);
 
         let _ = std::fs::remove_file(profile_path);
     }
 
     #[test]
-    fn number_keys_always_open_their_assigned_page() {
+    fn guide_prevents_page_navigation_from_changing_the_underlying_page() {
         let mut ui = Ui::load(unused_profile_path("numeric-pages"), None).unwrap();
         let snapshot = Snapshot::default();
 
-        for (key, expected) in [('2', Tab::Claude), ('3', Tab::Codex), ('1', Tab::All)] {
-            ui.handle_key(
-                KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
-                &snapshot,
-            )
+        ui.handle_key(
+            KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
+            &snapshot,
+        )
+        .unwrap();
+        assert_eq!(ui.active_tab(), Tab::All);
+
+        ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
             .unwrap();
-            assert_eq!(ui.active_tab(), expected);
-        }
-        assert!(rendered(&ui).contains("Help - Esc to close"));
+        ui.handle_key(
+            KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
+            &snapshot,
+        )
+        .unwrap();
+        assert_eq!(ui.active_tab(), Tab::Claude);
     }
 
     #[test]
@@ -4336,25 +4741,31 @@ mod tests {
     }
 
     #[test]
-    fn help_explains_page_mapping_and_essential_controls() {
-        let ui = Ui::load(unused_profile_path("help-content"), None).unwrap();
-        let help = rendered(&ui);
+    fn guide_navigation_explains_page_mapping_and_essential_controls() {
+        let mut ui = Ui::load(unused_profile_path("guide-content"), None).unwrap();
+        ui.handle_key(
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            &Snapshot::default(),
+        )
+        .unwrap();
+        let guide = rendered(&ui);
 
         for expected in [
-            "[1] All",
-            "[2] Claude Code",
-            "[3] Codex CLI",
+            "1 / 2 / 3",
             "Tab / Shift+Tab",
             "Up/Down or j/k",
             "Enter",
-            "t  Theme",
             "Refresh",
-            "?",
+            "?  Guide",
             "Esc",
             "Quit",
         ] {
-            assert!(help.contains(expected), "Help should contain {expected:?}");
+            assert!(
+                guide.contains(expected),
+                "Navigation Guide should contain {expected:?}"
+            );
         }
+        assert!(!guide.contains("t Theme"));
     }
 
     #[test]

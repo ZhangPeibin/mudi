@@ -15,6 +15,7 @@ use sessionmesh::signals::{
 use sessionmesh::ui::{draw, Ui};
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 struct ProductionRender {
     width: u16,
@@ -45,6 +46,40 @@ impl ProductionRender {
             }
         }
         panic!("rendered text not found: {text:?}");
+    }
+
+    fn style_at_in_row(&self, row_text: &str, text: &str) -> Style {
+        let cell_count = text.chars().count();
+        for row in self.buffer.content().chunks(self.width as usize) {
+            let rendered_row = row.iter().map(|cell| cell.symbol()).collect::<String>();
+            if !rendered_row.contains(row_text) {
+                continue;
+            }
+            if let Some(cells) = row
+                .windows(cell_count)
+                .find(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>() == text)
+            {
+                return cells[0].style();
+            }
+        }
+        panic!("rendered text {text:?} not found in row containing {row_text:?}");
+    }
+
+    fn styles_at_in_row(&self, row_text: &str, text: &str) -> Vec<Style> {
+        let cell_count = text.chars().count();
+        for row in self.buffer.content().chunks(self.width as usize) {
+            let rendered_row = row.iter().map(|cell| cell.symbol()).collect::<String>();
+            if !rendered_row.contains(row_text) {
+                continue;
+            }
+            if let Some(cells) = row
+                .windows(cell_count)
+                .find(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>() == text)
+            {
+                return cells.iter().map(|cell| cell.style()).collect();
+            }
+        }
+        panic!("rendered text {text:?} not found in row containing {row_text:?}");
     }
 }
 
@@ -353,6 +388,24 @@ fn press(ui: &mut Ui, snapshot: &Snapshot, code: KeyCode) {
         .unwrap();
 }
 
+fn ui_with_theme(theme: &str) -> Ui {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let profile_path = std::env::temp_dir().join(format!(
+        "sessionmesh-production-theme-{}-{}-{}.json",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed),
+        theme,
+    ));
+    std::fs::write(
+        &profile_path,
+        format!(r#"{{"help_seen":true,"theme":"{theme}"}}"#),
+    )
+    .unwrap();
+    let ui = Ui::load(&profile_path, None).unwrap();
+    std::fs::remove_file(profile_path).unwrap();
+    ui
+}
+
 fn contrast_ratio(style: Style) -> f64 {
     let foreground = luminance(style.fg.expect("rendered role should set a foreground"));
     let background = luminance(style.bg.expect("rendered role should set a background"));
@@ -481,7 +534,7 @@ fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
 #[test]
 fn all_page_labels_the_project_region_and_uses_theme_foreground_for_project_names() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let ui = Ui::default();
 
     let dark = render(&snapshot, &ui, 120, 30);
     assert!(dark
@@ -497,14 +550,8 @@ fn all_page_labels_the_project_region_and_uses_theme_foreground_for_project_name
     assert_eq!(dark_project.fg, Some(Color::Rgb(224, 220, 210)));
     assert!(dark_project.add_modifier.contains(Modifier::BOLD));
 
-    for _ in 0..6 {
-        if ui.active_theme_name() == "light" {
-            break;
-        }
-        press(&mut ui, &snapshot, KeyCode::Char('t'));
-    }
-    assert_eq!(ui.active_theme_name(), "light");
-    let light = render(&snapshot, &ui, 120, 30);
+    let light_ui = ui_with_theme("light");
+    let light = render(&snapshot, &light_ui, 120, 30);
     let light_project = light.style_at("sessionmesh");
     assert_eq!(light_project.fg, Some(Color::Rgb(28, 31, 34)));
     assert!(light_project.add_modifier.contains(Modifier::BOLD));
@@ -602,7 +649,7 @@ fn production_render_uses_the_snapshot_time_for_relative_session_age() {
     let session_row = rendered
         .text
         .lines()
-        .find(|line| line.contains("stable-clock-m"))
+        .find(|line| line.contains("Claude stable-c"))
         .unwrap_or_else(|| {
             panic!(
                 "stable clock Session should be rendered:\n{}",
@@ -866,7 +913,7 @@ fn full_open_detail_matches_the_reviewed_production_fixture() {
 }
 
 #[test]
-fn compact_help_matches_the_reviewed_production_fixture() {
+fn compact_guide_opens_with_all_categories() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('?'));
@@ -874,20 +921,446 @@ fn compact_help_matches_the_reviewed_production_fixture() {
 
     assert_eq!((rendered.width, rendered.height), (80, 24));
     for required in [
-        "Help - Esc to close",
-        "[1] All",
-        "[2] Claude Code",
-        "[3] Codex CLI",
-        "Enter            Inspect",
-        "t  Theme",
-        "q  Quit",
+        "Guide",
+        "Overview",
+        "Navigation",
+        "Sessions",
+        "Signals",
+        "Theme",
     ] {
         assert!(rendered.text.contains(required));
     }
+    assert!(!rendered.text.contains("Help - Esc to close"));
     assert_fixture(
         &rendered,
-        include_str!("fixtures/production-renders/help_80x24.txt"),
+        include_str!("fixtures/production-renders/guide_80x24.txt"),
     );
+}
+
+#[test]
+fn guide_uses_the_agreed_centered_golden_area_at_compact_and_wide_sizes() {
+    let snapshot = production_snapshot();
+
+    for (width, height, expected_left, expected_top, expected_width, expected_height) in
+        [(80, 24, 8, 3, 64, 18), (120, 30, 12, 4, 96, 22)]
+    {
+        let mut ui = Ui::default();
+        press(&mut ui, &snapshot, KeyCode::Char('?'));
+        let rendered = render(&snapshot, &ui, width, height);
+        let rows = rendered.text.lines().collect::<Vec<_>>();
+        let top = rows
+            .iter()
+            .position(|row| row.contains(" Guide "))
+            .expect("Guide should render its titled top border");
+        let top_characters = rows[top].chars().collect::<Vec<_>>();
+        let left = top_characters
+            .iter()
+            .position(|character| *character == '┌')
+            .unwrap();
+        let right = top_characters
+            .iter()
+            .rposition(|character| *character == '┐')
+            .unwrap();
+        let bottom = rows
+            .iter()
+            .enumerate()
+            .skip(top + 1)
+            .find(|(_, row)| row.chars().nth(left) == Some('└'))
+            .map(|(index, _)| index)
+            .unwrap();
+
+        assert_eq!((left, top), (expected_left, expected_top));
+        assert_eq!(right - left + 1, expected_width);
+        assert_eq!(bottom - top + 1, expected_height);
+    }
+}
+
+#[test]
+fn overview_guide_explains_scope_pages_and_current_versus_recent_state() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    let rendered = render(&snapshot, &ui, 120, 30);
+
+    for required in [
+        "SessionMesh is local to this Mac.",
+        "Passive observation is the default.",
+        "Control Operations require explicit authorization.",
+        "1  All",
+        "2  Claude Code",
+        "3  Codex CLI",
+        "NOW shows current conditions.",
+        "Recent Signals show transitions.",
+    ] {
+        assert!(
+            rendered.text.contains(required),
+            "Overview Guide should contain {required:?}"
+        );
+    }
+}
+
+#[test]
+fn navigation_guide_lists_global_and_contextual_controls_without_theme_cycling() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    press(&mut ui, &snapshot, KeyCode::Down);
+    let rendered = render(&snapshot, &ui, 120, 30);
+
+    for required in [
+        "1 / 2 / 3  Open a page",
+        "Tab / Shift+Tab  Change region or Guide pane",
+        "Up/Down or j/k  Move or scroll",
+        "Enter  Inspect or expand",
+        "Esc  Back or close",
+        "c  Copy source metadata in Session Detail",
+        "r  Refresh",
+        "?  Guide",
+        "q  Quit",
+    ] {
+        assert!(
+            rendered.text.contains(required),
+            "Navigation Guide should contain {required:?}"
+        );
+    }
+    assert!(!rendered.text.contains("t Theme"));
+}
+
+#[test]
+fn guide_opens_on_signals_from_the_recent_signals_region() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    let rendered = render(&snapshot, &ui, 80, 24);
+
+    assert!(rendered.text.contains("> Signals"));
+    assert!(!rendered.text.contains("> Overview"));
+}
+
+#[test]
+fn signals_guide_explains_every_recent_signal_and_retention_rule() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+
+    let rendered = render(&snapshot, &ui, 120, 80);
+
+    for required in [
+        "Session lifecycle",
+        "Busy -> Idle",
+        "Busy -> Exited",
+        "Idle -> Exited",
+        "Exited -> Busy",
+        "Exited -> Idle",
+        "Ctx +Warning",
+        "Ctx +Critical",
+        "Ctx -Warning",
+        "Ctx -Critical",
+        "Warning starts at 70%; Critical starts at 85%.",
+        "Cmp <trigger>",
+        "-Critical",
+        "Risk detected",
+        "Risk cleared",
+        "CL  Claude Code",
+        "CX  Codex CLI",
+        "WT  Worktree",
+        "Idle -> Busy is not recorded.",
+        "ordinary Context percentage changes",
+        "source timestamps",
+        "Possible Stall",
+        "Only the five newest Signals are retained",
+        "Current state belongs in NOW.",
+        "prompt, response, tool, or source-code content",
+    ] {
+        assert!(
+            rendered.text.contains(required),
+            "Signals Guide should contain {required:?}"
+        );
+    }
+}
+
+#[test]
+fn signals_guide_explains_context_evidence_and_scope() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+
+    let rendered = render(&snapshot, &ui, 120, 80);
+
+    assert!(rendered
+        .text
+        .contains("before -> after Current Context values"));
+    assert!(rendered
+        .text
+        .contains("Only Open Sessions with a known Context percentage"));
+}
+
+#[test]
+fn signals_guide_explains_shared_worktree_risk_evidence_and_scope() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+
+    let rendered = render(&snapshot, &ui, 120, 80);
+
+    for required in [
+        "Two Open Sessions trigger Shared Worktree Risk.",
+        "Open Session membership before -> after",
+        "not proof of a file-level or Git conflict",
+    ] {
+        assert!(
+            rendered.text.contains(required),
+            "Signals Guide should contain {required:?}"
+        );
+    }
+}
+
+#[test]
+fn signals_guide_explains_the_silent_baseline_and_metadata_only_scope() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+
+    let rendered = render(&snapshot, &ui, 120, 80);
+
+    assert!(rendered.text.contains("first scan is a silent baseline"));
+    assert!(rendered.text.contains("metadata-only"));
+}
+
+#[test]
+fn overflowing_signals_guide_scrolls_and_reports_its_position() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+
+    let top = render(&snapshot, &ui, 80, 24);
+    assert!(top.text.contains("Recent Signals answer"));
+    assert!(!top
+        .text
+        .contains("prompt, response, tool, or source-code content"));
+    assert!(top.text.contains(" 1/"));
+    assert!(top.text.contains('█'));
+
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    for _ in 0..64 {
+        press(&mut ui, &snapshot, KeyCode::Char('j'));
+    }
+    let bottom = render(&snapshot, &ui, 80, 24);
+    assert!(bottom
+        .text
+        .contains("prompt, response, tool, or source-code content"));
+    assert!(!bottom.text.contains("Recent Signals answer"));
+    assert!(!bottom.text.contains(" 1/"));
+}
+
+#[test]
+fn short_overview_guide_omits_scrollbar_and_position() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+
+    assert!(!rendered.text.contains(" 1/"));
+    assert!(!rendered.text.contains('█'));
+}
+
+#[test]
+fn reopening_guide_restores_the_contextual_category_at_the_top() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    for _ in 0..64 {
+        press(&mut ui, &snapshot, KeyCode::Char('j'));
+    }
+    assert!(!render(&snapshot, &ui, 80, 24)
+        .text
+        .contains("Recent Signals answer"));
+
+    press(&mut ui, &snapshot, KeyCode::Esc);
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    let reopened = render(&snapshot, &ui, 80, 24);
+
+    assert!(reopened.text.contains("> Signals"));
+    assert!(reopened.text.contains("Recent Signals answer"));
+    assert!(reopened.text.contains(" 1/"));
+}
+
+#[test]
+fn changing_guide_category_resets_content_scroll() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    for _ in 0..64 {
+        press(&mut ui, &snapshot, KeyCode::Char('j'));
+    }
+    assert!(!render(&snapshot, &ui, 80, 24)
+        .text
+        .contains("Recent Signals answer"));
+
+    ui.handle_key(
+        KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+        &snapshot,
+    )
+    .unwrap();
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Up);
+    let signals_again = render(&snapshot, &ui, 80, 24);
+
+    assert!(signals_again.text.contains("> Signals"));
+    assert!(signals_again.text.contains("Recent Signals answer"));
+    assert!(signals_again.text.contains(" 1/"));
+}
+
+#[test]
+fn guide_opens_on_sessions_from_provider_inventory_and_session_detail() {
+    let snapshot = production_snapshot();
+    let mut provider_ui = Ui::default();
+    press(&mut provider_ui, &snapshot, KeyCode::Char('2'));
+    press(&mut provider_ui, &snapshot, KeyCode::Char('?'));
+    assert!(render(&snapshot, &provider_ui, 80, 24)
+        .text
+        .contains("> Sessions"));
+
+    let mut detail_ui = Ui::default();
+    press(&mut detail_ui, &snapshot, KeyCode::Enter);
+    press(&mut detail_ui, &snapshot, KeyCode::Char('?'));
+    assert!(render(&snapshot, &detail_ui, 80, 24)
+        .text
+        .contains("> Sessions"));
+}
+
+#[test]
+fn sessions_guide_explains_providers_lifecycle_and_current_context() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('2'));
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    let rendered = render(&snapshot, &ui, 120, 30);
+
+    for required in [
+        "CL  Claude Code",
+        "CX  Codex CLI",
+        "Open Session",
+        "Busy  A request is running.",
+        "Idle  The process is waiting for input.",
+        "Exited  No live Provider process is attached.",
+        "Current Context is the latest known content occupying the model window.",
+        "It is not cumulative Processed Usage.",
+        "Warning  70%",
+        "Critical 85%",
+    ] {
+        assert!(
+            rendered.text.contains(required),
+            "Sessions Guide should contain {required:?}"
+        );
+    }
+}
+
+#[test]
+fn theme_guide_explains_the_active_theme_built_ins_and_process_override() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    for _ in 0..4 {
+        press(&mut ui, &snapshot, KeyCode::Down);
+    }
+    let rendered = render(&snapshot, &ui, 120, 30);
+
+    for required in [
+        "Active Theme  sessionmesh",
+        "sessionmesh",
+        "catppuccin",
+        "dracula",
+        "gruvbox",
+        "light",
+        "high-contrast",
+        "--theme <name>",
+        "Applies to one process and does not change the saved Theme.",
+        "Theme changes presentation, never Session state or thresholds.",
+    ] {
+        assert!(
+            rendered.text.contains(required),
+            "Theme Guide should contain {required:?}"
+        );
+    }
+}
+
+#[test]
+fn guide_category_selection_updates_without_enter() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+
+    press(&mut ui, &snapshot, KeyCode::Char('j'));
+    let rendered = render(&snapshot, &ui, 80, 24);
+
+    assert!(rendered.text.contains("> Navigation"));
+    assert!(!rendered.text.contains("> Overview"));
+}
+
+#[test]
+fn guide_category_navigation_accepts_arrows_and_vim_keys_without_wrapping() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+
+    press(&mut ui, &snapshot, KeyCode::Down);
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("> Navigation"));
+    press(&mut ui, &snapshot, KeyCode::Up);
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("> Overview"));
+    press(&mut ui, &snapshot, KeyCode::Char('j'));
+    press(&mut ui, &snapshot, KeyCode::Char('k'));
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("> Overview"));
+
+    for _ in 0..5 {
+        press(&mut ui, &snapshot, KeyCode::Char('j'));
+    }
+    press(&mut ui, &snapshot, KeyCode::Down);
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("> Theme"));
+}
+
+#[test]
+fn guide_focus_moves_between_categories_and_content() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    assert!(render(&snapshot, &ui, 80, 24)
+        .text
+        .contains("Tab/Right Content"));
+
+    press(&mut ui, &snapshot, KeyCode::Right);
+    let content = render(&snapshot, &ui, 80, 24);
+    assert!(content.text.contains("j/k Scroll"));
+    assert!(content.text.contains("Shift+Tab/Left Categories"));
+
+    ui.handle_key(
+        KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+        &snapshot,
+    )
+    .unwrap();
+    assert!(render(&snapshot, &ui, 80, 24)
+        .text
+        .contains("Tab/Right Content"));
+
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("j/k Scroll"));
+
+    press(&mut ui, &snapshot, KeyCode::Left);
+    assert!(render(&snapshot, &ui, 80, 24)
+        .text
+        .contains("Tab/Right Content"));
 }
 
 #[test]
@@ -918,7 +1391,6 @@ fn compact_copy_menu_matches_the_reviewed_production_fixture() {
 #[test]
 fn all_six_themes_render_readable_distinct_semantic_roles() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
     let mut baseline_body = None;
 
     for expected_theme in [
@@ -929,6 +1401,7 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         "light",
         "high-contrast",
     ] {
+        let ui = ui_with_theme(expected_theme);
         assert_eq!(ui.active_theme_name(), expected_theme);
         let rendered = render(&snapshot, &ui, 120, 30);
         let body = rendered
@@ -944,7 +1417,7 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         }
 
         let roles = [
-            ("selected", rendered.style_at("CRITICAL")),
+            ("critical", rendered.style_at("CRITICAL")),
             ("warning", rendered.style_at("WARNING")),
             ("idle", rendered.style_at("IDLE")),
             ("busy", rendered.style_at("BUSY")),
@@ -959,8 +1432,77 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         assert_ne!(rendered.style_at("WARNING"), rendered.style_at("IDLE"));
         assert_ne!(rendered.style_at("IDLE"), rendered.style_at("BUSY"));
 
-        if expected_theme != "high-contrast" {
-            press(&mut ui, &snapshot, KeyCode::Char('t'));
+        let warning = rendered.style_at_in_row("claude-w", "WARNING");
+        let busy = rendered.style_at_in_row("claude-w", "Busy");
+        let idle = rendered.style_at_in_row("codex-id", "Idle");
+        let selected_cursor = rendered.style_at_in_row("claude-c", ">");
+        let selected_critical = rendered.style_at_in_row("claude-c", "CRITICAL");
+        let selected_busy = rendered.style_at_in_row("claude-c", "Busy");
+        let critical_bar = rendered.styles_at_in_row("claude-c", "[##############-]");
+        let low_context = critical_bar[1];
+        let medium_context = critical_bar[8];
+        let warning_context = critical_bar[11];
+        let critical_context = critical_bar[14];
+        let unfilled_context = critical_bar[15];
+        for (role, style) in [
+            ("low Context", low_context),
+            ("medium Context", medium_context),
+            ("warning Context", warning_context),
+            ("critical Context", critical_context),
+        ] {
+            let ratio = contrast_ratio(style);
+            assert!(
+                ratio >= 4.5,
+                "Theme {expected_theme} rendered {role} at contrast {ratio:.2}"
+            );
         }
+        assert_ne!(low_context.fg, medium_context.fg);
+        assert_ne!(medium_context.fg, warning_context.fg);
+        assert_ne!(warning_context.fg, critical_context.fg);
+        assert_ne!(critical_context.fg, unfilled_context.fg);
+        assert_eq!(
+            rendered.style_at_in_row("claude-c", "90%").fg,
+            critical_context.fg
+        );
+        assert_eq!(
+            rendered.style_at_in_row("claude-w", "75%").fg,
+            warning_context.fg
+        );
+        for (role, style) in [("Busy state", busy), ("Idle state", idle)] {
+            let ratio = contrast_ratio(style);
+            assert!(
+                ratio >= 4.5,
+                "Theme {expected_theme} rendered {role} at contrast {ratio:.2}"
+            );
+        }
+        assert_ne!(busy, idle, "Theme {expected_theme} merged lifecycle roles");
+        assert_ne!(
+            busy, warning,
+            "Theme {expected_theme} let Warning override Busy"
+        );
+        assert_ne!(
+            idle, warning,
+            "Theme {expected_theme} let Warning override Idle"
+        );
+        assert_eq!(
+            selected_cursor.fg,
+            rendered.style_at("PROJECTS").fg,
+            "Theme {expected_theme} did not use its accent for the selected Session cursor"
+        );
+        assert!(selected_cursor.add_modifier.contains(Modifier::BOLD));
+        for (role, style) in [
+            ("cursor", selected_cursor),
+            ("Critical attention", selected_critical),
+            ("Busy state", selected_busy),
+        ] {
+            assert_eq!(
+                style.bg, warning.bg,
+                "Theme {expected_theme} added a selected background to {role}"
+            );
+        }
+        assert_ne!(
+            selected_critical, selected_busy,
+            "Theme {expected_theme} let selection merge Attention and lifecycle roles"
+        );
     }
 }

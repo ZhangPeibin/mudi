@@ -27,4 +27,4 @@
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────── showing full lifetime usage of matching sessions ┘
-j/k | Enter Inspect/Expand | 1/2/3 | t Theme | ? | q Quit                  fixture ready   ·   Estimated using API rates
+j/k | Enter Inspect/Expand | 1/2/3 | ? Guide | q Quit                      fixture ready   ·   Estimated using API rates

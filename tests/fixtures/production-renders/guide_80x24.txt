@@ -1,0 +1,24 @@
+┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ PROJECTS 1 ───────────────────────────────────────────────── 5 OPEN SESSIONS ┐
+│sessionmesh                                                                   │
+│  ...ur┌ Guide ───────────────────────────────────────────────────────┐       │
+│> CRITI│> Overview    │Overview                                       │0s     │
+│  SHARE│  Navigation  │SessionMesh is local to this Mac.              │m      │
+│  /User│  Sessions    │Passive observation is the default.            │       │
+│  WARNI│  Signals     │Control Operations require explicit            │m      │
+│  /User│  Theme       │authorization.                                 │       │
+│  IDLE │              │Pages                                          │dle 3m │
+│  /User│              │1  All                                         │       │
+│  BUSY │              │2  Claude Code                                 │m      │
+│       │              │3  Codex CLI                                   │       │
+│       │              │Current and recent                             │       │
+└───────│              │NOW shows current conditions.                  │───────┘
+┌ RECENT│              │Recent Signals show transitions.               │est 5s ┐
+│WT /Use│              │                                               │       │
+│CL clau│              │                                               │       │
+│CL clau│              │                                               │       │
+│CL clau│              │                                               │       │
+│CX code└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘       │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+j/k | Enter Inspect | ? Guide | q Quit                             fixture ready

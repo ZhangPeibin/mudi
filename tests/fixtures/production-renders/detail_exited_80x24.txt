@@ -21,4 +21,4 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────── lines 1-15 of 15 ┘
-Esc Back | j/k Scroll | c Copy | q Quit                Estimated using API rates
+Esc Back | j/k Scroll | c Copy | ? Guide | q Quit      Estimated using API rates

@@ -12,6 +12,11 @@ pub(super) struct Theme {
     pub(super) selected_foreground: Color,
     pub(super) critical: Color,
     pub(super) warning: Color,
+    pub(super) context_low: Color,
+    pub(super) context_medium: Color,
+    pub(super) context_warning: Color,
+    pub(super) context_critical: Color,
+    pub(super) context_max: Color,
     pub(super) idle: Color,
     pub(super) busy: Color,
     pub(super) exited: Color,
@@ -58,14 +63,6 @@ impl ThemeName {
         Self::ALL.into_iter().find(|theme| theme.as_str() == name)
     }
 
-    pub(super) fn next(self) -> Self {
-        let index = Self::ALL
-            .iter()
-            .position(|theme| *theme == self)
-            .unwrap_or(0);
-        Self::ALL[(index + 1) % Self::ALL.len()]
-    }
-
     pub(super) fn palette(self) -> Theme {
         match self {
             Self::SessionMesh => Theme {
@@ -78,6 +75,11 @@ impl ThemeName {
                 selected_foreground: Color::Rgb(255, 245, 218),
                 critical: Color::Rgb(245, 96, 96),
                 warning: Color::Rgb(238, 190, 70),
+                context_low: Color::Rgb(99, 179, 237),
+                context_medium: Color::Rgb(120, 200, 154),
+                context_warning: Color::Rgb(238, 190, 70),
+                context_critical: Color::Rgb(255, 138, 91),
+                context_max: Color::Rgb(255, 95, 109),
                 idle: Color::Rgb(105, 184, 220),
                 busy: Color::Rgb(120, 205, 120),
                 exited: Color::Rgb(112, 116, 120),
@@ -92,6 +94,11 @@ impl ThemeName {
                 selected_foreground: Color::Rgb(245, 224, 220),
                 critical: Color::Rgb(243, 139, 168),
                 warning: Color::Rgb(249, 226, 175),
+                context_low: Color::Rgb(116, 199, 236),
+                context_medium: Color::Rgb(148, 226, 213),
+                context_warning: Color::Rgb(249, 226, 175),
+                context_critical: Color::Rgb(250, 179, 135),
+                context_max: Color::Rgb(243, 139, 168),
                 idle: Color::Rgb(137, 180, 250),
                 busy: Color::Rgb(166, 227, 161),
                 exited: Color::Rgb(108, 112, 134),
@@ -106,6 +113,11 @@ impl ThemeName {
                 selected_foreground: Color::Rgb(248, 248, 242),
                 critical: Color::Rgb(255, 85, 85),
                 warning: Color::Rgb(241, 250, 140),
+                context_low: Color::Rgb(104, 214, 243),
+                context_medium: Color::Rgb(125, 229, 138),
+                context_warning: Color::Rgb(241, 250, 140),
+                context_critical: Color::Rgb(255, 184, 108),
+                context_max: Color::Rgb(255, 85, 85),
                 idle: Color::Rgb(139, 233, 253),
                 busy: Color::Rgb(80, 250, 123),
                 exited: Color::Rgb(154, 156, 168),
@@ -120,6 +132,11 @@ impl ThemeName {
                 selected_foreground: Color::Rgb(251, 241, 199),
                 critical: Color::Rgb(255, 105, 92),
                 warning: Color::Rgb(250, 189, 47),
+                context_low: Color::Rgb(142, 192, 124),
+                context_medium: Color::Rgb(169, 198, 90),
+                context_warning: Color::Rgb(250, 189, 47),
+                context_critical: Color::Rgb(255, 155, 94),
+                context_max: Color::Rgb(255, 105, 92),
                 idle: Color::Rgb(131, 165, 152),
                 busy: Color::Rgb(184, 187, 38),
                 exited: Color::Rgb(146, 131, 116),
@@ -134,6 +151,11 @@ impl ThemeName {
                 selected_foreground: Color::Rgb(255, 255, 255),
                 critical: Color::Rgb(176, 24, 32),
                 warning: Color::Rgb(145, 92, 0),
+                context_low: Color::Rgb(48, 95, 158),
+                context_medium: Color::Rgb(20, 112, 92),
+                context_warning: Color::Rgb(145, 92, 0),
+                context_critical: Color::Rgb(179, 71, 24),
+                context_max: Color::Rgb(176, 24, 32),
                 idle: Color::Rgb(24, 91, 142),
                 busy: Color::Rgb(28, 112, 55),
                 exited: Color::Rgb(105, 105, 105),
@@ -148,6 +170,11 @@ impl ThemeName {
                 selected_foreground: Color::Rgb(0, 0, 0),
                 critical: Color::Rgb(255, 90, 90),
                 warning: Color::Rgb(255, 255, 0),
+                context_low: Color::Rgb(102, 191, 255),
+                context_medium: Color::Rgb(181, 240, 111),
+                context_warning: Color::Rgb(255, 255, 102),
+                context_critical: Color::Rgb(255, 179, 71),
+                context_max: Color::Rgb(255, 107, 107),
                 idle: Color::Rgb(0, 255, 255),
                 busy: Color::Rgb(80, 255, 80),
                 exited: Color::Rgb(190, 190, 190),
@@ -175,6 +202,26 @@ mod tests {
                 ),
                 ("critical", theme.critical, theme.background, 4.5),
                 ("warning", theme.warning, theme.background, 4.5),
+                ("context-low", theme.context_low, theme.background, 4.5),
+                (
+                    "context-medium",
+                    theme.context_medium,
+                    theme.background,
+                    4.5,
+                ),
+                (
+                    "context-warning",
+                    theme.context_warning,
+                    theme.background,
+                    4.5,
+                ),
+                (
+                    "context-critical",
+                    theme.context_critical,
+                    theme.background,
+                    4.5,
+                ),
+                ("context-max", theme.context_max, theme.background, 4.5),
                 ("idle", theme.idle, theme.background, 4.5),
                 ("busy", theme.busy, theme.background, 4.5),
             ] {
@@ -182,6 +229,35 @@ mod tests {
                 assert!(
                     ratio >= minimum,
                     "theme {} role {role} contrast {ratio:.2} is below {minimum:.1}",
+                    theme_name.as_str(),
+                );
+            }
+            let context_colors = [
+                theme.context_low,
+                theme.context_medium,
+                theme.context_warning,
+                theme.context_critical,
+                theme.context_max,
+            ];
+            for pair in context_colors.windows(2) {
+                assert_ne!(
+                    pair[0],
+                    pair[1],
+                    "theme {} merges adjacent Context pressure bands",
+                    theme_name.as_str(),
+                );
+            }
+            for context_color in context_colors {
+                assert_ne!(
+                    context_color,
+                    theme.idle,
+                    "theme {} reuses Idle for Context pressure",
+                    theme_name.as_str(),
+                );
+                assert_ne!(
+                    context_color,
+                    theme.busy,
+                    "theme {} reuses Busy for Context pressure",
                     theme_name.as_str(),
                 );
             }

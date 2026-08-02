@@ -21,4 +21,4 @@
 │  1m ago  trigger=auto  pre=188.0k                                            │
 │  1m ago  trigger=manual  pre=181.0k                                          │
 └──────────────────────────────────────────────────────────── lines 1-20 of 20 ┘
-Esc Back | j/k Scroll | c Copy | q Quit                Estimated using API rates
+Esc Back | j/k Scroll | c Copy | ? Guide | q Quit      Estimated using API rates

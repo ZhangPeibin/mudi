@@ -14,9 +14,10 @@ See `CONTEXT.md` for the authoritative domain vocabulary.
 - Rust + Ratatui + Crossterm + Tokio, macOS only.
 - Read-only access to `~/.claude` and `~/.codex` logs.
 - Three directly addressable pages: `[1]` All, `[2]` Claude Code, `[3]` Codex CLI.
-- First-use Help persisted per local Profile outside the disposable Session index.
-- Six semantic Themes with runtime cycling, Profile persistence, and a process-only
-  `--theme <name>` override.
+- First-use contextual Guide persisted per local Profile outside the disposable Session
+  index.
+- Six semantic Themes with Profile persistence and a process-only `--theme <name>`
+  override. Interactive Theme selection is deferred to Settings.
 - Live polling ~every 2s; incremental updates, no full rescans on append.
 - Native session IDs; providers never merged.
 - Current Context per session; Busy/Idle/exited state.
@@ -50,6 +51,10 @@ exit; Linux/Windows; JSON/non-interactive output; other agents; predicting next 
   per-model splits, and API price estimates. An unavailable validated Run boundary shows
   Current Run Usage as `N/A`; Exited Sessions omit Current Run Usage. Detail also shows
   Current Context and Compactions, with no Recent Signals, prompt, or tool content.
+- **Guide** — centered two-pane reference opened globally with `?`. Its sidebar exposes
+  Overview, Navigation, Sessions, Signals, and Theme. It initially selects Signals from
+  `RECENT SIGNALS`, Sessions from Provider pages or Detail, and Overview from `NOW`, first
+  use, or an unknown context.
 
 Footer note when prices shown: `Estimated using API rates`. Unknown price → `N/A`.
 Unknown context window → show token count, limit/percent `N/A`.
@@ -57,12 +62,17 @@ Unknown context window → show token count, limit/percent `N/A`.
 ## Keys
 
 `1/2/3` open All, Claude Code, and Codex CLI · `Tab`/`Shift+Tab` move focus within the
-current page and are no-ops when only one region is focusable · `t` cycles Themes ·
-`Up/Down` or `j/k` move selection or scroll Detail · `Enter` opens Detail or toggles a
-Project's `OLDER SESSIONS` · `?` opens Help · `Esc` returns from Detail or closes the
-current layer · `r` forces a rescan · `q` quits.
+current page and are no-ops when only one region is focusable · `Up/Down` or `j/k` move
+selection or scroll Detail · `Enter` opens Detail or toggles a Project's `OLDER SESSIONS` ·
+`?` opens Guide · `Esc` returns from Detail or closes the current layer · `r` forces a
+rescan · `q` quits.
 
-Theme cycle order: `sessionmesh`, `catppuccin`, `dracula`, `gruvbox`, `light`, then
-`high-contrast`. `sessionmesh` is the default. Runtime selection is saved in the local
-Profile unless `--theme <name>` supplied the process-local override. Unknown Theme names
-fall back to `sessionmesh` without preventing startup.
+Inside Guide, `Up/Down` or `j/k` changes the selected category, `Tab` or Right enters the
+content pane, and `Shift+Tab` or Left returns to categories. The content pane uses the same
+vertical movement keys to scroll. Each opening starts at its contextual category and the
+top of its content.
+
+Built-in Themes are `sessionmesh`, `catppuccin`, `dracula`, `gruvbox`, `light`, and
+`high-contrast`; `sessionmesh` is the default. The saved local Profile Theme is loaded at
+startup. `--theme <name>` applies a process-local override without changing that Profile;
+unknown names fall back to `sessionmesh` without preventing startup.
