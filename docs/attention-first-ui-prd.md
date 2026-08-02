@@ -7,9 +7,10 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Last updated | 2026-08-01 |
+| Last updated | 2026-08-02 |
 | Product phase | Post-v1 exploration |
 | Related baseline | `docs/spec.md` |
+| Assisted Handoff | `docs/assisted-handoff-prd.md` |
 | Production render evidence | `tests/fixtures/production-renders/` |
 
 ## 1. Document contract
@@ -58,19 +59,22 @@ The product promise is:
 - Explain why every Attention Condition exists using observable evidence.
 - Reveal project and worktree relationships across providers.
 - Support investigation of recent state changes without reading prompt content.
-- Preserve the local, metadata-only, read-only trust model.
+- Preserve local, metadata-minimizing observation while requiring explicit authorization
+  for every bounded Control Operation.
 - Keep the interface dense, keyboard-first, and suitable for repeated terminal use.
 
 ## 5. Non-goals
 
-- Automatically resume, terminate, compact, or modify provider sessions.
-- Read or store prompts, responses, tool calls, tool outputs, or source-code contents.
+- Resume, terminate, compact, or modify provider sessions without one explicit,
+  task-scoped user authorization.
+- Persist source Prompt bodies, raw Transcript responses, tool content, or source-code
+  contents in the Session index or authoritative Task Store.
 - Present heuristic classifications as facts without evidence.
 - Replace the complete session list or usage detail views.
 - Turn the default screen into a cost analytics dashboard.
 - Add remote telemetry as a dependency for measuring product usefulness.
 
-## 6. Primary navigation and help
+## 6. Primary navigation and Guide
 
 ### NAV-001 - Three numeric primary pages
 
@@ -96,18 +100,27 @@ Project and Worktree organization is part of `NOW`, not a separate navigation ta
 Full Signal History is Deferred and is not a top-level page, detail section, overlay, or
 main-page region in the first attention-first implementation.
 
-### NAV-002 - Introductory help overlay
+### NAV-002 - Contextual Guide modal
 
 **Status: Confirmed**
 
-At the beginning of use, SessionMesh presents a small dismissible Help overlay that explains
-the `1/2/3` mapping and essential keyboard controls. This keeps the persistent navigation
-compact without making the numeric mapping undiscoverable.
+`?` opens one global, centered Guide modal at 80% of terminal width and 76% of terminal
+height. Its left 24% sidebar lists Overview, Navigation, Sessions, Signals, and Theme; the
+right pane shows the selected category. Category selection updates content immediately.
 
-The overlay opens automatically only on the first launch for a local Profile. Dismissing
-it stores a `help_seen` preference outside the disposable Session index; later launches do
-not auto-open it, and deleting that local preference restores first-launch behavior. `?`
-reopens Help at any time.
+The same shortcut and complete category list are available everywhere. Context only sets
+the initial category: `RECENT SIGNALS` opens Signals, Provider pages and Session Detail
+open Sessions, and `NOW` or an unknown context opens Overview. Every explicit opening
+starts at the contextual category and the top of its content.
+
+`Up/Down` or `j/k` changes the selected category. `Tab` or Right enters the content pane,
+where the same vertical keys scroll; `Shift+Tab` or Left returns to the sidebar. Overflowing
+content shows a scrollbar and position indicator, while content that fits shows neither.
+
+Guide opens automatically on Overview only on the first launch for a local Profile.
+Dismissing it stores the existing compatible `help_seen` preference outside the disposable
+Session index; later launches do not auto-open it, and deleting that local preference
+restores first-launch behavior.
 
 ## 7. Global interaction principles
 
@@ -208,21 +221,284 @@ separate Attention queue.
 
 **Status: Confirmed at region level**
 
-The terminal may be divided into multiple regions, but only two regions currently have
-confirmed product responsibilities:
+The terminal may be divided into multiple regions. The observation surface has two
+existing regions, and the explicitly authorized control extension adds a third:
 
 | Region | Status | Responsibility |
 |---|---|---|
 | `NOW` | Confirmed | Open Sessions, grouped by Project |
 | `RECENT SIGNALS` | Confirmed | A short list of meaningful recent metadata changes |
-| Reserved region A | Unassigned | Remains empty until a user job is confirmed |
-| Reserved region B | Unassigned | Remains empty until a user job is confirmed |
+| `TASKS` | Confirmed | Time-ordered Operation Tasks and their current execution states |
+| Reserved upper-left region | Confirmed empty | Remains unlabelled and unassigned |
 
-The two reserved regions must not be labelled or implemented as `FOCUS`, `PROJECT PULSE`,
-Signal History, or another feature merely because those concepts appeared in a wireframe.
-Their placement and purpose remain open.
+On wide terminals, `TASKS` is a complete panel in the upper-right. The reserved region to
+its left remains empty by design. `NOW` and `RECENT SIGNALS` form the lower row, with
+`NOW` on the left and `RECENT SIGNALS` on the right. `TASKS` must not expand leftward into
+the reserved region merely because it has more items. Compact-width degradation and Task
+navigation are specified separately.
 
-### 8.3 `NOW`
+### 8.3 Operation Task state model
+
+**Status: Confirmed**
+
+Every Operation Task has exactly one execution state:
+
+| State | Terminal | Meaning |
+|---|---:|---|
+| `Queued` | No | Authorization is stored, but the Worker has not started. |
+| `Waiting` | No | Execution is waiting for a declared external condition, such as the source Current Run becoming Idle and exiting safely. |
+| `Running` | No | Worker or Provider execution is active. |
+| `Ready` | Yes | The declared result exists and has passed validation. |
+| `Failed` | Yes | A known failure occurred and no valid result exists. |
+| `Interrupted` | Yes | The outcome cannot be established safely and requires a new user decision. |
+| `Cancelled` | Yes | Execution stopped before any uncertain external side effect occurred. |
+
+The normal successful path is `Queued -> Waiting -> Running -> Ready`; a Task may omit
+`Waiting` when no external condition blocks it. A known error may move a non-terminal Task
+to `Failed`. Cancellation may produce `Cancelled` only when SessionMesh can establish that
+no uncertain external side effect occurred; otherwise an uncertain outcome is
+`Interrupted`. Worker loss invokes reconciliation: a valid declared result becomes
+`Ready`, confirmed live execution remains in its current non-terminal state, and an
+unresolvable outcome becomes `Interrupted`. SessionMesh never silently retries or
+resubmits an `Interrupted` Task.
+
+Execution state is independent of Task Acknowledgement. Closing a completion notice,
+opening the Artifact, copying the Successor Launch Command, or starting a Successor
+Session does not move a `Ready` Task to another state. The Task Store records separate
+acknowledgement and interaction timestamps where required by the UI.
+
+### 8.4 `TASKS` ordering
+
+**Status: Confirmed**
+
+`TASKS` is one unified timeline ordered by each Task's most recent execution-state
+transition, newest first. It does not partition or group rows by state. Creating a Task
+and every transition among `Queued`, `Waiting`, `Running`, and a terminal state updates
+that ordering timestamp; Worker heartbeats, progress observations, notice delivery, and
+user interaction metadata do not. Consequently, a newly completed, failed, cancelled, or
+interrupted Task moves to the top, while routine refreshes do not make rows jump.
+
+Remaining ties use Task creation time, then the stable Task ID, both newest first.
+
+### 8.5 Task Acknowledgement
+
+**Status: Confirmed**
+
+A terminal Task receives `acknowledged_at` only after deliberate user interaction:
+
+- opening its Task detail;
+- choosing `Open Terminal`, `Copy Command`, or `Close for Later` for a Ready result;
+- viewing or dismissing a `Failed`, `Interrupted`, or `Cancelled` notice.
+
+Delivering a macOS notification, rendering a row in `TASKS`, or loading the Task when the
+TUI starts does not acknowledge it because none proves that the user saw the outcome.
+Acknowledgement controls only unread presentation; it neither changes execution state nor
+implies that a Handoff Result was launched, copied, or deleted. Those interactions retain
+their own timestamps when needed.
+
+### 8.6 `TASKS` visibility and panel retention
+
+**Status: Confirmed**
+
+`TASKS` displays every Operation Task still retained in the Task Store, including
+acknowledged terminal Tasks. Acknowledgement removes only the unread treatment; it never
+hides or removes a row. The panel is keyboard-scrollable when the retained timeline
+exceeds its visible height, and compact layouts may reduce the viewport without dropping
+Tasks from the timeline.
+
+A Task leaves the panel only when a separately confirmed retention or explicit-deletion
+rule removes it from the Task Store. The first implementation does not require a separate
+Task History page merely to recover a Ready Handoff Result after `Close for Later`.
+
+### 8.7 Operation Task timeouts
+
+**Status: Confirmed**
+
+The first implementation uses fixed stage-specific deadlines:
+
+| State | Deadline | Outcome at deadline |
+|---|---:|---|
+| `Queued` | 30 seconds | If Worker startup cannot be established, become `Failed`. |
+| `Waiting` | 2 hours | Expire the unused authorization and become `Cancelled`. |
+| `Running` | 30 minutes | Request graceful termination of the Task-owned Provider process, then reconcile. |
+
+The `Running` deadline begins graceful termination rather than escalating to `SIGKILL`.
+While a verified process is still shutting down, it remains `Running`. Reconciliation
+makes a valid declared result `Ready`, a known failure without a valid result `Failed`,
+and an outcome that cannot be established `Interrupted`. Timeout never resubmits the
+Prompt or creates a retry automatically.
+
+The `Waiting` deadline prevents a stale authorization from ending a Current Run long
+after the user's original intent. A later retry is a new Operation Task and requires new
+authorization. Configurable deadlines are deferred beyond the first implementation.
+
+### 8.8 Operation Task cancellation
+
+**Status: Confirmed**
+
+Every non-terminal Task offers `Cancel Task` and requires confirmation before SessionMesh
+acts. Cancellation is a requested intent, not a forced terminal-state assignment:
+
+- if no Provider Prompt or control action was sent, cancellation becomes `Cancelled`;
+- if a Task-owned Provider process started, SessionMesh requests graceful termination and
+  never escalates automatically to `SIGKILL`;
+- after termination, a valid declared result becomes `Ready`, a verified stop without a
+  valid result becomes `Cancelled`, and an outcome that cannot be established becomes
+  `Interrupted`.
+
+Cancellation never closes the user's Terminal or shell, never targets an unverified
+process, and never creates or starts a retry. While a verified child is still shutting
+down, the Task remains non-terminal so the same Session cannot start another Operation
+Task concurrently.
+
+### 8.9 Manual retry
+
+**Status: Confirmed**
+
+Retry never reopens or mutates a terminal Task. `Retry` on a `Failed` or `Cancelled` Task
+creates a new Operation Task with a new Task ID, fresh authorization, new Artifact path,
+and `retry_of_task_id` pointing to its predecessor. The predecessor and any evidence or
+partial metadata remain unchanged.
+
+Before creating the new Task, SessionMesh revalidates the source Session, process,
+Project or Worktree, and the one-non-terminal-Task concurrency rule. An `Interrupted`
+Task offers Retry only after reconciliation proves that its previous Worker and Provider
+process are no longer running; uncertainty must not create concurrent transcript writers.
+A `Ready` Task does not offer Retry. Regenerating its result is a new Handoff Operation.
+
+No manual retry reuses a previous authorization or overwrites an existing Artifact.
+
+### 8.10 Handoff eligibility
+
+**Status: Confirmed**
+
+Current Context and Context Alerts may recommend a Handoff but are never eligibility gates.
+A user may authorize Handoff at any Context percentage or when Current Context is unknown.
+Session lifecycle changes the workflow rather than eligibility: Busy, Idle, and Exited
+Sessions are all eligible when the following preconditions hold:
+
+- the source Provider is supported and its CLI executable is available;
+- the native Session ID and provider source Session record still exist;
+- the original working directory exists and is readable;
+- the Session has no other non-terminal Operation Task.
+
+An Open Session additionally requires the confirmation flow to disclose and obtain
+authorization to end its Current Run safely. Without that authorization, SessionMesh does
+not create the Handoff Task. Provider authentication and similar conditions that cannot be
+reliably established by preflight are execution failures, not false eligibility claims.
+
+Attention Conditions, thresholds, and notifications never create a Task or satisfy any
+authorization requirement.
+
+### 8.11 Successor Provider
+
+**Status: Confirmed**
+
+The Handoff confirmation flow requires a Successor Provider and defaults it to the source
+Session's Provider. The user may instead select another supported Provider whose local CLI
+executable is available. Same-Provider and cross-Provider Handoffs use the same Artifact
+contract.
+
+The source Provider always resumes the source Session and produces the candidate Artifact.
+The selected Successor Provider determines the Successor Launch Command only. A
+cross-Provider Handoff never converts or merges Provider-native Session IDs, Transcripts,
+or model context; the structured Handoff Artifact is the sole working-context bridge to a
+new independent Successor Session.
+
+The selected Successor Provider is stored as Task metadata and is revalidated before a
+launch attempt.
+
+### 8.12 Successor launch
+
+**Status: Confirmed**
+
+Handoff completion produces a platform-neutral Successor Launch Plan containing the
+working directory, selected Provider executable, structured argument list, and Handoff
+Artifact reference. Core Handoff and Task logic never embeds AppleScript or constructs an
+unescaped shell command. Platform-specific launch and copy renderers consume the same Plan.
+
+The first implementation provides:
+
+- a macOS `Terminal.app` launcher that opens a new window in the source working directory;
+- a shell-appropriate `Copy Command` fallback derived from the same structured Plan;
+- preservation of the new shell after the Successor Provider CLI exits.
+
+Failure to open a terminal or start its command does not change a `Ready` Task because
+launching is a later user interaction, not Handoff execution. The UI reports the launch
+failure and keeps `Copy Command` available.
+
+The Terminal Launcher is an explicit module seam. Future Linux, Windows, iTerm2, Ghostty,
+Warp, or other launch adapters may be added without changing Handoff generation, Artifact
+validation, Task state, or Provider command selection. The first implementation does not
+ship untested non-macOS adapters; unsupported terminals use `Copy Command`.
+
+### 8.13 Successor Session linkage
+
+**Status: Confirmed**
+
+Both `Open Terminal` and `Copy Command` use a foreground SessionMesh launch helper that
+loads the Task's validated Successor Launch Plan, starts the selected Provider CLI with
+the Terminal's inherited standard input and output, and records only process and Task
+metadata. It does not proxy or persist interactive Provider content.
+
+Claude and Codex use the same external linkage contract: the helper records the launched
+process identity, and the target Provider adapter resolves that process to a newly observed
+native Session ID. Claude validates the PID-associated state record; Codex validates the
+rollout file held by the launched process. Both paths apply process-start validation to
+protect against PID reuse and confirm that the Provider source record exists before storing
+`successor_session_id` and `successor_linked_at`.
+
+SessionMesh does not preassign a Claude Session ID and never correlates either Provider by
+choosing the newest Session in a working directory. If the user changes the copied command,
+bypasses the helper, or linkage evidence never becomes conclusive, the Handoff remains
+`Ready` and displays `Successor Session not linked`; uncertainty never creates a guessed
+relationship or changes Task execution state.
+
+### 8.14 Task and Artifact retention
+
+**Status: Confirmed**
+
+The first implementation applies no automatic expiry to Operation Tasks or Handoff
+Artifacts. Acknowledgement, command copying, Successor launch, and Successor linkage do not
+start a retention countdown. This preserves the promise made by `Close for Later`.
+
+Only a terminal Task offers `Delete Task and Artifact`, and the action requires an explicit
+irreversible-deletion confirmation. A non-terminal Task must first complete or pass through
+the confirmed cancellation workflow. Successful deletion removes the Task Store record,
+owned Artifact, Successor Launch Plan, and Task interaction metadata, after which the Task
+leaves `TASKS`.
+
+Deleting a Task never deletes or modifies its source Session, linked Successor Session,
+Provider Transcript, Project, Worktree, or open Terminal. A retained retry may preserve
+only the deleted predecessor's Task ID as an unavailable historical reference.
+
+Automatic retention periods, bulk deletion, and storage-usage management are deferred.
+
+### 8.15 Accepted failure walkthrough
+
+**Status: Confirmed**
+
+The failure contract is exercised by this accepted scenario:
+
+1. A Busy Codex source Session starts a Handoff to a Claude Successor, with explicit
+   authorization to end the Current Run.
+2. The Task waits for Idle, ends the validated source process, resumes the source Session,
+   and sends the Handoff Prompt.
+3. The Worker then disappears before atomically publishing a valid Artifact. Reconciliation
+   proves that its processes exited but cannot establish the Prompt outcome, so the Task
+   becomes `Interrupted`; temporary output is never promoted and the Prompt is not resent.
+4. The unread terminal Task remains in `TASKS` and produces a macOS notification. Retry is
+   available only after liveness is conclusive, requires fresh authorization, and creates a
+   new Task ID and Artifact.
+5. If the retry becomes `Ready` but `Open Terminal` later fails, the Task remains `Ready`
+   and `Copy Command` remains available.
+6. If the Claude Successor starts but its native ID cannot be linked conclusively, the Task
+   remains `Ready` with `Successor Session not linked` rather than a guessed relationship.
+
+This keeps Handoff execution, terminal launch, and Successor linkage as three independent
+facts with independent evidence.
+
+### 8.16 `NOW`
 
 **Status: Confirmed**
 
@@ -247,7 +523,7 @@ Their placement and purpose remain open.
 - Do not display Processed Usage, Estimated Cost, or Provider aggregate usage/cost.
 - Context threshold colors follow `UI-008`.
 
-### 8.4 Shared Worktree Risk
+### 8.17 Shared Worktree Risk
 
 **Status: Confirmed**
 
@@ -265,7 +541,7 @@ Shared Worktree Risk always has Warning severity in the first version. The numbe
 contributing Open Sessions is displayed as evidence but does not by itself escalate the
 risk to Critical.
 
-### 8.5 `RECENT SIGNALS`
+### 8.18 `RECENT SIGNALS`
 
 **Status: Confirmed**
 
@@ -306,7 +582,7 @@ already reached.
 input, and it carries a neutral Attention Condition. A transition from Busy to Idle is a
 Recent Signal; repeated observations of an unchanged Idle Session are not new signals.
 
-### 8.6 Main-screen acceptance criteria
+### 8.19 Main-screen acceptance criteria
 
 - `NOW` does not consume the entire terminal when sufficient width and height are
   available for multiple regions.
@@ -329,8 +605,9 @@ Recent Signal; repeated observations of an unchanged Idle Session are not new si
   scrolling, expansion, or `View more` action.
 - A compact viewport reduces visible Recent Signals before reducing the space required to
   understand `NOW`.
-- `Tab` and `Shift+Tab` move focus between `NOW` and `RECENT SIGNALS`; the focused region
-  is visibly identified and each region retains its own selected row.
+- `Tab` and `Shift+Tab` move focus among `TASKS`, `NOW`, and `RECENT SIGNALS`; the focused
+  region is visibly identified and each list retains its own selected row.
+- `Enter` on a Task row opens its Task detail and state-appropriate actions.
 - `Enter` on a Session-scoped Recent Signal opens that Session's full-page Detail.
 - `Enter` on a Shared Worktree Risk Signal switches to page `1` and focuses the matching
   Worktree in `NOW`. If the risk has cleared and the Worktree no longer contains an Open
@@ -343,7 +620,7 @@ Recent Signal; repeated observations of an unchanged Idle Session are not new si
 - Recent Signals never contain prompt, response, tool, or source-code content.
 - Restarting SessionMesh starts `RECENT SIGNALS` empty without affecting current conditions
   shown in `NOW`.
-- The two remaining regions have no product label or behavior until separately confirmed.
+- The reserved upper-left region remains unlabelled, empty, and non-focusable.
 
 ## 9. Provider session pages
 
@@ -498,12 +775,11 @@ Theme defines at least:
   Exited/unknown;
 - Context roles: normal, Warning, and Critical.
 
-SessionMesh ships with a built-in `sessionmesh` Theme as the default. `t` cycles through the
-available built-in Themes at runtime, briefly reports `Theme: <name>` in the status line,
-and stores the choice as a local Profile preference outside the disposable Session index.
-The next launch restores that choice.
+SessionMesh ships with a built-in `sessionmesh` Theme as the default and restores an
+existing Theme choice from the local Profile. There is no runtime Theme-cycling shortcut;
+interactive Theme selection belongs to a later Settings feature.
 
-The first implementation includes six built-in Themes in cycle order:
+The first implementation includes six built-in Themes:
 
 1. `sessionmesh` - the default dark Theme;
 2. `catppuccin` - Catppuccin Mocha;
@@ -514,7 +790,7 @@ The first implementation includes six built-in Themes in cycle order:
 
 User-authored color palettes and per-role RGB configuration are outside the first
 implementation. Additional built-in Themes may be added later without changing Theme
-semantics or keyboard behavior.
+semantics or Guide behavior.
 
 `--theme <name>` overrides the saved Theme for the current process without changing the
 saved preference. An unknown or unavailable Theme name falls back to `sessionmesh` instead
@@ -594,19 +870,18 @@ Global commands:
 
 - `1/2/3` - All, Claude Code, Codex CLI;
 - `Tab` / `Shift+Tab` - move forward/backward among focusable regions on the current page;
-  they never change the `1/2/3` page. On the All page they switch between `NOW` and
+  they never change the `1/2/3` page. On the All page they traverse `TASKS`, `NOW`, and
   `RECENT SIGNALS`; a page with only one focusable region leaves them as no-ops;
-- `?` - reopen the Help overlay;
-- `t` - cycle built-in Themes and save the selected Theme for the local Profile;
+- `?` - open the contextual Guide;
 - `r` - refresh;
 - `q` - quit;
-- `Esc` - return from Session Detail or close the current inspector/Help layer.
+- `Esc` - return from Session Detail or close the current inspector/Guide layer.
 
 List and timeline commands:
 
 - `Up/Down` or `j/k` - move selection;
 - `Enter` - activate the selected item's single primary action: inspect a Session or
-  locate the Worktree belonging to a Shared Worktree Risk Signal.
+  Task, or locate the Worktree belonging to a Shared Worktree Risk Signal.
 
 Session Detail commands:
 
@@ -625,15 +900,19 @@ Copy menu commands:
 
 The existing privacy contract remains non-negotiable:
 
-- metadata only;
-- no prompt, tool, response, or file-content storage;
+- metadata-only Session and Task stores;
+- no source Prompt, raw Transcript response, tool, or source-code content in either store;
+- Handoff Artifact content exists only in its explicitly authorized owner-only result file;
 - source logs remain the source of truth for provider session metadata;
 - local processing only;
 - provider sessions remain distinct even when grouped by project.
 
-SessionMesh remains read-only. Labels such as `Resume`, `Stop`, or `Start fresh` must not
-imply that SessionMesh performs those actions. The primary action is `Inspect` unless a
-separate, explicitly approved command-launching capability is specified later.
+Passive observation remains the default. Attention Conditions, Alerts, thresholds, and
+elapsed time never authorize action. SessionMesh may perform only a declared, bounded
+Control Operation after the user selects its target and explicitly authorizes that one
+workflow attempt. Handoff generation remains read-only toward the source Project and
+Worktree even when its authorized workflow safely ends a Current Run or launches a later
+Successor Session.
 
 ## 14. Technical capability gaps
 
@@ -653,6 +932,9 @@ These are product dependencies, not an implementation plan:
    boundary. Claude exposes `startedAt` for its live process; Codex requires the start
    time of the live process holding the rollout file. Completed Run boundaries are not
    retained, and Exited Sessions expose only Transcript Lifetime Usage.
+6. **Operation Task execution** - authorized work needs an authoritative Task Store,
+   detached Workers, process reconciliation, private Artifact publication, completion
+   notification, terminal launch adapters, and Provider-specific Successor linkage.
 ### 14.1 Deferred capability
 
 `Possible Stall` detection is Deferred from the first attention-first implementation. It
@@ -660,9 +942,10 @@ must not create an Attention Condition, Recent Signal, future Signal History eve
 notification until provider-specific evidence can distinguish a likely stall from
 legitimate Busy work with an acceptable false-positive rate.
 
-`Acknowledge` and `Snooze` are Deferred to a later requirement. The first implementation
-does not provide their commands, key bindings, persistence, expiry, hiding, or ordering
-behavior; current Attention Conditions remain derived entirely from observable state.
+`Acknowledge` and `Snooze` for Attention Conditions are Deferred to a later requirement.
+The first implementation does not provide their commands, key bindings, persistence,
+expiry, hiding, or ordering behavior; this is distinct from confirmed Task Acknowledgement
+metadata for terminal Operation Tasks.
 
 Full Signal History is Deferred to a later requirement. The first implementation provides
 only the bounded `RECENT SIGNALS` list and does not include a History page or overlay,
@@ -681,7 +964,10 @@ The direction is successful when:
   `RECENT SIGNALS`;
 - the interface remains useful with zero Attention Conditions and does not manufacture
   urgency;
-- all behavior preserves the local, read-only, metadata-only contract.
+- authorized Handoff continues after the TUI exits, produces a valid recoverable Result,
+  and never conflates execution, terminal launch, or Successor linkage outcomes;
+- all observation remains metadata-minimizing and every Control Operation remains local,
+  bounded, and explicitly authorized.
 
 No remote analytics are required. Evaluation may use scripted scenarios, render fixtures,
 and direct usability observation.
@@ -698,18 +984,18 @@ and direct usability observation.
 |---|---|---|---|
 | 2026-07-30 | Maintain this as a living local PRD alongside the v1 spec. | Confirmed | New requirement points will be reviewed and incorporated incrementally. |
 | 2026-07-30 | Use exactly `1/2/3` as persistent top-level navigation for All, Claude Code, and Codex CLI. | Confirmed | Keeps the terminal navigation compact and easy to operate by keyboard. |
-| 2026-07-30 | Omit text descriptions beside the persistent `1/2/3` navigation. | Confirmed | The mapping is introduced through Help instead of repeated in the chrome. |
-| 2026-07-30 | Introduce the numeric mapping and essential keys in a small startup Help overlay. | Confirmed | Preserves discoverability without permanent explanatory text. |
+| 2026-07-30 | Omit text descriptions beside the persistent `1/2/3` navigation. | Confirmed | The mapping is introduced through Guide instead of repeated in the chrome. |
+| 2026-07-30 | Introduce the numeric mapping and essential keys in a small startup Help overlay. | Superseded | Replaced on 2026-08-01 by the complete contextual Guide. |
 | 2026-07-30 | Defer full Signal History and keep only `RECENT SIGNALS` in the first implementation. | Deferred | A bounded recent-change list covers the immediate return-to-terminal job without adding another view, filters, search, and long-term event retention. |
 | 2026-07-30 | Do not use a separate Attention Inbox as the default-screen structure. | Rejected | The main screen uses one non-duplicated current Session inventory instead. |
-| 2026-07-30 | Keep SessionMesh read-only and use `Inspect` as the primary action. | Confirmed | Preserves the existing v1 trust boundary. |
-| 2026-07-30 | Use Theme-defined semantic colors, with severity and state rather than Provider owning alert meaning. | Confirmed | A default Theme gives SessionMesh a coherent identity while runtime cycling, Profile persistence, and accessible alternatives can change presentation without changing behavior. |
+| 2026-07-30 | Keep SessionMesh read-only and use `Inspect` as the primary action. | Superseded | ADR 0002 preserves passive observation as the default while permitting one explicitly authorized, bounded Control Operation. |
+| 2026-07-30 | Use Theme-defined semantic colors, with severity and state rather than Provider owning alert meaning. | Confirmed | A default Theme gives SessionMesh a coherent identity while Profile loading, command-line overrides, and accessible alternatives can change presentation without changing behavior. |
 | 2026-07-30 | Ship six built-in Themes and defer user-authored palettes. | Confirmed | SessionMesh, Catppuccin, Dracula, Gruvbox, Light, and High Contrast cover mainstream dark, bright-terminal, and accessibility needs without expanding first-version configuration and validation across a large palette catalog. |
 | 2026-07-30 | Show complete working-directory and source-log metadata in Session Detail without exposing raw contents. | Confirmed | Local paths and native identity support investigation, while raw JSONL, prompt/response, tool, and source-code content remain outside the privacy boundary. |
 | 2026-07-30 | Group provider-page sessions by Project while retaining one row per Session. | Confirmed | Project supplies context without losing session-specific state or detail navigation. |
 | 2026-07-30 | Render Current Context as a percentage progress bar with threshold colors. | Confirmed | Makes context pressure scannable while retaining precise text and unknown-state handling. |
-| 2026-07-30 | Divide the main terminal screen into regions, with `NOW` and `RECENT SIGNALS` as the only assigned regions. | Confirmed | The homepage should combine current state and recent changes without letting one Session list occupy the entire terminal. |
-| 2026-07-30 | Leave the other two proposed homepage regions unassigned. | Confirmed | Avoids prematurely placing additional focus or Signal History behavior before their user jobs are settled. |
+| 2026-07-30 | Divide the main terminal screen into regions, with `NOW` and `RECENT SIGNALS` as the only assigned regions. | Superseded | The lower row still owns observation, while the upper-right region is now assigned to `TASKS`. |
+| 2026-07-30 | Leave the other two proposed homepage regions unassigned. | Superseded | The upper-right region became `TASKS`; only the upper-left region remains deliberately empty. |
 | 2026-07-30 | Show Current Run Usage separately from Transcript Lifetime Usage in Session detail. | Confirmed | Current Run supports comparison with Claude Code `/usage`; transcript lifetime preserves inherited usage without presenting it as the same total. |
 | 2026-07-30 | Use the provider Run boundary, not the latest model, to calculate Current Run Usage. | Confirmed | A single Run may use multiple models, while a resumed Session may retain earlier transcript usage. |
 | 2026-07-30 | Show Current Run Usage only while a Session is Open; show only Transcript Lifetime Usage after exit. | Confirmed | JSONL timestamps preserve lifetime Usage but not a durable provider Run boundary. Avoiding inferred or persisted Last Run Usage keeps the index rebuildable and the lifecycle language precise. |
@@ -733,7 +1019,9 @@ and direct usability observation.
 | 2026-07-30 | Use `80x24` as the hard minimum and `120x30` as the full-layout target. | Confirmed | Deterministic interactive Ratatui renders at both sizes preserved the required hierarchy, state, Context, selection, actions, and complete Detail metadata without overlap; `79x23` correctly falls back to the terminal-too-small state. |
 | 2026-07-30 | Name the collapsed older provider inventory `OLDER SESSIONS`, not History. | Confirmed | It contains Session rows outside the primary recency scope, while Signal History means a chronological event capability and is Deferred. |
 | 2026-07-30 | Organize Provider pages by recent-first Projects with a per-Project `OLDER SESSIONS` disclosure. | Confirmed | Project groups preserve work context while their latest child orders the groups; Recent and Older Sessions remain time-ordered inside each Project without creating a separate global archive. |
-| 2026-07-30 | Auto-open Help once per local Profile and keep it available through `?`. | Confirmed | First-use discovery is necessary for numeric navigation, while showing the overlay on every process launch would interrupt repeat use. |
+| 2026-07-30 | Auto-open Help once per local Profile and keep it available through `?`. | Superseded | The first-use persistence remains, but the small Help overlay is replaced by Guide. |
+| 2026-08-01 | Replace small Help with one global, contextual, two-pane Guide. | Confirmed | Every category remains available while the initial selection follows the user's current page or region. |
+| 2026-08-01 | Remove runtime `t` Theme cycling while preserving Theme loading and `--theme`. | Confirmed | Theme changes are low-frequency settings; removing the shortcut prevents accidental changes and frees footer space. |
 | 2026-07-30 | Render Session Detail as a full-page child view instead of a centered overlay. | Confirmed | Detail needs room for evidence, source metadata, scoped Usage, and Compactions; persistent numeric navigation and origin-state restoration keep it connected to the three top-level pages. |
 | 2026-07-30 | Add a `c` Copy menu for source paths and native Session ID in Session Detail. | Confirmed | Explicit field selection copies complete metadata values without exposing raw JSONL or modifying Provider Sessions. |
 | 2026-07-30 | Reserve `1/2/3` for top-level pages and use `Tab`/`Shift+Tab` for focus within the current page. | Confirmed | Numeric page navigation is already direct; local focus traversal makes the independent `NOW` and `RECENT SIGNALS` selections reachable without duplicating page navigation. |
@@ -741,6 +1029,19 @@ and direct usability observation.
 | 2026-07-30 | Use compact hierarchical rows and reserve borders for major regions. | Confirmed | Dense alignment keeps multiple concurrent Sessions comparable in one terminal viewport without turning Projects, Worktrees, and Sessions into nested cards. |
 | 2026-07-30 | Keep Recent Signals out of Session Detail. | Confirmed | The main page owns the bounded process-lifetime change list; Detail owns current evidence and provider-reconstructable Usage, Compaction, and source metadata without introducing a second Signal History surface. |
 | 2026-07-30 | Route Recent Signal actions by scope: Session Signals inspect Detail and Shared Worktree Risk Signals locate the Worktree in `NOW`. | Confirmed | A worktree-level condition may involve multiple Sessions, so selecting one arbitrarily would misrepresent the Signal; cleared, no-longer-open Worktrees report that navigation is unavailable. |
+| 2026-08-02 | Use seven explicit Operation Task states and keep Task Acknowledgement separate from execution state. | Confirmed | Execution outcomes must remain stable and recoverable; viewing, copying, launching, or dismissing a result is UI interaction metadata rather than a new execution outcome. |
+| 2026-08-02 | Order one unified Task timeline by its most recent execution-state transition. | Confirmed | Meaningful transitions, especially new terminal outcomes, become immediately visible without heartbeats causing row movement or state grouping fragmenting time order. |
+| 2026-08-02 | Record Task Acknowledgement only after deliberate user interaction. | Confirmed | Notification delivery, panel rendering, and startup loading cannot prove that the user saw a terminal outcome; unread presentation must not alter execution truth. |
+| 2026-08-02 | Keep every retained Task in the scrollable `TASKS` panel after acknowledgement. | Confirmed | `Close for Later` must leave the result discoverable without creating a separate history surface; only retention or explicit deletion removes a Task. |
+| 2026-08-02 | Apply fixed deadlines of 30 seconds in `Queued`, 2 hours in `Waiting`, and 30 minutes in `Running`. | Confirmed | Startup failures should surface quickly, stale control authorization must expire, and runaway Provider execution must begin graceful termination without force killing or automatic retry. |
+| 2026-08-02 | Treat Task cancellation as an intent whose outcome is determined by reconciliation evidence. | Confirmed | A valid result, verified cancellation, and uncertain outcome must remain distinguishable; cancellation must not force-kill processes, close the user's shell, or conceal uncertainty. |
+| 2026-08-02 | Implement manual retry as a newly authorized Task linked to an immutable terminal predecessor. | Confirmed | Reopening or overwriting the original would erase evidence, reuse stale assumptions, and risk duplicate execution while an Interrupted Provider might still be live. |
+| 2026-08-02 | Make Handoff eligibility independent of Current Context thresholds and Session lifecycle. | Confirmed | Alerts may recommend but never authorize or gate an operation; Busy, Idle, and Exited Sessions can all hand off when their concrete source, working-directory, concurrency, and authorization preconditions hold. |
+| 2026-08-02 | Support same-Provider and cross-Provider successors, defaulting to the source Provider. | Confirmed | The fixed Artifact is Provider-neutral, so an explicit target choice adds cross-Provider value without pretending to migrate native Session identity or Transcript history. |
+| 2026-08-02 | Represent successor startup as a platform-neutral Launch Plan consumed by terminal adapters. | Confirmed | No universal terminal-launch protocol exists; structured executable arguments keep Handoff portable and safely testable while v1 ships only a macOS adapter and Copy fallback. |
+| 2026-08-02 | Link every Successor Session through launched-process evidence rather than a preassigned or guessed ID. | Confirmed | One external contract keeps Provider differences inside adapters, records only Sessions that actually start, and avoids false association when several Sessions share a working directory. |
+| 2026-08-02 | Retain Tasks and Artifacts until the user explicitly deletes a terminal Task. | Confirmed | Automatic expiry would violate `Close for Later`; explicit irreversible deletion provides privacy control without touching source or Successor Sessions. |
+| 2026-08-02 | Keep Handoff execution, terminal launch, and Successor linkage as independent outcomes. | Confirmed | Worker interruption must not fabricate an Artifact, and launch or linkage failure after `Ready` must not invalidate an already verified Handoff Result. |
 
 ## 18. Adding the next requirement
 
