@@ -8,15 +8,15 @@ use sessionmesh::app::{Snapshot, Tab};
 use sessionmesh::collector;
 use sessionmesh::config::Config;
 use sessionmesh::index::Index;
-use sessionmesh::pricing::RateCard;
+use sessionmesh::models::ModelCatalog;
 use sessionmesh::ui::{draw, Ui};
 
 fn main() -> anyhow::Result<()> {
     let cfg = Config::load();
     let mut index = Index::open(&cfg.index_path())?;
-    let rates = RateCard::load(Some(&cfg.pricing_override_path()));
+    let models = ModelCatalog::load(Some(&cfg.model_catalog_override_path()));
     collector::refresh(&cfg, &mut index);
-    let mut sessions = collector::build_sessions(&cfg, &index, &rates);
+    let mut sessions = collector::build_sessions(&cfg, &index, &models);
     collector::sort_for_display(&mut sessions);
     let alerts = alerts::counts(&sessions);
 

@@ -8,7 +8,7 @@ use sessionmesh::collector;
 use sessionmesh::config::Config;
 use sessionmesh::domain::{Provider, SessionState};
 use sessionmesh::index::Index;
-use sessionmesh::pricing::RateCard;
+use sessionmesh::models::ModelCatalog;
 
 fn main() -> anyhow::Result<()> {
     let cfg = Config::load();
@@ -17,8 +17,8 @@ fn main() -> anyhow::Result<()> {
     println!("index:      {}", cfg.index_path().display());
 
     let mut index = Index::open(&cfg.index_path())?;
-    let rates = RateCard::load(Some(&cfg.pricing_override_path()));
-    println!("rate card:  {}\n", rates.version);
+    let models = ModelCatalog::load(Some(&cfg.model_catalog_override_path()));
+    println!("model catalog:  {}\n", models.version);
 
     let t0 = std::time::Instant::now();
     let stats = collector::refresh(&cfg, &mut index);
@@ -38,7 +38,7 @@ fn main() -> anyhow::Result<()> {
         stats2.discovered, stats2.parsed, stats2.skipped, stats2.pruned, elapsed2
     );
 
-    let mut sessions = collector::build_sessions(&cfg, &index, &rates);
+    let mut sessions = collector::build_sessions(&cfg, &index, &models);
     collector::sort_for_display(&mut sessions);
 
     for p in [Provider::ClaudeCode, Provider::CodexCli] {

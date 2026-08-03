@@ -4,7 +4,7 @@
 use crate::config::Config;
 use crate::domain::{ModelUsage, ProjectIdentity, Session, SourceMetadata, Usage, UsageSummary};
 use crate::index::{fingerprint_of, Index, StoredSession};
-use crate::pricing::RateCard;
+use crate::models::ModelCatalog;
 use crate::project;
 use crate::providers::state::StateDetector;
 use crate::providers::{self, ProviderAdapter};
@@ -57,7 +57,7 @@ fn index_one(index: &mut Index, path: &Path, adapter: &dyn ProviderAdapter, stat
 }
 
 /// Build the normalized session list from the index, attaching live state and cost.
-pub fn build_sessions(cfg: &Config, index: &Index, rates: &RateCard) -> Vec<Session> {
+pub fn build_sessions(cfg: &Config, index: &Index, models: &ModelCatalog) -> Vec<Session> {
     let stored = index.load_all().unwrap_or_default();
     let detector = StateDetector::gather(&cfg.claude_sessions_dir());
     let mut resolutions: HashMap<String, project::ProjectResolution> = HashMap::new();
@@ -76,7 +76,7 @@ pub fn build_sessions(cfg: &Config, index: &Index, rates: &RateCard) -> Vec<Sess
                         .clone()
                 })
                 .unwrap_or_default();
-            to_session(stored, &detector, rates, resolved)
+            to_session(stored, &detector, models, resolved)
         })
         .collect();
 
@@ -87,7 +87,7 @@ pub fn build_sessions(cfg: &Config, index: &Index, rates: &RateCard) -> Vec<Sess
 fn to_session(
     stored: StoredSession,
     detector: &StateDetector,
-    rates: &RateCard,
+    models: &ModelCatalog,
     resolved: project::ProjectResolution,
 ) -> Session {
     let StoredSession {
@@ -99,25 +99,22 @@ fn to_session(
     let live = adapter.live_state(detector, &source_path);
     let state = live.state;
     let mut context = parsed.context;
-    if let Some(window) = parsed
+    context.window = parsed
         .latest_model
         .as_deref()
-        .and_then(|model| adapter.context_window(model))
-    {
-        context.window = Some(window);
-    }
+        .and_then(|model| models.resolve_context_window(parsed.provider, model, context.window));
 
     let (per_model, cost) = price_models(
         parsed
             .per_model
             .iter()
             .map(|(model, usage)| (model.clone(), *usage)),
-        rates,
+        models,
     );
     let current_run_usage = if state.is_open() {
         live.current_run_started_at_ms
             .and_then(|started_at_ms| adapter.current_run_usage(&source_path, started_at_ms))
-            .map(|run| price_usage(run, rates))
+            .map(|run| price_usage(run, models))
     } else {
         None
     };
@@ -144,8 +141,8 @@ fn to_session(
     }
 }
 
-fn price_usage(parsed: providers::ParsedUsage, rates: &RateCard) -> UsageSummary {
-    let (per_model, cost) = price_models(parsed.per_model, rates);
+fn price_usage(parsed: providers::ParsedUsage, models: &ModelCatalog) -> UsageSummary {
+    let (per_model, cost) = price_models(parsed.per_model, models);
 
     UsageSummary {
         usage: parsed.usage,
@@ -156,14 +153,14 @@ fn price_usage(parsed: providers::ParsedUsage, rates: &RateCard) -> UsageSummary
 
 fn price_models(
     usage_by_model: impl IntoIterator<Item = (String, Usage)>,
-    rates: &RateCard,
+    models: &ModelCatalog,
 ) -> (Vec<ModelUsage>, Option<f64>) {
     let mut any_unknown = false;
     let mut total = 0.0;
     let per_model: Vec<ModelUsage> = usage_by_model
         .into_iter()
         .map(|(model, usage)| {
-            let cost = rates.estimate(&model, &usage);
+            let cost = models.estimate(&model, &usage);
             match cost {
                 Some(value) => total += value,
                 None => any_unknown = true,
@@ -338,7 +335,7 @@ mod tests {
             )
             .unwrap();
 
-        let sessions = build_sessions(&cfg, &index, &RateCard::load(None));
+        let sessions = build_sessions(&cfg, &index, &ModelCatalog::load(None));
         let session = sessions
             .iter()
             .find(|session| session.id == "cached-proxied-session")
@@ -390,7 +387,7 @@ mod tests {
         let mut index = Index::open_in_memory().unwrap();
         refresh(&cfg, &mut index);
 
-        let sessions = build_sessions(&cfg, &index, &RateCard::load(None));
+        let sessions = build_sessions(&cfg, &index, &ModelCatalog::load(None));
 
         let session = sessions
             .iter()
@@ -410,10 +407,10 @@ mod tests {
         );
         assert_eq!(run.per_model.len(), 1);
         assert_eq!(run.per_model[0].model, "claude-opus-4-8");
-        assert!((run.cost.unwrap() - 0.002925).abs() < 1e-12);
+        assert!((run.cost.unwrap() - 0.000975).abs() < 1e-12);
 
         std::fs::remove_file(state_dir.join("state.json")).unwrap();
-        let exited = build_sessions(&cfg, &index, &RateCard::load(None));
+        let exited = build_sessions(&cfg, &index, &ModelCatalog::load(None));
         let exited = exited
             .iter()
             .find(|session| session.id == "live-session")

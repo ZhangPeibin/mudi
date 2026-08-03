@@ -12,7 +12,7 @@ use sessionmesh::domain::{
     ContextState, Provider, Session, SessionState, SourceFormat, SourceMetadata, Usage, Worktree,
 };
 use sessionmesh::index::{Fingerprint, Index};
-use sessionmesh::pricing::RateCard;
+use sessionmesh::models::ModelCatalog;
 use sessionmesh::providers::ParsedSession;
 use sessionmesh::ui::{draw, Ui, UiAction};
 
@@ -97,15 +97,20 @@ fn rendered_style_at(ui: &Ui, snapshot: &Snapshot, text: &str) -> Style {
     let buffer = terminal.backend().buffer();
     let width = buffer.area.width as usize;
     let text_width = text.chars().count();
+    let mut first_match = None;
     for row in buffer.content().chunks(width) {
-        if let Some(cells) = row
+        for cells in row
             .windows(text_width)
-            .find(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>() == text)
+            .filter(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>() == text)
         {
-            return cells[0].style();
+            let style = cells[0].style();
+            if style.add_modifier.contains(Modifier::BOLD) {
+                return style;
+            }
+            first_match.get_or_insert(style);
         }
     }
-    panic!("rendered text not found: {text}");
+    first_match.unwrap_or_else(|| panic!("rendered text not found: {text}"))
 }
 
 #[test]
@@ -142,7 +147,7 @@ fn indexed_source_metadata_reaches_the_normalized_session() {
         extra_dirs: vec![],
     };
 
-    let sessions = build_sessions(&config, &index, &RateCard::load(None));
+    let sessions = build_sessions(&config, &index, &ModelCatalog::load(None));
 
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].source.path, source_path);

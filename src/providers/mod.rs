@@ -11,9 +11,8 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// A provider adapter owns everything that differs between providers: where its
-/// logs live, how to parse them, and how to read a model's context window. One
-/// impl per provider means adding a provider is a pure addition — no `match
-/// provider` sites elsewhere.
+/// logs live and how to parse them. One impl per provider means adding a provider
+/// is a pure addition — no `match provider` sites elsewhere.
 pub trait ProviderAdapter {
     /// Which provider this adapter speaks for.
     fn provider(&self) -> Provider;
@@ -24,9 +23,6 @@ pub trait ProviderAdapter {
     /// Parse one source file into the normalized [`ParsedSession`], or `None` if
     /// it is unreadable or yields nothing usable.
     fn parse_file(&self, path: &Path) -> Option<ParsedSession>;
-    /// Best-known context window for `model`, in tokens. `None` when unknown —
-    /// the UI then shows the raw token count with limit/percent as `N/A`.
-    fn context_window(&self, model: &str) -> Option<u64>;
     /// Live lifecycle state for a session, given the shared once-per-scan process
     /// probe and the session's source path. The path is sufficient: Claude derives
     /// its session id from the transcript filename; Codex keys on the path itself.
@@ -74,7 +70,7 @@ pub(crate) fn discover_files(roots: &[PathBuf], keep: impl Fn(&str) -> bool) -> 
 /// The normalized result of parsing one source session file.
 ///
 /// Live lifecycle state and dollar cost are attached later (state detector +
-/// pricing) — this struct is purely what the log file itself reveals.
+/// Model Catalog data) — this struct is purely what the log file itself reveals.
 #[derive(Debug, Clone)]
 pub struct ParsedSession {
     pub provider: Provider,

@@ -86,9 +86,14 @@ impl Config {
         self.data_dir.join("profile.json")
     }
 
-    /// Optional local pricing override (`data_dir/pricing.json`).
-    pub fn pricing_override_path(&self) -> PathBuf {
-        self.data_dir.join("pricing.json")
+    /// Authoritative local Session Alias store, separate from the disposable index.
+    pub fn label_store_path(&self) -> PathBuf {
+        self.data_dir.join("session-labels.json")
+    }
+
+    /// Optional local Model Catalog override (`data_dir/models.json`).
+    pub fn model_catalog_override_path(&self) -> PathBuf {
+        self.data_dir.join("models.json")
     }
 
     /// Directories to search for Claude transcripts.
@@ -131,6 +136,36 @@ mod tests {
         let args = ["sessionmesh", "--theme", "dracula"];
 
         assert_eq!(theme_override_from_args(args), Some("dracula".to_string()));
+    }
+
+    #[test]
+    fn label_store_lives_in_the_sessionmesh_data_directory() {
+        let config = Config {
+            claude_dir: PathBuf::from("/claude"),
+            codex_dir: PathBuf::from("/codex"),
+            data_dir: PathBuf::from("/sessionmesh-data"),
+            extra_dirs: Vec::new(),
+        };
+
+        assert_eq!(
+            config.label_store_path(),
+            PathBuf::from("/sessionmesh-data/session-labels.json")
+        );
+    }
+
+    #[test]
+    fn model_catalog_override_lives_in_the_sessionmesh_data_directory() {
+        let config = Config {
+            claude_dir: PathBuf::from("/claude"),
+            codex_dir: PathBuf::from("/codex"),
+            data_dir: PathBuf::from("/sessionmesh-data"),
+            extra_dirs: Vec::new(),
+        };
+
+        assert_eq!(
+            config.model_catalog_override_path(),
+            PathBuf::from("/sessionmesh-data/models.json")
+        );
     }
 
     #[test]

@@ -43,12 +43,6 @@ impl ProviderAdapter for CodexAdapter {
         parse_file(path)
     }
 
-    fn context_window(&self, _model: &str) -> Option<u64> {
-        // Codex records `model_context_window` in its own log; the parser reads it
-        // directly, so there is nothing to infer from the model name here.
-        None
-    }
-
     fn live_state(
         &self,
         probe: &super::state::StateDetector,

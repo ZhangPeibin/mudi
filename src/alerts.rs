@@ -6,7 +6,9 @@
 
 use crate::config::{CRIT_PCT, WARN_PCT};
 use crate::domain::{Provider, Session};
+use crate::session_labels::SessionLabels;
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -55,14 +57,16 @@ pub fn counts(sessions: &[Session]) -> AlertCounts {
 #[derive(Default)]
 pub struct AlertEngine {
     seen: HashMap<(Provider, String), Level>,
+    labels: SessionLabels,
     /// When false, notifications are computed but not delivered (tests).
     deliver: bool,
 }
 
 impl AlertEngine {
-    pub fn new() -> Self {
+    pub fn new(label_store_path: impl AsRef<Path>) -> Self {
         AlertEngine {
             seen: HashMap::new(),
+            labels: SessionLabels::load(label_store_path),
             deliver: true,
         }
     }
@@ -71,6 +75,16 @@ impl AlertEngine {
     fn silent() -> Self {
         AlertEngine {
             seen: HashMap::new(),
+            labels: SessionLabels::default(),
+            deliver: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn silent_with_labels(labels: SessionLabels) -> Self {
+        AlertEngine {
+            seen: HashMap::new(),
+            labels,
             deliver: false,
         }
     }
@@ -78,6 +92,7 @@ impl AlertEngine {
     /// Update state from the latest snapshot, emitting notifications for upward
     /// threshold crossings. Returns the messages that were (or would be) delivered.
     pub fn update(&mut self, sessions: &[Session]) -> Vec<String> {
+        self.labels.reload();
         let mut messages = Vec::new();
 
         for s in sessions {
@@ -99,15 +114,17 @@ impl AlertEngine {
 
             // Notify only on upward crossings into a higher band.
             if level > prev {
+                let title = self.labels.title(s.provider, &s.id);
+                let short_id = SessionLabels::short_id(&s.id);
                 let msg = match level {
                     Level::Crit => format!(
-                        "CRITICAL: {} · {} context at {:.0}%",
+                        "CRITICAL: {title} · {} · {} · {short_id} · Current Context {:.0}%",
                         s.provider.label(),
                         s.project_label(),
                         pct
                     ),
                     Level::Warn => format!(
-                        "Warning: {} · {} context at {:.0}%",
+                        "Warning: {title} · {} · {} · {short_id} · Current Context {:.0}%",
                         s.provider.label(),
                         s.project_label(),
                         pct
@@ -140,6 +157,7 @@ fn notify(message: &str) {
 mod tests {
     use super::*;
     use crate::domain::{ContextState, Project, ProjectIdentity, SessionState};
+    use crate::session_labels::SessionLabels;
     use std::path::PathBuf;
 
     fn open_session(id: &str, tokens: u64, window: u64, state: SessionState) -> Session {
@@ -166,6 +184,51 @@ mod tests {
             last_activity_ms: 0,
             cost: None,
         }
+    }
+
+    #[test]
+    fn context_notification_identifies_the_session_with_its_current_title() {
+        let mut labels = SessionLabels::default();
+        labels
+            .set_alias(Provider::ClaudeCode, "claude-session-12345678", "Auth fix")
+            .unwrap();
+        let mut engine = AlertEngine::silent_with_labels(labels);
+
+        let messages = engine.update(&[open_session(
+            "claude-session-12345678",
+            180_000,
+            200_000,
+            SessionState::Busy,
+        )]);
+
+        assert_eq!(
+            messages,
+            vec![
+                "CRITICAL: Auth fix · Claude Code · p · 12345678 · Current Context 90%".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn renaming_a_session_does_not_emit_another_context_notification() {
+        let directory =
+            std::env::temp_dir().join(format!("sessionmesh-alert-title-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("session-labels.json");
+        let mut labels = SessionLabels::load(&path);
+        labels
+            .set_alias(Provider::ClaudeCode, "claude-session", "Before")
+            .unwrap();
+        let mut engine = AlertEngine::silent_with_labels(labels);
+        let session = open_session("claude-session", 180_000, 200_000, SessionState::Busy);
+        assert_eq!(engine.update(std::slice::from_ref(&session)).len(), 1);
+
+        SessionLabels::load(&path)
+            .set_alias(Provider::ClaudeCode, "claude-session", "After")
+            .unwrap();
+
+        assert!(engine.update(&[session]).is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
