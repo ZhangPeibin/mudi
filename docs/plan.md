@@ -33,7 +33,8 @@ state detector (state.rs, macOS)      SQLite index (index/) — disposable, rebu
   `SESSIONMESH_DATA_DIR`, `SESSIONMESH_EXTRA_DIRS`), thresholds.
 - `domain.rs` — `Provider`, `SessionState`, `Usage`, `ContextState`, `ModelUsage`,
   `Compaction`, `Session`, `Snapshot`.
-- `pricing.rs` — bundled rate card (embedded JSON) + local override + estimator.
+- `models.rs` — bundled Model Provider/model catalog (embedded JSON), local override, Context
+  Window lookup, and direct-price estimator.
 - `providers/claude.rs`, `providers/codex.rs` — collectors + parsers.
 - `providers/state.rs` — macOS process detection (`ps`, `lsof`).
 - `index/mod.rs` — SQLite schema, upsert, reconcile, rebuild.
@@ -45,8 +46,8 @@ state detector (state.rs, macOS)      SQLite index (index/) — disposable, rebu
 
 ## Build order (test-first where it pays)
 
-1. Scaffold + docs + pricing. ✔
-2. Domain + pricing + config (unit tests on estimator).
+1. Scaffold + docs + Model Catalog. ✔
+2. Domain + Model Catalog + config (unit tests on estimator).
 3. Parsers with fixtures: duplicated Claude assistant records (dedup by requestId/uuid),
    Codex cumulative counters (use latest, don't sum), compaction extraction.
 4. macOS state detection.
@@ -56,10 +57,12 @@ state detector (state.rs, macOS)      SQLite index (index/) — disposable, rebu
 
 ## Key correctness rules
 
-- Claude current context = `input_tokens + cache_read_input_tokens` (latest only).
+- Claude current context prefers `input_tokens + cache_read_input_tokens`; when cache read is
+  zero, cache creation supplies the prompt-cache contribution. Never add both cache fields.
 - Codex current context = latest `last_token_usage` (`input + output`) vs
   `model_context_window`.
 - Processed usage is cumulative and separate from current context.
 - Dedup duplicated Claude records; never sum Codex cumulative snapshots.
-- Unknown model price → `N/A`, never substitute.
+- Model metadata is keyed by exact Model Provider + model. Runtime lookup accepts only a
+  unique exact model identifier; unknown or ambiguous price/window → `N/A`, never substitute.
 - Never persist prompt/tool/file content.

@@ -15,21 +15,28 @@ A provider-native Claude Code or Codex CLI conversation, identified by its **nat
 Session ID**. Sessions are **never merged across providers** — a Claude session and a
 Codex session are always distinct, even if related in time or directory.
 
-- `Provider` ∈ { ClaudeCode, CodexCli }.
+- `Session Provider` ∈ { ClaudeCode, CodexCli }.
 - A Session belongs to one Project and, for a Git Project, one Worktree according to its
   working directory.
 - A session lists its **latest** model. Mixed-model sessions split usage in the detail view.
 
+## Session Provider
+
+The provider-native CLI that owns a Session and its source log: Claude Code or Codex CLI.
+It is independent of the organization that publishes the Session's current model.
+
+_Avoid:_ Model Provider, API vendor.
+
 ## Session Label
 
-A stable user-facing name used to recognize one Session. It does not claim to describe the
-Session's current work, lifecycle state, or latest goal; the UI presents it as `Title`.
-Provider-native or Provider-generated titles are not Session Label sources.
-Session Labels are not unique and never participate in Session identity. When visible
-labels collide, the shortened native Session ID disambiguates them.
+A stable user-facing name presented as `Title` for recognizing one Session, not its current
+work, lifecycle state, latest goal, or identity. It is neither unique nor sourced from a
+Provider-native or Provider-generated title.
 
-The displayed Session Label uses this precedence: Session Alias, Generated Session Label,
-then shortened native Session ID.
+Resolution precedence is Session Alias, Generated Session Label, then Short Session ID;
+duplicate visible Labels use the Short Session ID to disambiguate. Historical observations
+retain Session identity and resolve its current Label when displayed rather than snapshotting
+the Label.
 
 _Avoid:_ Summary, Intent, Current Task, when referring to Session display identity.
 
@@ -49,6 +56,15 @@ A SessionMesh-owned Session Label created only when the user explicitly invokes
 user-written Session Alias, and is ignored whenever an Alias exists for the same Session.
 
 _Avoid:_ Automatic summary, Provider title, Current Task.
+
+## Short Session ID
+
+The last eight characters of a native Session ID, used as the deterministic Session Label
+fallback and duplicate-Label disambiguator; if two visible Sessions share the suffix, it
+expands leftward until they differ. A surface that does not establish the Provider displays
+the Provider with it; the result is a compact reference, not Session identity.
+
+_Avoid:_ Session ID, when only the shortened display reference is shown.
 
 ## Project
 
@@ -179,9 +195,10 @@ ties the launched process to the new native Session ID; launch intent alone is i
 The **latest known** amount of content occupying the model's context window for a
 session. It is *not* cumulative token processing.
 
-- **Claude Code:** `input_tokens + cache_read_input_tokens` of the latest assistant
-  message. **Never** add `cache_creation_input_tokens` — that is write-side billing data
-  and double-counts current context.
+- **Claude Code:** use the latest assistant message's `input_tokens` plus its prompt-cache
+  contribution. Prefer `cache_read_input_tokens`; when cache read is zero, use
+  `cache_creation_input_tokens` instead because a cache miss reports the current prompt
+  there. Never add cache read and cache creation together.
 - **Codex CLI:** derived from the latest `token_count` event's `last_token_usage`
   (`input_tokens + output_tokens`, cached input is already a subset of input) together
   with `model_context_window`.
@@ -206,12 +223,28 @@ _Avoid:_ Session Usage or Total Usage without an explicit scope; Last Run Usage.
 
 Processed Usage is **kept strictly separate** from Current Context.
 
+## Model Provider
+
+The organization or API service that publishes an exact model and its public prices, such as
+Anthropic, OpenAI, or Google. It is independent of the Session Provider through which the
+model is observed.
+
+_Avoid:_ Session Provider, model family.
+
+## Model Catalog
+
+The bundled, versioned catalog keyed by exact Model Provider and model identifier. Entries
+record public token prices and Context Window; an unknown or ambiguous identifier remains
+unknown rather than inheriting data from a similar model.
+
+_Avoid:_ Rate Card, Session-Provider catalog, nearest-model substitution.
+
 ## API Price Estimate
 
-An API-equivalent dollar estimate from a bundled, versioned public rate card. It is **not**
-the user's subscription bill. UI shows the bare dollar amount; a single footer note reads
-`Estimated using API rates`. Unknown model price → `N/A`. Never silently substitute a
-nearby model.
+An API-equivalent dollar estimate from the Model Catalog's direct prices. It is **not** the
+user's subscription bill. UI shows the bare dollar amount; a single footer note reads
+`Estimated using API rates`. Unknown model price → `N/A`. Never silently substitute a nearby
+model or use Batch prices for interactive Session usage.
 
 ## Session State (lifecycle)
 

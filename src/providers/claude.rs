@@ -3,8 +3,9 @@
 //! Transcripts: `~/.claude/projects/<encoded-project>/<session-id>.jsonl`.
 //!
 //! Key semantics:
-//! - Current context = latest assistant message `input_tokens + cache_read_input_tokens`
-//!   (never `cache_creation_input_tokens`).
+//! - Current context = latest assistant message `input_tokens + cache_read_input_tokens`.
+//!   When cache read is zero, cache creation is the prompt-cache contribution instead.
+//!   Cache read and cache creation are never added together.
 //! - Streaming writes multiple records per `message.id`; usage must be de-duplicated by
 //!   id (last occurrence wins — it carries the final counts).
 //! - Compaction = `type:system` / `subtype:compact_boundary`.
@@ -34,27 +35,6 @@ impl ProviderAdapter for ClaudeAdapter {
 
     fn parse_file(&self, path: &Path) -> Option<ParsedSession> {
         parse_file(path)
-    }
-
-    fn context_window(&self, model: &str) -> Option<u64> {
-        let m = model.to_ascii_lowercase();
-        if m.starts_with("gpt-5.6-sol")
-            || m.starts_with("gpt-5.6-terra")
-            || m.starts_with("gpt-5.6-luna")
-        {
-            return Some(1_050_000);
-        }
-        if !m.starts_with("claude") {
-            return None;
-        }
-        // Haiku-tier models are 200k; current Opus/Sonnet run a 1M window in
-        // Claude Code. The transcript never records the window, so it is derived
-        // from the model name here.
-        if m.contains("haiku") {
-            Some(200_000)
-        } else {
-            Some(1_000_000)
-        }
     }
 
     fn live_state(
@@ -149,8 +129,14 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
                     cache_read,
                     cache_write,
                 };
-                // Current context excludes cache creation (write-side).
-                let ctx_tokens = input + cache_read;
+                // A cache miss reports the prompt in cache creation instead of cache read.
+                // Prefer cache read so records containing both categories never double-count.
+                let cached_context = if cache_read == 0 {
+                    cache_write
+                } else {
+                    cache_read
+                };
+                let ctx_tokens = input + cached_context;
 
                 let key = msg
                     .get("id")
@@ -214,7 +200,9 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
         Some(m) => (
             ContextState {
                 tokens: m.ctx_tokens,
-                window: ClaudeAdapter.context_window(&m.model),
+                // Claude JSONL does not report a window. The Model Catalog fills
+                // it after indexing, using the exact Provider + model entry.
+                window: None,
             },
             Some(m.model.clone()),
         ),
@@ -345,54 +333,19 @@ mod tests {
         let s = parse_str("sess", text).unwrap();
         // Latest = "b": 1500 + 3000, excluding cache creation.
         assert_eq!(s.context.tokens, 4500);
-        assert_eq!(s.context.window, Some(1_000_000));
+        assert_eq!(s.context.window, None);
         assert_eq!(s.latest_model.as_deref(), Some("claude-opus-4-8"));
     }
 
     #[test]
-    fn proxied_gpt_5_6_models_use_their_documented_context_window() {
-        for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
-            assert_eq!(ClaudeAdapter.context_window(model), Some(1_050_000));
-        }
-    }
+    fn context_uses_cache_creation_when_cache_read_is_zero() {
+        let text = r#"
+{"type":"assistant","timestamp":"2026-07-29T09:00:00.000Z","message":{"id":"cache-miss","model":"claude-opus-4-8","usage":{"input_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":129330,"output_tokens":201}}}
+"#;
 
-    #[test]
-    fn context_window_is_1m_except_haiku() {
-        // Current Claude Code Opus/Sonnet models run a 1M window; Haiku-tier is 200k.
-        assert_eq!(
-            ClaudeAdapter.context_window("claude-opus-4-8"),
-            Some(1_000_000)
-        );
-        assert_eq!(
-            ClaudeAdapter.context_window("claude-sonnet-4-6"),
-            Some(1_000_000)
-        );
-        assert_eq!(
-            ClaudeAdapter.context_window("claude-haiku-4-5"),
-            Some(200_000)
-        );
-        // Case-insensitive on the model string.
-        assert_eq!(
-            ClaudeAdapter.context_window("Claude-Haiku-4-5"),
-            Some(200_000)
-        );
-        // Non-Claude strings remain unknown.
-        assert_eq!(ClaudeAdapter.context_window("gpt-5.5"), None);
-    }
+        let s = parse_str("sess", text).unwrap();
 
-    #[test]
-    fn large_context_no_longer_exceeds_100_percent() {
-        // Observed 212.7k tokens on opus-4-8 previously rendered as 106% against a
-        // hardcoded 200k window; against the real 1M window it is well under 100%.
-        let ctx = ContextState {
-            tokens: 212_700,
-            window: ClaudeAdapter.context_window("claude-opus-4-8"),
-        };
-        let pct = ctx.percent().expect("window known");
-        assert!(
-            pct < 100.0,
-            "212.7k should be under 100% of the real window, got {pct}"
-        );
+        assert_eq!(s.context.tokens, 129_332);
     }
 
     #[test]

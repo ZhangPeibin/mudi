@@ -15,10 +15,10 @@
 └───────│              │NOW shows current conditions.                  │───────┘
 ┌ RECENT│              │Recent Signals show transitions.               │est 5s ┐
 │WT /Use│              │                                               │       │
-│CL clau│              │                                               │       │
-│CL clau│              │                                               │       │
-│CL clau│              │                                               │       │
-│CX code└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘       │
+│CL crit│              │                                               │       │
+│CL crit│              │                                               │       │
+│CL -war│              │                                               │       │
+│CX dex-└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘       │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-j/k | Enter Inspect | ? Guide | q Quit                             fixture ready
+j/k | Enter | e Edit title | ? Guide | q Quit                      fixture ready

@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
+use ratatui::backend::{Backend, TestBackend, WindowSize};
+use ratatui::buffer::{Buffer, Cell};
+use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::Terminal;
 use sessionmesh::app::Snapshot;
@@ -14,14 +15,78 @@ use sessionmesh::signals::{
 };
 use sessionmesh::ui::{draw, Ui};
 
+use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+struct CursorBackend {
+    inner: TestBackend,
+    cursor_visible: bool,
+}
+
+impl CursorBackend {
+    fn new(width: u16, height: u16) -> Self {
+        Self {
+            inner: TestBackend::new(width, height),
+            cursor_visible: false,
+        }
+    }
+
+    fn buffer(&self) -> &Buffer {
+        self.inner.buffer()
+    }
+}
+
+impl Backend for CursorBackend {
+    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        self.cursor_visible = false;
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        self.cursor_visible = true;
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> io::Result<Position> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        self.inner.clear()
+    }
+
+    fn size(&self) -> io::Result<Size> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> io::Result<WindowSize> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 struct ProductionRender {
     width: u16,
     height: u16,
     text: String,
     buffer: Buffer,
+    cursor_position: Position,
+    cursor_visible: bool,
 }
 
 impl ProductionRender {
@@ -81,12 +146,31 @@ impl ProductionRender {
         }
         panic!("rendered text {text:?} not found in row containing {row_text:?}");
     }
+
+    fn position_of(&self, text: &str) -> Position {
+        let cell_count = text.chars().count();
+        for (y, row) in self
+            .buffer
+            .content()
+            .chunks(self.width as usize)
+            .enumerate()
+        {
+            if let Some(x) = row.windows(cell_count).position(|cells| {
+                cells.iter().map(|cell| cell.symbol()).collect::<String>() == text
+            }) {
+                return Position::new(x as u16, y as u16);
+            }
+        }
+        panic!("rendered text not found: {text:?}");
+    }
 }
 
 fn render(snapshot: &Snapshot, ui: &Ui, width: u16, height: u16) -> ProductionRender {
-    let backend = TestBackend::new(width, height);
+    let backend = CursorBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|frame| draw(frame, snapshot, ui)).unwrap();
+    let cursor_position = terminal.get_cursor_position().unwrap();
+    let cursor_visible = terminal.backend().cursor_visible;
     let buffer = terminal.backend().buffer();
     let text = buffer
         .content()
@@ -100,6 +184,8 @@ fn render(snapshot: &Snapshot, ui: &Ui, width: u16, height: u16) -> ProductionRe
         height: buffer.area.height,
         text,
         buffer: buffer.clone(),
+        cursor_position,
+        cursor_visible,
     }
 }
 
@@ -563,20 +649,20 @@ fn all_page_current_context_bars_use_one_color_for_each_semantic_role() {
 
     for (session, bar, percent, expected_color) in [
         (
-            "codex-sh",
-            "[######---------]",
+            "x-shared",
+            "[#####-------]",
             "40%",
             Color::Rgb(120, 200, 154),
         ),
         (
-            "claude-w",
-            "[###########----]",
+            "-warning",
+            "[#########---]",
             "75%",
             Color::Rgb(238, 190, 70),
         ),
         (
-            "claude-c",
-            "[##############-]",
+            "critical",
+            "[###########-]",
             "90%",
             Color::Rgb(255, 95, 109),
         ),
@@ -696,7 +782,7 @@ fn production_render_uses_the_snapshot_time_for_relative_session_age() {
     let session_row = rendered
         .text
         .lines()
-        .find(|line| line.contains("Claude stable-c"))
+        .find(|line| line.contains("Claude -session"))
         .unwrap_or_else(|| {
             panic!(
                 "stable clock Session should be rendered:\n{}",
@@ -753,13 +839,11 @@ fn compact_all_page_matches_the_reviewed_production_fixture() {
 
     assert_eq!((rendered.width, rendered.height), (80, 24));
     assert!(
-        rendered.text.contains("claude-warning"),
+        rendered.text.contains("-warning"),
         "compact Signals should retain the fourth newest transition"
     );
-    assert!(!rendered.text.contains("Before 1: CL:claude-critical"));
-    assert!(!rendered
-        .text
-        .contains("After 2: CL:claude-critical, CX:codex-shared"));
+    assert!(!rendered.text.contains("Before 1: CL:critical"));
+    assert!(!rendered.text.contains("After 2: CL:critical, CX:x-shared"));
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/all_populated_80x24.txt"),
@@ -777,6 +861,289 @@ fn compact_all_page_with_no_signals_matches_the_reviewed_production_fixture() {
         &rendered,
         include_str!("fixtures/production-renders/all_empty_signals_80x24.txt"),
     );
+}
+
+#[test]
+fn now_session_row_uses_the_saved_alias_as_its_title() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth fix".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 120, 30);
+    let critical_row = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("CRITICAL") && line.contains("Busy"))
+        .expect("critical NOW Session should render");
+    assert!(
+        critical_row.contains("Auth fix"),
+        "NOW should render the saved Alias as its Title: {critical_row}"
+    );
+}
+
+#[test]
+fn compact_now_renders_a_readable_unicode_session_title() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Dao 文档整理".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    for (width, height) in [(80, 24), (120, 30)] {
+        let rendered = render(&snapshot, &ui, width, height);
+        let critical_row = rendered
+            .text
+            .lines()
+            .find(|line| line.contains("CRITICAL") && line.contains("Busy"))
+            .expect("critical NOW Session should render");
+        let rendered_title = critical_row
+            .split_once("Claude ")
+            .and_then(|(_, rest)| rest.split_once('['))
+            .map(|(title, _)| {
+                title
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .collect::<String>()
+            })
+            .expect("critical NOW row should separate Title from Current Context");
+        assert_eq!(
+            rendered_title, "Dao文档整理",
+            "NOW should display the complete Alias at {width}x{height}: {critical_row}"
+        );
+    }
+}
+
+#[test]
+fn wide_now_grows_the_session_title_to_twenty_cells() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Architecture cleanup".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 160, 30);
+    let critical_row = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("CRITICAL") && line.contains("Busy"))
+        .expect("critical NOW Session should render");
+    let rendered_title = critical_row
+        .split_once("Claude ")
+        .and_then(|(_, rest)| rest.split_once('['))
+        .map(|(title, _)| title.trim())
+        .expect("critical NOW row should separate Title from Current Context");
+
+    assert_eq!(rendered_title, "Architecture cleanup");
+}
+
+#[test]
+fn long_unicode_now_title_does_not_move_operational_evidence() {
+    let snapshot = production_snapshot();
+    let baseline = render(&snapshot, &Ui::default(), 80, 24);
+    let baseline_row = baseline
+        .text
+        .lines()
+        .find(|line| line.contains("CRITICAL") && line.contains("Busy"))
+        .expect("baseline critical NOW Session should render");
+
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Dao 文档整理和项目路线图".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let aliased = render(&snapshot, &ui, 80, 24);
+    let aliased_row = aliased
+        .text
+        .lines()
+        .find(|line| line.contains("CRITICAL") && line.contains("Busy"))
+        .expect("aliased critical NOW Session should render");
+
+    let column = |row: &str, text: &str| {
+        row[..row.find(text).expect("evidence should render")]
+            .chars()
+            .count()
+    };
+    for evidence in ["[", "90%", "30s"] {
+        assert_eq!(
+            column(aliased_row, evidence),
+            column(baseline_row, evidence),
+            "{evidence} should stay in its stable column"
+        );
+    }
+    assert!(aliased_row.contains("[###########-] 90%"));
+    assert!(aliased_row.contains("claude-o..."));
+}
+
+#[test]
+fn renaming_a_session_does_not_reorder_visible_session_identities() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    let before = ui
+        .visible(&snapshot)
+        .into_iter()
+        .map(|session| (session.provider, session.id))
+        .collect::<Vec<_>>();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "ZZZ title".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let after = ui
+        .visible(&snapshot)
+        .into_iter()
+        .map(|session| (session.provider, session.id))
+        .collect::<Vec<_>>();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn existing_recent_signal_resolves_the_current_session_title() {
+    let snapshot = production_snapshot();
+    let signal_count = snapshot.recent_signals.len();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 120, 30);
+    let context_signal = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("Ctx +Critical"))
+        .expect("existing Context Signal should render");
+    assert!(context_signal.contains("CL Auth"));
+    assert_eq!(snapshot.recent_signals.len(), signal_count);
+}
+
+#[test]
+fn worktree_signal_members_resolve_current_provider_qualified_titles() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 160, 30);
+    let before = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("Before 1:"))
+        .expect("Worktree Signal before-members should render");
+    let after = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("After 2:"))
+        .expect("Worktree Signal after-members should render");
+    assert!(before.contains("CL:Auth"));
+    assert!(after.contains("CL:Auth"));
+    assert!(after.contains("CX:x-shared"));
+}
+
+#[test]
+fn worktree_signal_disambiguates_duplicate_member_aliases() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Pair".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Pair".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 160, 30);
+    let after = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("After 2:"))
+        .expect("Worktree Signal after-members should render");
+    assert!(after.contains("CL:Pair · critical"));
+    assert!(after.contains("CX:Pair · x-shared"));
+}
+
+#[test]
+fn session_signals_disambiguate_duplicate_visible_aliases() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Pair".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Pair".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 160, 30);
+    let critical = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("Ctx +Critical"))
+        .expect("Critical Context Signal should render");
+    let warning = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("Ctx +Warning"))
+        .expect("Warning Context Signal should render");
+    assert!(critical.contains("CL Pair · critical"));
+    assert!(warning.contains("CL Pair · -warning"));
+}
+
+#[test]
+fn now_keeps_duplicate_aliases_distinguishable_in_its_narrow_title_column() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Pair".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Pair".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 120, 30);
+    let critical = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("CRITICAL") && line.contains("Busy"))
+        .expect("critical NOW row should render");
+    let warning = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("WARNING") && line.contains("Busy"))
+        .expect("warning NOW row should render");
+    assert!(critical.contains("... · critical"));
+    assert!(warning.contains("... · -warning"));
 }
 
 #[test]
@@ -802,6 +1169,51 @@ fn full_claude_provider_page_matches_the_reviewed_production_fixture() {
 }
 
 #[test]
+fn provider_inventory_names_the_column_title_and_renders_the_saved_alias() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth fix".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('2'));
+
+    let rendered = render(&snapshot, &ui, 120, 30);
+    let header = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("State") && line.contains("Title"))
+        .expect("Provider inventory should label its Session-name column Title");
+    assert!(rendered.text.contains("Auth fix"));
+    assert!(!header.contains("Session"));
+}
+
+#[test]
+fn provider_inventory_disambiguates_duplicate_aliases_with_short_session_ids() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Pair".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Pair".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('2'));
+
+    let rendered = render(&snapshot, &ui, 120, 30);
+    assert!(rendered.text.contains("Pair · critical"));
+    assert!(rendered.text.contains("Pair · -warning"));
+}
+
+#[test]
 fn compact_expanded_claude_provider_page_matches_the_reviewed_production_fixture() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
@@ -814,7 +1226,7 @@ fn compact_expanded_claude_provider_page_matches_the_reviewed_production_fixture
 
     assert_eq!((rendered.width, rendered.height), (80, 24));
     assert!(rendered.text.contains("- OLDER SESSIONS (1)  Collapse"));
-    assert!(rendered.text.contains("claude-older"));
+    assert!(rendered.text.contains("de-older"));
     assert!(!rendered.text.contains("qfixture"));
     assert!(rendered.text.contains("Estimated using API rates"));
     assert_fixture(
@@ -831,16 +1243,73 @@ fn compact_codex_provider_page_matches_the_reviewed_production_fixture() {
     let rendered = render(&snapshot, &ui, 80, 24);
 
     assert_eq!((rendered.width, rendered.height), (80, 24));
-    for session_id in ["codex-shared", "codex-idle", "codex-exited"] {
-        assert!(rendered.text.contains(session_id));
+    for title in ["x-shared", "dex-idle", "x-exited"] {
+        assert!(rendered.text.contains(title));
     }
-    for claude_session in ["claude-critical", "claude-warning", "claude-healthy"] {
-        assert!(!rendered.text.contains(claude_session));
+    for claude_title in ["critical", "-warning", "-healthy"] {
+        assert!(!rendered.text.contains(claude_title));
     }
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/codex_80x24.txt"),
     );
+}
+
+#[test]
+fn compact_provider_inventory_renders_titles_in_a_stable_column() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth fix".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('2'));
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let header = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("State"))
+        .expect("compact Provider header should render");
+    assert!(header.contains("Title"));
+    assert!(!header.contains("Session"));
+    assert!(rendered.text.contains("Auth fix"));
+}
+
+#[test]
+fn unicode_alias_does_not_move_adjacent_compact_provider_columns() {
+    let snapshot = production_snapshot();
+    let mut baseline_ui = Ui::default();
+    press(&mut baseline_ui, &snapshot, KeyCode::Char('2'));
+    let baseline = render(&snapshot, &baseline_ui, 80, 24);
+    let baseline_row = baseline
+        .text
+        .lines()
+        .find(|line| line.contains("180.0k"))
+        .expect("critical compact Provider row should render");
+    let baseline_context_column = baseline_row[..baseline_row.find("180.0k").unwrap()]
+        .chars()
+        .count();
+
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "修复认证流程".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('2'));
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let aliased_row = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("180.0k"))
+        .expect("aliased compact Provider row should render");
+    let aliased_context_column = aliased_row[..aliased_row.find("180.0k").unwrap()]
+        .chars()
+        .count();
+
+    assert_eq!(aliased_context_column, baseline_context_column);
 }
 
 #[test]
@@ -871,6 +1340,58 @@ fn compact_open_detail_matches_the_reviewed_production_fixture() {
         &rendered,
         include_str!("fixtures/production-renders/detail_open_80x24.txt"),
     );
+}
+
+#[test]
+fn session_detail_separates_the_title_from_the_complete_session_id() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth fix".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let title = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("Title"))
+        .expect("Detail should display Title");
+    let identity = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("Session ID"))
+        .expect("Detail should display the complete native Session ID");
+    assert!(title.contains("Auth fix"));
+    assert!(identity.contains("claude-critical"));
+}
+
+#[test]
+fn wide_session_detail_separates_the_title_from_the_complete_session_id() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth fix".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 160, 30);
+    let title = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("Title"))
+        .expect("wide Detail should display Title");
+    let identity = rendered
+        .text
+        .lines()
+        .find(|line| line.contains("Session ID"))
+        .expect("wide Detail should display the complete native Session ID");
+    assert!(title.contains("Auth fix"));
+    assert!(identity.contains("claude-critical"));
 }
 
 #[test]
@@ -957,6 +1478,340 @@ fn full_open_detail_matches_the_reviewed_production_fixture() {
         &rendered,
         include_str!("fixtures/production-renders/detail_open_120x30.txt"),
     );
+}
+
+#[test]
+fn edit_title_opens_for_the_selected_session_with_identity_evidence() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    let rendered = render(&snapshot, &ui, 80, 24);
+
+    for required in [
+        "Edit title",
+        "Session  Claude Code · critical",
+        "Enter Save",
+        "Esc Cancel",
+    ] {
+        assert!(
+            rendered.text.contains(required),
+            "Edit title should contain {required:?}:\n{}",
+            rendered.visible_text()
+        );
+    }
+}
+
+#[test]
+fn empty_title_editor_places_the_cursor_after_the_field_label() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let label = rendered.position_of("Title    ");
+
+    assert_eq!(
+        rendered.cursor_position,
+        Position::new(label.x + 9, label.y)
+    );
+    assert!(rendered.cursor_visible);
+}
+
+#[test]
+fn title_editor_keeps_the_cursor_after_ascii_input() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth fix".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let label = rendered.position_of("Title    ");
+
+    assert_eq!(
+        rendered.cursor_position,
+        Position::new(label.x + 17, label.y)
+    );
+}
+
+#[test]
+fn title_editor_places_the_cursor_after_double_width_unicode_input() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "登录".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let label = rendered.position_of("Title    ");
+
+    assert_eq!(
+        rendered.cursor_position,
+        Position::new(label.x + 13, label.y)
+    );
+}
+
+#[test]
+fn backspace_moves_the_title_editor_cursor_to_the_new_input_end() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "登录".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Backspace);
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let label = rendered.position_of("Title    ");
+
+    assert_eq!(
+        rendered.cursor_position,
+        Position::new(label.x + 11, label.y)
+    );
+}
+
+#[test]
+fn long_title_input_keeps_the_cursor_inside_the_editor() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in format!("{}TAIL_END", "x".repeat(72)).chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let label = rendered.position_of("Title    ");
+    let row = &rendered.buffer.content()[label.y as usize * rendered.width as usize
+        ..(label.y as usize + 1) * rendered.width as usize];
+    let editor_right = row
+        .iter()
+        .enumerate()
+        .skip(label.x as usize + 9)
+        .find(|(_, cell)| cell.symbol() == "│")
+        .map(|(x, _)| x as u16)
+        .expect("Edit title should retain its right border");
+
+    assert_eq!(
+        rendered.cursor_position,
+        Position::new(editor_right - 1, label.y)
+    );
+    let tail = rendered.position_of("TAIL_END");
+    assert_eq!(tail.y, label.y);
+    assert_eq!(tail.x + 8, rendered.cursor_position.x);
+}
+
+#[test]
+fn cancelling_title_editing_hides_the_terminal_cursor() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    let mut terminal = Terminal::new(CursorBackend::new(80, 24)).unwrap();
+
+    terminal.draw(|frame| draw(frame, &snapshot, &ui)).unwrap();
+    assert!(terminal.backend().cursor_visible);
+
+    press(&mut ui, &snapshot, KeyCode::Esc);
+    terminal.draw(|frame| draw(frame, &snapshot, &ui)).unwrap();
+    assert!(!terminal.backend().cursor_visible);
+}
+
+#[test]
+fn edit_title_save_survives_reloading_the_ui() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-edit-title-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let snapshot = production_snapshot();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth fix".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    assert!(!render(&snapshot, &ui, 80, 24).cursor_visible);
+
+    let mut reloaded = Ui::load(&profile_path, None).unwrap();
+    press(&mut reloaded, &snapshot, KeyCode::Char('e'));
+    let rendered = render(&snapshot, &reloaded, 80, 24);
+    assert!(rendered.text.contains("Title    Auth fix"));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn deleting_an_existing_alias_and_confirming_clears_the_title() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-clear-title-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let snapshot = production_snapshot();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Auth fix".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for _ in "Auth fix".chars() {
+        press(&mut ui, &snapshot, KeyCode::Backspace);
+    }
+    let cleared = render(&snapshot, &ui, 80, 24);
+    assert!(cleared.text.contains("Enter Clear title"));
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    assert!(!render(&snapshot, &ui, 80, 24).cursor_visible);
+
+    let mut reloaded = Ui::load(&profile_path, None).unwrap();
+    press(&mut reloaded, &snapshot, KeyCode::Char('e'));
+    let rendered = render(&snapshot, &reloaded, 80, 24);
+    assert!(rendered.text.contains("Title    "));
+    assert!(!rendered.text.contains("Title    Auth fix"));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn malformed_label_store_disables_editing_until_rescan_reloads_it() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-label-recovery-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    let label_path = directory.join("session-labels.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    std::fs::write(&label_path, b"broken").unwrap();
+    let snapshot = production_snapshot();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    let degraded = render(&snapshot, &ui, 160, 30);
+    assert!(!degraded.text.contains("Edit title"));
+    assert!(degraded.text.contains("Label Store error"));
+    assert!(degraded.text.contains("session-labels.json"));
+
+    std::fs::remove_file(&label_path).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Char('r'));
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("Edit title"));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn failed_title_save_preserves_the_editor_input_for_a_successful_retry() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-title-retry-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    let label_path = directory.join("session-labels.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let snapshot = production_snapshot();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Retry title".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    std::fs::write(&label_path, b"broken during edit").unwrap();
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let failed = render(&snapshot, &ui, 120, 30);
+    assert!(failed.text.contains("Edit title"));
+    assert!(failed.text.contains("Title    Retry title"));
+
+    std::fs::remove_file(&label_path).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Title    Retry title"));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn title_editor_rejects_81_characters_and_accepts_80() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for _ in 0..81 {
+        press(&mut ui, &snapshot, KeyCode::Char('a'));
+    }
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let invalid = render(&snapshot, &ui, 120, 30);
+    assert!(invalid.text.contains("Enter Save | Esc Cancel"));
+    assert!(invalid
+        .text
+        .contains("Title must be 80 characters or fewer"));
+
+    press(&mut ui, &snapshot, KeyCode::Backspace);
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let saved = render(&snapshot, &ui, 120, 30);
+    assert!(!saved.text.contains("Enter Save | Esc Cancel"));
+    assert!(saved.text.contains("Title saved"));
+}
+
+#[test]
+fn escape_cancels_title_editing_without_persisting_or_prefilling_the_draft() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Cancelled draft".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Esc);
+
+    let cancelled = render(&snapshot, &ui, 120, 30);
+    assert!(!cancelled.text.contains("Cancelled draft"));
+    assert!(!cancelled.cursor_visible);
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    let reopened = render(&snapshot, &ui, 120, 30);
+    assert!(reopened.text.contains("Enter Save | Esc Cancel"));
+    assert!(!reopened.text.contains("Cancelled draft"));
+    assert!(!reopened.text.contains("Title    critical"));
+}
+
+#[test]
+fn edit_title_shortcut_is_shown_only_for_a_concrete_session_target() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("e Edit title"));
+
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    let signals = render(&snapshot, &ui, 120, 30);
+    assert!(!signals.text.contains("e Edit title"));
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    assert!(!render(&snapshot, &ui, 120, 30).text.contains("Edit title"));
+
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("e Edit title"));
 }
 
 #[test]
@@ -1340,6 +2195,29 @@ fn sessions_guide_explains_providers_lifecycle_and_current_context() {
 }
 
 #[test]
+fn sessions_guide_explains_titles_aliases_fallbacks_and_editing() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('2'));
+    press(&mut ui, &snapshot, KeyCode::Char('?'));
+    let rendered = render(&snapshot, &ui, 120, 30);
+
+    for required in [
+        "Session Titles",
+        "Title  The name SessionMesh displays for a Session.",
+        "Alias  A local user-authored Title.",
+        "Short Session ID  The last eight characters",
+        "Duplicate Titles include their Short Session ID.",
+        "e Edit title  Set or clear the selected Session's Alias.",
+    ] {
+        assert!(
+            rendered.text.contains(required),
+            "Sessions Guide should contain {required:?}"
+        );
+    }
+}
+
+#[test]
 fn theme_guide_explains_the_active_theme_built_ins_and_process_override() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
@@ -1503,31 +2381,31 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         assert_ne!(rendered.style_at("WARNING"), rendered.style_at("IDLE"));
         assert_ne!(rendered.style_at("IDLE"), rendered.style_at("BUSY"));
 
-        let warning = rendered.style_at_in_row("claude-w", "WARNING");
-        let busy = rendered.style_at_in_row("claude-w", "Busy");
-        let idle = rendered.style_at_in_row("codex-id", "Idle");
-        let selected_cursor = rendered.style_at_in_row("claude-c", ">");
-        let selected_critical = rendered.style_at_in_row("claude-c", "CRITICAL");
-        let selected_busy = rendered.style_at_in_row("claude-c", "Busy");
-        let critical_bar = rendered.styles_at_in_row("claude-c", "[##############-]");
+        let warning = rendered.style_at_in_row("-warning", "WARNING");
+        let busy = rendered.style_at_in_row("-warning", "Busy");
+        let idle = rendered.style_at_in_row("dex-idle", "Idle");
+        let selected_cursor = rendered.style_at_in_row("critical", ">");
+        let selected_critical = rendered.style_at_in_row("critical", "CRITICAL");
+        let selected_busy = rendered.style_at_in_row("critical", "Busy");
+        let critical_bar = rendered.styles_at_in_row("critical", "[###########-]");
         let critical_context = critical_bar[1];
-        let unfilled_context = critical_bar[15];
+        let unfilled_context = critical_bar[12];
         let ratio = contrast_ratio(critical_context);
         assert!(
             ratio >= 4.5,
             "Theme {expected_theme} rendered Critical Current Context at contrast {ratio:.2}"
         );
-        assert!(critical_bar[1..15]
+        assert!(critical_bar[1..12]
             .iter()
             .all(|style| style.fg == critical_context.fg));
         assert_ne!(critical_context.fg, unfilled_context.fg);
         assert_eq!(
-            rendered.style_at_in_row("claude-c", "90%").fg,
+            rendered.style_at_in_row("critical", "90%").fg,
             critical_context.fg
         );
         assert_eq!(
-            rendered.style_at_in_row("claude-w", "75%").fg,
-            rendered.styles_at_in_row("claude-w", "[###########----]")[1].fg
+            rendered.style_at_in_row("-warning", "75%").fg,
+            rendered.styles_at_in_row("-warning", "[#########---]")[1].fg
         );
         for (role, style) in [("Busy state", busy), ("Idle state", idle)] {
             let ratio = contrast_ratio(style);

@@ -7,7 +7,7 @@ use sessionmesh::collector::build_sessions;
 use sessionmesh::config::Config;
 use sessionmesh::domain::{ContextState, ProjectIdentity, Provider, Usage};
 use sessionmesh::index::{Fingerprint, Index};
-use sessionmesh::pricing::RateCard;
+use sessionmesh::models::ModelCatalog;
 use sessionmesh::project::resolve;
 use sessionmesh::providers::ParsedSession;
 
@@ -243,7 +243,7 @@ fn snapshot_carries_resolved_identity_and_disambiguates_distinct_projects() {
         extra_dirs: vec![],
     };
 
-    let sessions = build_sessions(&cfg, &index, &RateCard::load(None));
+    let sessions = build_sessions(&cfg, &index, &ModelCatalog::load(None));
     let first_a = sessions
         .iter()
         .find(|session| session.id == "first-a")

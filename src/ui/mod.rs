@@ -14,9 +14,10 @@ use crate::config::{CRIT_PCT, WARN_PCT};
 use crate::domain::{
     ModelUsage, Project, ProjectIdentity, Provider, Session, SessionState, Usage, Worktree,
 };
+use crate::session_labels::SessionLabels;
 use crate::signals::{ContextAlertLevel, RecentSignal, RecentSignalKind};
 use chrono::Local;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -27,11 +28,12 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::Cell as StateCell;
 use std::cmp::Reverse;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use theme::{Theme, ThemeName};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const MIN_TERMINAL_WIDTH: u16 = 80;
 const MIN_TERMINAL_HEIGHT: u16 = 24;
@@ -58,6 +60,13 @@ struct DetailView {
     scroll: usize,
     origin_signal: Option<RecentSignal>,
     copy_menu_selected: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TitleEditor {
+    session: SessionIdentity,
+    input: String,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +237,8 @@ pub struct Ui {
     guide_scroll: usize,
     // Wrapping depends on the rendered viewport, so draw records the latest usable limit.
     guide_max_scroll: StateCell<usize>,
+    edit_title: Option<TitleEditor>,
+    labels: SessionLabels,
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
     theme: ThemeName,
@@ -264,6 +275,8 @@ impl Default for Ui {
             guide_pane: GuidePane::Categories,
             guide_scroll: 0,
             guide_max_scroll: StateCell::new(UNMEASURED_GUIDE_MAX_SCROLL),
+            edit_title: None,
+            labels: SessionLabels::default(),
             profile_path: None,
             profile: ProfilePreferences::default(),
             theme: ThemeName::default(),
@@ -295,8 +308,13 @@ impl Ui {
                     profile.theme
                 }
             });
+        let label_path = profile_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("session-labels.json");
         Ok(Self {
             guide_open: !profile.help_seen,
+            labels: SessionLabels::load(label_path),
             profile_path: Some(profile_path),
             profile,
             theme,
@@ -328,6 +346,10 @@ impl Ui {
         snap: &Snapshot,
     ) -> std::io::Result<UiAction> {
         self.clamp_selections(snap);
+        if self.edit_title.is_some() {
+            self.handle_title_editor_key(key);
+            return Ok(UiAction::None);
+        }
         if key.code == crossterm::event::KeyCode::Char('q')
             || (key.code == crossterm::event::KeyCode::Char('c')
                 && key
@@ -341,7 +363,10 @@ impl Ui {
             return Ok(UiAction::None);
         }
         match key.code {
-            crossterm::event::KeyCode::Char('r') => return Ok(UiAction::Rescan),
+            crossterm::event::KeyCode::Char('r') => {
+                self.labels.reload();
+                return Ok(UiAction::Rescan);
+            }
             crossterm::event::KeyCode::Char('1') => self.set_tab(Tab::All),
             crossterm::event::KeyCode::Char('2') => self.set_tab(Tab::Claude),
             crossterm::event::KeyCode::Char('3') => self.set_tab(Tab::Codex),
@@ -350,6 +375,9 @@ impl Ui {
                 self.guide_pane = GuidePane::Categories;
                 self.reset_guide_scroll();
                 self.guide_open = true;
+            }
+            crossterm::event::KeyCode::Char('e') if self.labels.is_editable() => {
+                self.open_title_editor(snap);
             }
             crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::BackTab
                 if self.detail.is_none() && self.tab == Tab::All =>
@@ -663,6 +691,104 @@ impl Ui {
         })
     }
 
+    fn selected_session<'a>(&self, snap: &'a Snapshot) -> Option<&'a Session> {
+        if self.detail.is_some() {
+            return self.detail_session(snap);
+        }
+        if self.tab == Tab::All {
+            return (self.all_region == AllRegion::Now)
+                .then(|| now_sessions(snap).get(self.selected).copied())
+                .flatten();
+        }
+        match self.provider_targets(snap).into_iter().nth(self.selected) {
+            Some(ProviderTarget::Session(session)) => Some(session),
+            _ => None,
+        }
+    }
+
+    fn open_title_editor(&mut self, snap: &Snapshot) {
+        let Some(session) = self.selected_session(snap) else {
+            return;
+        };
+        let identity = SessionIdentity {
+            provider: session.provider,
+            native_id: session.id.clone(),
+        };
+        let input = self
+            .labels
+            .alias(session.provider, &session.id)
+            .unwrap_or("")
+            .to_string();
+        self.edit_title = Some(TitleEditor {
+            session: identity,
+            input,
+            error: None,
+        });
+    }
+
+    fn handle_title_editor_key(&mut self, key: crossterm::event::KeyEvent) {
+        match key.code {
+            crossterm::event::KeyCode::Esc => self.edit_title = None,
+            crossterm::event::KeyCode::Backspace => {
+                if let Some(editor) = self.edit_title.as_mut() {
+                    editor.input.pop();
+                    editor.error = None;
+                }
+            }
+            crossterm::event::KeyCode::Char(character)
+                if !character.is_control()
+                    && !key.modifiers.intersects(
+                        crossterm::event::KeyModifiers::CONTROL
+                            | crossterm::event::KeyModifiers::ALT,
+                    ) =>
+            {
+                if let Some(editor) = self.edit_title.as_mut() {
+                    editor.input.push(character);
+                    editor.error = None;
+                }
+            }
+            crossterm::event::KeyCode::Enter => {
+                let Some(editor) = self.edit_title.as_ref() else {
+                    return;
+                };
+                let provider = editor.session.provider;
+                let native_id = editor.session.native_id.clone();
+                let alias = editor.input.trim().to_string();
+                let clearing =
+                    alias.is_empty() && self.labels.alias(provider, &native_id).is_some();
+                let result = if clearing {
+                    self.labels.clear_title(provider, &native_id)
+                } else if alias.is_empty() {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Title cannot be empty",
+                    ))
+                } else {
+                    self.labels.set_alias(provider, &native_id, &alias)
+                };
+                match result {
+                    Ok(()) => {
+                        self.edit_title = None;
+                        self.status_notice = Some((
+                            if clearing {
+                                "Title cleared".into()
+                            } else {
+                                "Title saved".into()
+                            },
+                            Instant::now() + Duration::from_secs(2),
+                        ));
+                    }
+                    Err(error) => {
+                        if let Some(editor) = self.edit_title.as_mut() {
+                            editor.error = Some(error.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn provider_targets<'a>(&self, snap: &'a Snapshot) -> Vec<ProviderTarget<'a>> {
         self.provider_page_rows(snap)
             .into_iter()
@@ -817,6 +943,10 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     if ui.guide_open {
         draw_guide(f, ui);
     }
+
+    if ui.edit_title.is_some() {
+        draw_title_editor(f, ui);
+    }
 }
 
 fn draw_terminal_too_small(f: &mut Frame, theme: Theme) {
@@ -909,6 +1039,78 @@ fn draw_copy_menu(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
             ),
         area,
     );
+}
+
+fn draw_title_editor(f: &mut Frame, ui: &Ui) {
+    const TITLE_LABEL: &str = "Title    ";
+
+    let Some(editor) = &ui.edit_title else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let area = centered_rect(76, 32, f.area());
+    let label_width = UnicodeWidthStr::width(TITLE_LABEL);
+    let input_width = area.width.saturating_sub(3 + label_width as u16) as usize;
+    let visible_input = visible_input_tail(&editor.input, input_width);
+    let visible_input_width = UnicodeWidthStr::width(visible_input.as_str()) as u16;
+    let short_id = SessionLabels::short_id(&editor.session.native_id);
+    let clears_existing_alias = editor.input.trim().is_empty()
+        && ui
+            .labels
+            .alias(editor.session.provider, &editor.session.native_id)
+            .is_some();
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Session  ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{} · {short_id}", editor.session.provider.label()),
+                Style::default().fg(theme.foreground),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(TITLE_LABEL, Style::default().fg(theme.muted)),
+            Span::styled(visible_input, Style::default().fg(theme.foreground)),
+        ]),
+    ];
+    if let Some(error) = &editor.error {
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(theme.critical),
+        )));
+    }
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(theme.foreground).bg(theme.background))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(Span::styled(
+                        " Edit title ",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .title_bottom(
+                        Line::from(Span::styled(
+                            if clears_existing_alias {
+                                " Enter Clear title | Esc Cancel "
+                            } else {
+                                " Enter Save | Esc Cancel "
+                            },
+                            Style::default().fg(theme.muted),
+                        ))
+                        .right_aligned(),
+                    ),
+            ),
+        area,
+    );
+    f.set_cursor_position(Position::new(
+        area.x + 1 + label_width as u16 + visible_input_width,
+        area.y + 3,
+    ));
 }
 
 fn draw_guide(f: &mut Frame, ui: &Ui) {
@@ -1055,6 +1257,13 @@ fn guide_content(
         ],
         GuideCategory::Sessions => vec![
             heading(category.label()),
+            heading("Session Titles"),
+            Line::from("Title  The name SessionMesh displays for a Session."),
+            Line::from("Alias  A local user-authored Title."),
+            Line::from("It changes only SessionMesh; Provider data is unchanged."),
+            Line::from("Short Session ID  The last eight characters used when no Alias exists."),
+            Line::from("Duplicate Titles include their Short Session ID."),
+            Line::from("e Edit title  Set or clear the selected Session's Alias."),
             heading("Providers"),
             Line::from("CL  Claude Code"),
             Line::from("CX  Codex CLI"),
@@ -1263,6 +1472,21 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     };
     let attention = current_attention(snap);
     let now = group_open_sessions(&snap.sessions, &attention);
+    let visible_sessions = now
+        .iter()
+        .flat_map(|project| {
+            project
+                .worktrees
+                .iter()
+                .flat_map(|worktree| worktree.sessions.iter().copied())
+                .chain(project.direct_sessions.iter().copied())
+        })
+        .collect::<Vec<_>>();
+    let visible_identities = visible_sessions
+        .iter()
+        .map(|session| (session.provider, session.id.as_str()))
+        .collect::<Vec<_>>();
+    let mut titles = ui.labels.titles_for(&visible_identities).into_iter();
     let now_ms = snapshot_now_ms(snap);
     let open_project_count = now
         .iter()
@@ -1280,7 +1504,7 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         })
         .sum::<usize>();
     let content_width = now_area.width.saturating_sub(2) as usize;
-    let context_bar_width = now_context_bar_width(area.width, content_width);
+    let column_widths = now_column_widths(area.width, content_width);
     let mut lines = Vec::new();
     let mut selectable = 0usize;
 
@@ -1306,12 +1530,13 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 )));
             }
             for session in worktree.sessions {
+                let title = titles.next().expect("every NOW Session has a Title");
                 lines.push(now_session_line(
                     session,
+                    &title,
                     &attention,
                     now_ms,
-                    content_width,
-                    context_bar_width,
+                    column_widths,
                     ui.all_region == AllRegion::Now && selectable == ui.selected,
                     theme,
                 ));
@@ -1319,12 +1544,13 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
             }
         }
         for session in project.direct_sessions {
+            let title = titles.next().expect("every NOW Session has a Title");
             lines.push(now_session_line(
                 session,
+                &title,
                 &attention,
                 now_ms,
-                content_width,
-                context_bar_width,
+                column_widths,
                 ui.all_region == AllRegion::Now && selectable == ui.selected,
                 theme,
             ));
@@ -1388,6 +1614,7 @@ fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], now_
     let theme = ui.theme.palette();
     let width = area.width.saturating_sub(2) as usize;
     let height = area.height.saturating_sub(2) as usize;
+    let titles = recent_signal_titles(signals, &ui.labels);
     let lines = if signals.is_empty() {
         vec![Line::from(Span::styled(
             "No recent Signals.",
@@ -1397,7 +1624,7 @@ fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], now_
         let mut lines = Vec::new();
         let compact = signals
             .iter()
-            .map(|signal| recent_signal_lines(signal, width).len())
+            .map(|signal| recent_signal_lines(signal, width, &titles).len())
             .sum::<usize>()
             > height;
         for (index, signal) in signals.iter().enumerate() {
@@ -1408,7 +1635,7 @@ fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], now_
                 Style::default().fg(theme.foreground)
             };
             let max_signal_lines = if compact { 1 } else { usize::MAX };
-            for text in recent_signal_lines(signal, width)
+            for text in recent_signal_lines(signal, width, &titles)
                 .into_iter()
                 .take(max_signal_lines)
             {
@@ -1461,7 +1688,55 @@ fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], now_
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn recent_signal_lines(signal: &RecentSignal, width: usize) -> Vec<String> {
+type VisibleTitles = HashMap<Provider, HashMap<String, String>>;
+
+fn recent_signal_titles(signals: &[RecentSignal], labels: &SessionLabels) -> VisibleTitles {
+    let mut identities = Vec::<(Provider, String)>::new();
+    let mut seen = HashSet::new();
+    let mut add = |provider: Provider, native_id: &str| {
+        let identity = (provider, native_id.to_string());
+        if seen.insert(identity.clone()) {
+            identities.push(identity);
+        }
+    };
+    for signal in signals {
+        match signal {
+            RecentSignal::Session {
+                provider,
+                session_id,
+                ..
+            } => add(*provider, session_id),
+            RecentSignal::Worktree { before, after, .. } => {
+                for identity in before.iter().chain(after) {
+                    add(identity.provider, &identity.native_id);
+                }
+            }
+        }
+    }
+    let identity_refs = identities
+        .iter()
+        .map(|(provider, native_id)| (*provider, native_id.as_str()))
+        .collect::<Vec<_>>();
+    let resolved_titles = labels.titles_for(&identity_refs);
+    let mut visible = VisibleTitles::new();
+    for ((provider, native_id), title) in identities.into_iter().zip(resolved_titles) {
+        visible
+            .entry(provider)
+            .or_default()
+            .insert(native_id, title);
+    }
+    visible
+}
+
+fn visible_title<'a>(titles: &'a VisibleTitles, provider: Provider, native_id: &str) -> &'a str {
+    titles
+        .get(&provider)
+        .and_then(|provider_titles| provider_titles.get(native_id))
+        .map(String::as_str)
+        .expect("every visible Signal Session has a Title")
+}
+
+fn recent_signal_lines(signal: &RecentSignal, width: usize, titles: &VisibleTitles) -> Vec<String> {
     let RecentSignal::Session {
         provider,
         session_id,
@@ -1491,11 +1766,15 @@ fn recent_signal_lines(signal: &RecentSignal, width: usize) -> Vec<String> {
                 shorten_start(&worktree_root.display().to_string(), root_width)
             ),
             shorten_end(
-                &format!("Before {}: {}", before.len(), signal_members(before)),
+                &format!(
+                    "Before {}: {}",
+                    before.len(),
+                    signal_members(before, titles)
+                ),
                 width,
             ),
             shorten_end(
-                &format!("After {}: {}", after.len(), signal_members(after)),
+                &format!("After {}: {}", after.len(), signal_members(after, titles)),
                 width,
             ),
         ];
@@ -1545,13 +1824,14 @@ fn recent_signal_lines(signal: &RecentSignal, width: usize) -> Vec<String> {
             )
         }
     };
+    let title = visible_title(titles, *provider, session_id);
     let provider = match provider {
         Provider::ClaudeCode => "CL",
         Provider::CodexCli => "CX",
     };
     let fixed_width = provider.chars().count() + evidence.chars().count() + 2;
     let session_width = width.saturating_sub(fixed_width);
-    let session = shorten_start(session_id, session_width);
+    let session = shorten_end(&title, session_width);
     let text = if session.is_empty() {
         format!("{provider} {evidence}")
     } else {
@@ -1560,7 +1840,7 @@ fn recent_signal_lines(signal: &RecentSignal, width: usize) -> Vec<String> {
     vec![shorten_start(&text, width)]
 }
 
-fn signal_members(members: &[crate::attention::SessionIdentity]) -> String {
+fn signal_members(members: &[crate::attention::SessionIdentity], titles: &VisibleTitles) -> String {
     members
         .iter()
         .map(|identity| {
@@ -1568,7 +1848,8 @@ fn signal_members(members: &[crate::attention::SessionIdentity]) -> String {
                 Provider::ClaudeCode => "CL",
                 Provider::CodexCli => "CX",
             };
-            format!("{provider}:{}", identity.native_id)
+            let title = visible_title(titles, identity.provider, &identity.native_id);
+            format!("{provider}:{title}")
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -1740,10 +2021,10 @@ fn compare_optional_sessions(
 
 fn now_session_line(
     session: &Session,
+    title: &str,
     attention: &AttentionSnapshot,
     now_ms: i64,
-    width: usize,
-    context_bar_width: usize,
+    column_widths: NowColumnWidths,
     selected: bool,
     theme: Theme,
 ) -> Line<'static> {
@@ -1757,14 +2038,11 @@ fn now_session_line(
         Provider::CodexCli => "Codex",
     };
     let attention_rank = attention.rank_for(session);
-    let model_width = width
-        .saturating_sub(NON_MODEL_WIDTH_WITHOUT_CONTEXT_CELLS + context_bar_width)
-        .max(8);
     let model = shorten_start(
         session.latest_model.as_deref().unwrap_or("N/A"),
-        model_width,
+        column_widths.model,
     );
-    let session_id = session.id.chars().take(8).collect::<String>();
+    let title = fit_title(title, column_widths.title, true);
     let attention_label = match attention_rank {
         AttentionRank::CriticalContext => "CRITICAL",
         AttentionRank::SharedWorktreeRisk => "SHARED",
@@ -1814,11 +2092,18 @@ fn now_session_line(
         Span::styled(format!("{attention_label:<8} "), attention_style),
         Span::styled(format!("{state:<4} "), lifecycle_style),
         Span::styled(format!("{provider:<6} "), base_style),
-        Span::styled(format!("{session_id:<8} "), base_style),
+        Span::styled(format!("{title} "), base_style),
     ];
-    spans.extend(now_context_evidence(session, context_bar_width, theme));
+    spans.extend(now_context_evidence(
+        session,
+        column_widths.context_bar,
+        theme,
+    ));
     spans.push(Span::styled(
-        format!("{model:<model_width$} {elapsed:<8}"),
+        format!(
+            "{model:<model_width$} {elapsed:<8}",
+            model_width = column_widths.model
+        ),
         base_style,
     ));
     Line::from(spans)
@@ -1924,6 +2209,59 @@ fn shorten(value: &str, width: usize, keep_end: bool) -> String {
     }
 }
 
+fn fit_title(value: &str, width: usize, keep_end: bool) -> String {
+    let value_width = UnicodeWidthStr::width(value);
+    if value_width <= width {
+        return format!("{value}{}", " ".repeat(width - value_width));
+    }
+    if width <= 3 {
+        return ".".repeat(width);
+    }
+
+    let available = width - 3;
+    let mut kept = Vec::new();
+    let mut kept_width = 0;
+    let characters = if keep_end {
+        value.chars().rev().collect::<Vec<_>>()
+    } else {
+        value.chars().collect::<Vec<_>>()
+    };
+    for character in characters {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if kept_width + character_width > available {
+            break;
+        }
+        kept.push(character);
+        kept_width += character_width;
+    }
+    if keep_end {
+        kept.reverse();
+    }
+    let kept = kept.into_iter().collect::<String>();
+    let fitted = if keep_end {
+        format!("...{kept}")
+    } else {
+        format!("{kept}...")
+    };
+    let fitted_width = UnicodeWidthStr::width(fitted.as_str());
+    format!("{fitted}{}", " ".repeat(width.saturating_sub(fitted_width)))
+}
+
+fn visible_input_tail(value: &str, width: usize) -> String {
+    let mut visible = Vec::new();
+    let mut visible_width = 0;
+    for character in value.chars().rev() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if visible_width + character_width > width {
+            break;
+        }
+        visible.push(character);
+        visible_width += character_width;
+    }
+    visible.reverse();
+    visible.into_iter().collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CurrentContextRole {
     Normal,
@@ -1935,8 +2273,42 @@ const MIN_CONTEXT_BAR_WIDTH: usize = 12;
 const MAX_CONTEXT_BAR_WIDTH: usize = 20;
 const COMPACT_TERMINAL_WIDTH: u16 = 80;
 const COLUMNS_PER_CONTEXT_CELL: u16 = 5;
+const MIN_NOW_TITLE_WIDTH: usize = 14;
+const MAX_NOW_TITLE_WIDTH: usize = 20;
+const MIN_NOW_MODEL_WIDTH: usize = 11;
 const PREFERRED_MODEL_WIDTH: usize = 14;
-const NON_MODEL_WIDTH_WITHOUT_CONTEXT_CELLS: usize = 49;
+const NOW_FIXED_WIDTH_WITHOUT_FLEXIBLE_COLUMNS: usize = 41;
+const COMPACT_NOW_CONTENT_WIDTH: usize = NOW_FIXED_WIDTH_WITHOUT_FLEXIBLE_COLUMNS
+    + MIN_NOW_TITLE_WIDTH
+    + MIN_CONTEXT_BAR_WIDTH
+    + MIN_NOW_MODEL_WIDTH;
+
+#[derive(Debug, Clone, Copy)]
+struct NowColumnWidths {
+    title: usize,
+    context_bar: usize,
+    model: usize,
+}
+
+fn now_column_widths(terminal_width: u16, content_width: usize) -> NowColumnWidths {
+    let title = now_title_width(content_width);
+    let context_bar = now_context_bar_width(terminal_width, content_width, title);
+    let model = content_width
+        .saturating_sub(NOW_FIXED_WIDTH_WITHOUT_FLEXIBLE_COLUMNS + title + context_bar)
+        .max(MIN_NOW_MODEL_WIDTH);
+    NowColumnWidths {
+        title,
+        context_bar,
+        model,
+    }
+}
+
+fn now_title_width(content_width: usize) -> usize {
+    MIN_NOW_TITLE_WIDTH
+        + content_width
+            .saturating_sub(COMPACT_NOW_CONTENT_WIDTH)
+            .min(MAX_NOW_TITLE_WIDTH - MIN_NOW_TITLE_WIDTH)
+}
 
 fn preferred_context_bar_width(terminal_width: u16) -> usize {
     let extra_cells =
@@ -1944,9 +2316,11 @@ fn preferred_context_bar_width(terminal_width: u16) -> usize {
     (MIN_CONTEXT_BAR_WIDTH + extra_cells as usize).min(MAX_CONTEXT_BAR_WIDTH)
 }
 
-fn now_context_bar_width(terminal_width: u16, content_width: usize) -> usize {
+fn now_context_bar_width(terminal_width: u16, content_width: usize, title_width: usize) -> usize {
     let available_cells = content_width
-        .saturating_sub(NON_MODEL_WIDTH_WITHOUT_CONTEXT_CELLS + PREFERRED_MODEL_WIDTH)
+        .saturating_sub(
+            NOW_FIXED_WIDTH_WITHOUT_FLEXIBLE_COLUMNS + title_width + PREFERRED_MODEL_WIDTH,
+        )
         .max(MIN_CONTEXT_BAR_WIDTH);
     preferred_context_bar_width(terminal_width).min(available_cells)
 }
@@ -2200,6 +2574,18 @@ fn provider_page_rows<'a>(
 
 fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let provider_rows = ui.provider_page_rows(snap);
+    let visible_sessions = provider_rows
+        .iter()
+        .filter_map(|row| match row {
+            ProviderPageRow::Session(session) => Some(*session),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let visible_identities = visible_sessions
+        .iter()
+        .map(|session| (session.provider, session.id.as_str()))
+        .collect::<Vec<_>>();
+    let titles = ui.labels.titles_for(&visible_identities);
     let now = snapshot_now_ms(snap);
     let theme = ui.theme.palette();
 
@@ -2222,13 +2608,13 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     }
 
     if area.width < 120 {
-        draw_compact_provider(f, area, provider_rows, now, ui, theme);
+        draw_compact_provider(f, area, provider_rows, titles, now, ui, theme);
         return;
     }
 
     let header = Row::new(vec![
         Cell::from("State"),
-        Cell::from("Session"),
+        Cell::from("Title"),
         Cell::from("Model"),
         Cell::from("Context"),
         Cell::from("Lifetime Usage"),
@@ -2245,6 +2631,7 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let mut rows = Vec::new();
     let mut selected_row = 0;
     let mut selectable = 0;
+    let mut titles = titles.into_iter();
     for provider_row in provider_rows {
         match provider_row {
             ProviderPageRow::Project(project) => {
@@ -2267,7 +2654,8 @@ fn draw_provider(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 if selectable == ui.selected {
                     selected_row = rows.len();
                 }
-                rows.push(session_row(session, now, theme));
+                let title = titles.next().expect("every Session row has a Title");
+                rows.push(session_row(session, &title, now, theme));
                 selectable += 1;
             }
             ProviderPageRow::Disclosure {
@@ -2366,7 +2754,7 @@ fn lifetime_usage_text(s: &Session) -> String {
     )
 }
 
-fn session_row(s: &Session, now: i64, theme: Theme) -> Row<'static> {
+fn session_row(s: &Session, title: &str, now: i64, theme: Theme) -> Row<'static> {
     let model = s.latest_model.clone().unwrap_or_else(|| "—".into());
     let cmp = if s.compaction_count() > 0 {
         format!("⤳{}", s.compaction_count())
@@ -2382,7 +2770,7 @@ fn session_row(s: &Session, now: i64, theme: Theme) -> Row<'static> {
     Row::new(vec![
         state_cell(s.state, theme),
         Cell::from(Span::styled(
-            s.id.clone(),
+            title.to_string(),
             Style::default().fg(theme.foreground),
         )),
         Cell::from(Span::styled(model, Style::default().fg(theme.muted))),
@@ -2407,13 +2795,14 @@ fn draw_compact_provider(
     f: &mut Frame,
     area: Rect,
     provider_rows: Vec<ProviderPageRow<'_>>,
+    titles: Vec<String>,
     now: i64,
     ui: &Ui,
     theme: Theme,
 ) {
     let mut lines = vec![
         Line::from(Span::styled(
-            "  State  Session             Model               Context",
+            "  State  Title               Model               Context",
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
@@ -2425,6 +2814,7 @@ fn draw_compact_provider(
     ];
     let mut selectable = 0;
     let mut selected_line = 0;
+    let mut titles = titles.into_iter();
 
     for provider_row in provider_rows {
         match provider_row {
@@ -2443,8 +2833,10 @@ fn draw_compact_provider(
                 if selectable == ui.selected {
                     selected_line = lines.len();
                 }
+                let title = titles.next().expect("every Session row has a Title");
                 lines.extend(compact_session_lines(
                     session,
+                    &title,
                     now,
                     selectable == ui.selected,
                     theme,
@@ -2504,6 +2896,7 @@ fn draw_compact_provider(
 
 fn compact_session_lines(
     session: &Session,
+    title: &str,
     now: i64,
     selected: bool,
     theme: Theme,
@@ -2540,7 +2933,7 @@ fn compact_session_lines(
             ),
             Span::styled(format!("{state:<7}"), selected_or(state_style)),
             Span::styled(
-                format!("{:<18}", shorten_end(&session.id, 18)),
+                fit_title(title, 18, false),
                 selected_or(Style::default().fg(theme.foreground)),
             ),
             Span::styled(
@@ -2684,7 +3077,8 @@ fn draw_detail(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
             .unwrap_or_else(|| "N/A".into()),
     ));
     lines.push(hdr("Source format", s.source.format.label().into()));
-    lines.push(hdr("Session", s.id.clone()));
+    lines.push(hdr("Title", ui.labels.title(s.provider, &s.id)));
+    lines.push(hdr("Session ID", s.id.clone()));
     lines.push(hdr(
         "Latest model",
         s.latest_model.clone().unwrap_or_else(|| "—".into()),
@@ -2881,7 +3275,8 @@ fn draw_compact_detail(
                 .map(|project| project.label.clone())
                 .unwrap_or_else(|| "N/A".into()),
         ),
-        field("Session", session.id.clone()),
+        field("Title", ui.labels.title(session.provider, &session.id)),
+        field("Session ID", session.id.clone()),
         field(
             "Model",
             session.latest_model.clone().unwrap_or_else(|| "N/A".into()),
@@ -2989,26 +3384,37 @@ fn draw_compact_detail(
         source_width,
         theme,
     );
-    lines.push(section(format!(
-        "Compactions ({})",
-        session.compaction_count()
-    )));
+    let compaction_text = |compaction: &crate::domain::Compaction| {
+        format!(
+            "  {} ago  trigger={}  pre={}",
+            fmt_relative(compaction.at_ms, snapshot_now_ms(snap)),
+            compaction.trigger.as_deref().unwrap_or("N/A"),
+            compaction
+                .pre_tokens
+                .map(fmt_tokens)
+                .unwrap_or_else(|| "N/A".into())
+        )
+    };
+    let mut compaction_heading = vec![Span::styled(
+        format!("Compactions ({})", session.compaction_count()),
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD),
+    )];
     if session.compactions.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  none observed",
+        compaction_heading.push(Span::styled(
+            "  none observed".to_string(),
             Style::default().fg(theme.muted),
-        )));
+        ));
+        lines.push(Line::from(compaction_heading));
     } else {
-        for compaction in &session.compactions {
-            lines.push(Line::from(format!(
-                "  {} ago  trigger={}  pre={}",
-                fmt_relative(compaction.at_ms, snapshot_now_ms(snap)),
-                compaction.trigger.as_deref().unwrap_or("N/A"),
-                compaction
-                    .pre_tokens
-                    .map(fmt_tokens)
-                    .unwrap_or_else(|| "N/A".into())
-            )));
+        compaction_heading.push(Span::styled(
+            compaction_text(&session.compactions[0]),
+            Style::default().fg(theme.foreground),
+        ));
+        lines.push(Line::from(compaction_heading));
+        for compaction in session.compactions.iter().skip(1) {
+            lines.push(Line::from(compaction_text(compaction)));
         }
     }
 
@@ -3093,33 +3499,49 @@ fn push_wrapped_detail_field(
 fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     let compact = area.width < 100;
+    let can_edit_title = ui.labels.is_editable() && ui.selected_session(snap).is_some();
     let now = Instant::now();
     let status_notice = ui
         .status_notice
         .as_ref()
         .filter(|(_, until)| now < *until)
         .map(|(message, _)| message.clone());
+    let label_error = ui.labels.error().map(str::to_string);
     let left = if compact && status_notice.is_some() {
         ""
     } else if ui.copy_menu_is_open() && area.width < 100 {
         "j/k Select | Enter Copy | Esc Cancel"
     } else if ui.copy_menu_is_open() {
         "Up/Down or j/k Select | Enter Copy | Esc Cancel"
-    } else if ui.detail.is_some() && area.width < 100 {
+    } else if ui.detail.is_some() && compact && can_edit_title {
+        "Esc | j/k | c Copy | e Edit title | ? Guide | q Quit"
+    } else if ui.detail.is_some() && compact {
         "Esc Back | j/k Scroll | c Copy | ? Guide | q Quit"
+    } else if ui.detail.is_some() && can_edit_title {
+        "Esc | j/k | c Copy | e Edit title | 1/2/3 | ? Guide | q Quit"
     } else if ui.detail.is_some() {
         "Esc | j/k Scroll | c Copy | 1/2/3 | ? Guide | q Quit"
-    } else if area.width < 100 && ui.tab == Tab::All {
+    } else if compact && ui.tab == Tab::All && can_edit_title {
+        "j/k | Enter | e Edit title | ? Guide | q Quit"
+    } else if compact && ui.tab == Tab::All {
         "j/k | Enter Inspect | ? Guide | q Quit"
-    } else if area.width < 100 {
+    } else if compact && can_edit_title {
+        "j/k | Enter Inspect | e Edit title | ? Guide | q Quit"
+    } else if compact {
         "j/k | Enter Inspect/Expand | ? Guide | q Quit"
+    } else if ui.tab == Tab::All && can_edit_title {
+        "j/k | Enter Inspect | e Edit title | 1/2/3 | r | ? Guide | q Quit"
     } else if ui.tab == Tab::All {
         "j/k | Enter Inspect | 1/2/3 | r | ? Guide | q Quit"
+    } else if can_edit_title {
+        "j/k | Enter Inspect | e Edit title | 1/2/3 | ? Guide | q Quit"
     } else {
         "j/k | Enter Inspect/Expand | 1/2/3 | ? Guide | q Quit"
     };
     let status = if let Some(status_notice) = status_notice.as_ref() {
         status_notice.clone()
+    } else if let Some(label_error) = label_error.as_ref() {
+        label_error.clone()
     } else {
         snap.status.clone()
     };
@@ -3133,7 +3555,12 @@ fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     } else {
         format!("{status}   ·   Estimated using API rates")
     };
-    let cols = if compact {
+    let cols = if label_error.is_some() && status_notice.is_none() {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(0), Constraint::Min(1)])
+            .split(area)
+    } else if compact {
         let available = area
             .width
             .saturating_sub(left.chars().count() as u16)
@@ -3157,6 +3584,8 @@ fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     );
     let status_color = if status_notice.is_some() {
         theme.accent
+    } else if label_error.is_some() {
+        theme.critical
     } else {
         theme.muted
     };
@@ -3291,14 +3720,20 @@ mod tests {
     fn now_cursor_style_at(terminal: &Terminal<TestBackend>, session_text: &str) -> Option<Style> {
         let buffer = terminal.backend().buffer();
         let width = buffer.area.width as usize;
+        let now_width = if width >= 120 {
+            width * 67 / 100
+        } else {
+            width
+        };
         let cell_count = session_text.chars().count();
         for row in buffer.content().chunks(width) {
-            let Some(session_start) = row.windows(cell_count).position(|cells| {
+            let now_row = &row[..now_width];
+            let Some(session_start) = now_row.windows(cell_count).position(|cells| {
                 cells.iter().map(|cell| cell.symbol()).collect::<String>() == session_text
             }) else {
                 continue;
             };
-            return row[..session_start]
+            return now_row[..session_start]
                 .iter()
                 .find(|cell| cell.symbol() == ">")
                 .map(|cell| cell.style());
@@ -3541,8 +3976,8 @@ mod tests {
         let page = rendered_rows_at(&ui, &snapshot, 120, 30);
         let project = page.find("\n│sessionmesh").unwrap();
         let worktree = page.find("WARNING Shared Worktree Risk x2").unwrap();
-        let claude = page.find("Claude demo-ses").unwrap();
-        let codex = page.find("Codex  codex-op").unwrap();
+        let claude = page.find("Claude -session").unwrap();
+        let codex = page.find("Codex  dex-open").unwrap();
 
         assert!(project < worktree && worktree < claude && claude < codex);
         assert_eq!(
@@ -3553,11 +3988,11 @@ mod tests {
         );
         let session_rows = page
             .lines()
-            .filter(|line| line.contains("demo-ses") || line.contains("codex-op"))
+            .filter(|line| line.contains("-session") || line.contains("dex-open"))
             .collect::<Vec<_>>();
         assert_eq!(session_rows.len(), 2);
-        assert!(session_rows.iter().any(|line| line.contains("demo-ses")));
-        assert!(session_rows.iter().any(|line| line.contains("codex-op")));
+        assert!(session_rows.iter().any(|line| line.contains("-session")));
+        assert!(session_rows.iter().any(|line| line.contains("dex-open")));
         assert!(!page.contains("exited-model"));
     }
 
@@ -3602,12 +4037,12 @@ mod tests {
         let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
         let priority_project = page.find("\n│priority").unwrap();
         let critical_worktree = page.find("WARNING Shared Worktree Risk x2").unwrap();
-        let critical_session = page.find("critical-model").unwrap();
-        let shared_session = page.find("shared-model").unwrap();
+        let critical_session = page.find("Claude critical").unwrap();
+        let shared_session = page.find("Codex  shared").unwrap();
         let warning_worktree = page.find("/worktrees/a-warning").unwrap();
-        let warning_session = page.find("warning-model").unwrap();
+        let warning_session = page.find("Claude warning").unwrap();
         let healthy_project = page.find("\n│healthy").unwrap();
-        let healthy_session = page.find("healthy-model").unwrap();
+        let healthy_session = page.find("Claude healthy").unwrap();
 
         assert!(priority_project < critical_worktree);
         assert!(critical_worktree < critical_session && critical_session < shared_session);
@@ -3619,7 +4054,7 @@ mod tests {
         assert!(priority_evidence.contains("WARNING"));
         assert!(priority_evidence
             .lines()
-            .find(|line| line.contains("critical-model"))
+            .find(|line| line.contains("Claude critical"))
             .unwrap()
             .contains("Idle"));
     }
@@ -3643,14 +4078,16 @@ mod tests {
             .find(|line| line.contains("WARNING Shared Worktree Risk x2"))
             .unwrap();
         let risk = page.find(risk_line).unwrap();
-        let claude = page.find("claude-member").unwrap();
-        let codex = page.find("codex-member").unwrap();
+        let claude = page.find("Claude -session").unwrap();
+        let codex = page.find("Codex  tributor").unwrap();
 
         assert!(risk_line.contains("sessionmesh"));
         assert!(risk_line.contains("| main"));
         assert!(risk < claude && risk < codex);
         assert_eq!(
-            page.lines().filter(|line| line.contains("member")).count(),
+            page.lines()
+                .filter(|line| line.contains("Claude -session") || line.contains("Codex  tributor"))
+                .count(),
             2
         );
     }
@@ -3663,13 +4100,13 @@ mod tests {
         snapshot.attention = Some(AttentionEngine::default().update(&snapshot.sessions, 2_000));
 
         let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
-        let critical = page.lines().find(|line| line.contains("demo-ses")).unwrap();
+        let critical = page.lines().find(|line| line.contains("-session")).unwrap();
 
         assert!(critical.contains("CRITICAL"));
-        assert!(critical.contains("[##############-] 90%"));
+        assert!(critical.contains("[###########-] 90%"));
         assert!(critical.contains("Busy"));
         assert!(critical.contains("Claude"));
-        assert!(critical.contains("demo-ses"));
+        assert!(critical.contains("-session"));
     }
 
     #[test]
@@ -3679,34 +4116,24 @@ mod tests {
         snapshot.attention = Some(AttentionEngine::default().update(&snapshot.sessions, 2_000));
 
         let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
-        let warning = page.lines().find(|line| line.contains("demo-ses")).unwrap();
+        let warning = page.lines().find(|line| line.contains("-session")).unwrap();
 
         assert!(warning.contains("WARNING"));
-        assert!(warning.contains("[###########----] 75%"));
+        assert!(warning.contains("[#########---] 75%"));
     }
 
     #[test]
-    fn now_context_bar_grows_without_displacing_the_model() {
-        assert_eq!(now_context_bar_width(80, 78), 12);
-        assert_eq!(now_context_bar_width(85, 83), 13);
-        assert_eq!(now_context_bar_width(100, 98), 16);
-        assert_eq!(now_context_bar_width(120, 78), 15);
-        assert_eq!(now_context_bar_width(160, 105), 20);
-        assert_eq!(preferred_context_bar_width(120), 20);
-    }
-
-    #[test]
-    fn now_shows_the_first_eight_native_session_id_characters() {
+    fn now_shows_the_last_eight_native_session_id_characters() {
         let mut snapshot = demo_snapshot();
         snapshot.sessions[0].id = "12345678remaining-id".into();
         snapshot.sessions[0].latest_model = Some("session-id-model".into());
 
         let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
-        let session = page.lines().find(|line| line.contains("12345678")).unwrap();
+        let session = page.lines().find(|line| line.contains("ining-id")).unwrap();
 
-        assert!(session.contains("Claude 12345678"));
+        assert!(session.contains("Claude ining-id"));
         assert!(session.contains("sess"));
-        assert!(!session.contains("remaining-id"));
+        assert!(!session.contains("12345678"));
     }
 
     #[test]
@@ -3767,11 +4194,11 @@ mod tests {
         let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
         let observed = page
             .lines()
-            .find(|line| line.contains("observed-idle"))
+            .find(|line| line.contains("Claude ved-idle"))
             .unwrap();
         let fallback = page
             .lines()
-            .find(|line| line.contains("fallback-idle"))
+            .find(|line| line.contains("Codex  ack-idle"))
             .unwrap();
 
         assert!(observed.contains("IDLE"));
@@ -3803,10 +4230,10 @@ mod tests {
         ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
             .unwrap();
         let all = render_terminal_with_snapshot(&ui, &snapshot);
-        let cursor = now_cursor_style_at(&all, "second-open-model").unwrap();
+        let cursor = now_cursor_style_at(&all, "ond-open").unwrap();
         assert_eq!(cursor.fg, Some(Color::Rgb(230, 180, 80)));
         assert!(cursor.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(now_cursor_style_at(&all, "first-open-model"), None);
+        assert_eq!(now_cursor_style_at(&all, "-session"), None);
     }
 
     #[test]
@@ -3838,18 +4265,18 @@ mod tests {
             .collect::<Vec<_>>();
         let known = page
             .iter()
-            .find(|line| line.contains("known-model"))
+            .find(|line| line.contains("Claude -session"))
             .unwrap();
         let unknown = page
             .iter()
-            .find(|line| line.contains("unknown-model"))
+            .find(|line| line.contains("Codex  -context"))
             .unwrap();
 
-        assert!(known.contains("[###########----] 70%"));
-        assert!(unknown.contains("[---------------] N/A"));
-        assert_eq!(known.find("known-model"), unknown.find("unknown-model"));
+        assert!(known.contains("[########----] 70%"));
+        assert!(unknown.contains("[------------] N/A"));
+        assert_eq!(known.find("known-model"), unknown.find("unknown-..."));
         assert_eq!(
-            rendered_style_at(&terminal, "[---------------] N/A").fg,
+            rendered_style_at(&terminal, "[------------] N/A").fg,
             Some(Color::Rgb(132, 136, 141))
         );
     }
@@ -3994,7 +4421,7 @@ mod tests {
         let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
 
         assert!(page.contains("RECENT SIGNALS"));
-        assert!(page.find("newest-signal").unwrap() < page.find("older-signal").unwrap());
+        assert!(page.find("t-signal").unwrap() < page.find("r-signal").unwrap());
         assert!(page.contains("Busy -> Idle"));
         assert!(page.contains("Idle -> Exited"));
         for excluded in ["View More", "Filter", "Scroll"] {
@@ -4083,9 +4510,9 @@ mod tests {
         let located = render_terminal_at(&ui, &snapshot, 120, 30);
 
         assert_eq!(ui.active_tab(), Tab::All);
-        let cursor = now_cursor_style_at(&located, "recommended...").unwrap();
+        let cursor = now_cursor_style_at(&located, "ommended").unwrap();
         assert_eq!(cursor.fg, Some(Color::Rgb(230, 180, 80)));
-        assert_eq!(now_cursor_style_at(&located, "arbitrary-m..."), None);
+        assert_eq!(now_cursor_style_at(&located, "ry-first"), None);
         assert_ne!(
             rendered_style_at(&located, "Risk detected").bg,
             Some(Color::Rgb(68, 61, 43))
@@ -4172,13 +4599,10 @@ mod tests {
             .unwrap();
         let signals_focused = render_terminal_at(&ui, &snapshot, 120, 30);
         assert_eq!(
-            rendered_style_at(&signals_focused, "second-signal").bg,
+            rendered_style_at(&signals_focused, "d-signal").bg,
             selected_background
         );
-        assert_eq!(
-            now_cursor_style_at(&signals_focused, "second-now-..."),
-            None
-        );
+        assert_eq!(now_cursor_style_at(&signals_focused, "cond-now"), None);
 
         ui.handle_key(
             KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
@@ -4186,10 +4610,10 @@ mod tests {
         )
         .unwrap();
         let now_focused = render_terminal_at(&ui, &snapshot, 120, 30);
-        let cursor = now_cursor_style_at(&now_focused, "second-now-...").unwrap();
+        let cursor = now_cursor_style_at(&now_focused, "cond-now").unwrap();
         assert_eq!(cursor.fg, Some(Color::Rgb(230, 180, 80)));
         assert_ne!(
-            rendered_style_at(&now_focused, "second-signal").bg,
+            rendered_style_at(&now_focused, "d-signal").bg,
             selected_background
         );
     }
@@ -4239,7 +4663,7 @@ mod tests {
         ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
         let restored_signal = render_terminal_at(&ui, &snapshot, 120, 30);
         assert_eq!(
-            rendered_style_at(&restored_signal, "signal-detail-target").bg,
+            rendered_style_at(&restored_signal, "l-target").bg,
             selected_background
         );
 
@@ -4249,7 +4673,7 @@ mod tests {
         )
         .unwrap();
         let restored_now = render_terminal_at(&ui, &snapshot, 120, 30);
-        let cursor = now_cursor_style_at(&restored_now, "target-now-...").unwrap();
+        let cursor = now_cursor_style_at(&restored_now, "l-target").unwrap();
         assert_eq!(cursor.fg, Some(Color::Rgb(230, 180, 80)));
     }
 
@@ -4303,7 +4727,8 @@ mod tests {
 
         let page = rendered_rows_at(&Ui::default(), &snapshot, 80, 24);
 
-        assert!(page.contains("claude-opus-4-8"));
+        assert!(page.contains("Claude -session"));
+        assert!(page.contains("claude-o..."));
         for visible in [
             "signal-1", "signal-2", "signal-3", "signal-4", "signal-5", "signal-6",
         ] {
@@ -4339,14 +4764,14 @@ mod tests {
         let page = rendered_rows_at(&ui, &snapshot, 120, 30);
         let session = page
             .lines()
-            .find(|line| line.contains("healthy-bus..."))
+            .find(|line| line.contains("Claude -session"))
             .unwrap();
 
         assert!(session.contains("Busy"));
         assert!(session.contains("Claude"));
-        assert!(session.contains("[######---------] 40%"));
-        assert!(session.contains("demo-ses"));
-        assert_eq!(page.matches("healthy-bus...").count(), 1);
+        assert!(session.contains("[#####-------] 40%"));
+        assert!(session.contains("-session"));
+        assert_eq!(page.matches("Claude -session").count(), 1);
         for manufactured_condition in ["Alert", "ATTENTION", "Warning", "Critical"] {
             assert!(!page.contains(manufactured_condition));
         }
@@ -4372,7 +4797,7 @@ mod tests {
             .unwrap();
         let session = page
             .lines()
-            .find(|line| line.contains("claude-sonnet"))
+            .find(|line| line.contains("Claude -session"))
             .unwrap();
 
         assert!(worktree.contains("prototype/q-007"));
@@ -4381,8 +4806,9 @@ mod tests {
             "WARNING",
             "Busy",
             "Claude",
-            "demo-ses",
+            "-session",
             "[#########---] 75%",
+            "claude-s...",
             "0s",
         ] {
             assert!(
@@ -5156,7 +5582,7 @@ mod tests {
 
         for fact in [
             "PROJECT  sessionmesh",
-            "demo-session",
+            "-session",
             "Busy",
             "claude-opus-4-8",
             "150.0k (75%)",
@@ -5189,7 +5615,7 @@ mod tests {
 
         for fact in [
             "PROJECT  sessionmesh",
-            "demo-session",
+            "-session",
             "Busy",
             "claude-opus-4-8",
             "150.0k (75%)",
@@ -5219,7 +5645,7 @@ mod tests {
         let mut ui = Ui::default();
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
 
-        assert!(rendered_rows_at(&ui, &snapshot, 80, 24).contains("old-open-model"));
+        assert!(rendered_rows_at(&ui, &snapshot, 80, 24).contains("Claude -session"));
 
         ui.handle_key(key(KeyCode::Char('2')), &snapshot).unwrap();
         let collapsed = rendered_rows_at(&ui, &snapshot, 80, 24);
@@ -5335,8 +5761,8 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(footer.contains("Esc Back"));
-        assert!(footer.contains("j/k Scroll"));
+        assert!(footer.contains("Esc | j/k"));
+        assert!(footer.contains("e Edit title"));
     }
 
     #[test]
@@ -5510,7 +5936,9 @@ mod tests {
             "/Users/x/code/sessionmesh",
             "@ main",
             "cwd",
-            "Session",
+            "Title",
+            "-session",
+            "Session ID",
             "demo-session",
             "Model",
             "claude-opus-4-8",

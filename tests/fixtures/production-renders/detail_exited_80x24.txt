@@ -2,7 +2,8 @@
 ┌ Session detail - Esc to go back ─────────────────────────────────────────────┐
 │Provider      Claude Code / Exited                                            │
 │Project       sessionmesh                                                     │
-│Session       claude-older                                                    │
+│Title         de-older                                                        │
+│Session ID    claude-older                                                    │
 │Model         claude-sonnet-4-5                                               │
 │Context       50.0k / 200.0k (25.0%)                                          │
 │Attention Conditions                                                          │
@@ -13,12 +14,11 @@
 │cwd           /Users/fixture/code/sessionmesh-older                           │
 │Source log    /Users/fixture/.sessions/claude-older.jsonl                     │
 │Source format JSONL                                                           │
-│Compactions (0)                                                               │
-│  none observed                                                               │
+│Compactions (0)  none observed                                                │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────── lines 1-15 of 15 ┘
-Esc Back | j/k Scroll | c Copy | ? Guide | q Quit      Estimated using API rates
+Esc | j/k | c Copy | e Edit title | ? Guide | q Quit   Estimated using API rates

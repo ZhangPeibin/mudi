@@ -25,7 +25,7 @@ use sessionmesh::clipboard::{Clipboard, MacosClipboard};
 use sessionmesh::collector;
 use sessionmesh::config::{theme_override_from_args, Config};
 use sessionmesh::index::Index;
-use sessionmesh::pricing::RateCard;
+use sessionmesh::models::ModelCatalog;
 use sessionmesh::signals::RecentSignalsEngine;
 use sessionmesh::ui::{draw, Ui, UiAction};
 
@@ -67,8 +67,8 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
             return;
         }
     };
-    let rates = RateCard::load(Some(&cfg.pricing_override_path()));
-    let mut alert_engine = AlertEngine::new();
+    let models = ModelCatalog::load(Some(&cfg.model_catalog_override_path()));
+    let mut alert_engine = AlertEngine::new(cfg.label_store_path());
     let mut attention_engine = AttentionEngine::default();
     let mut recent_signals_engine = RecentSignalsEngine::default();
     let mut first = true;
@@ -85,7 +85,7 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
         }
 
         let stats = collector::refresh(&cfg, &mut index);
-        let mut sessions = collector::build_sessions(&cfg, &index, &rates);
+        let mut sessions = collector::build_sessions(&cfg, &index, &models);
         collector::sort_for_display(&mut sessions);
 
         // Alerts + notifications run off the raw context of open sessions.
@@ -165,7 +165,6 @@ fn event_loop<B: ratatui::backend::Backend>(
         ui.clamp_selections(&snap);
 
         terminal.draw(|f| draw(f, &snap, ui))?;
-        terminal.set_cursor_position((0, 0))?;
 
         // Poll for input with a timeout so the screen refreshes even without keys.
         if !event::poll(Duration::from_millis(250))? {
