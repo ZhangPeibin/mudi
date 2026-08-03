@@ -55,11 +55,15 @@ Standard paths with environment overrides:
 |---|---|---|
 | `SESSIONMESH_CLAUDE_DIR` | `~/.claude` | Claude data root |
 | `SESSIONMESH_CODEX_DIR` | `~/.codex` | Codex data root |
-| `SESSIONMESH_DATA_DIR` | `~/Library/Application Support/sessionmesh` | index, Profile, and pricing files |
+| `SESSIONMESH_DATA_DIR` | `~/Library/Application Support/sessionmesh` | index, Profile, and model override files |
 | `SESSIONMESH_EXTRA_DIRS` | — | colon-separated extra log dirs |
 
-Local pricing override: drop a `pricing.json` (same shape as `pricing/models.json`) in
-`SESSIONMESH_DATA_DIR`.
+Local Model Catalog override: drop a `models.json` (same shape as `models/catalog.json`) in
+`SESSIONMESH_DATA_DIR`. Entries are scoped by exact Model Provider and model identifier. The
+bundled catalog currently includes 80 model identifiers across 9 Model Providers; its 65
+mainstream source records come from the structured table at `llmcalcs.com/pricing-comparison`
+(source data last updated 2026-06-11). The catalog records direct and batch API prices plus
+Context Window; batch prices are metadata and are not used for interactive Session estimates.
 
 The disposable Session index is `index.db`. Local Profile preferences are stored
 separately in `profile.json`; deleting that file restores first-use Guide and the default
@@ -73,7 +77,7 @@ deferred to a future Settings feature.
 src/
   domain.rs         normalized types (Session, Usage, ContextState, …)
   config.rs         paths + env overrides + thresholds
-  pricing.rs        bundled rate card + estimator (N/A, never substituted)
+  models.rs         Model-Provider-scoped prices + Context Window catalog
   providers/        deep adapters behind one interface
     claude.rs         transcript parser (dedup streamed records)
     codex.rs          rollout parser (cumulative deltas, never summed)

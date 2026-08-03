@@ -1,6 +1,7 @@
 # ADR 0001 — Express the `ProviderAdapter` seam
 
-- **Status:** Accepted and implemented (2026-07-30).
+- **Status:** Accepted and implemented (2026-07-30). Context Window ownership was
+  superseded by ADR 0008; discovery, parsing, and lifecycle decisions remain here.
 - **Scope:** Architecture deepening candidates **1 + 2 + 4** as one unit. Candidates 3
   (pricing policy) and 5 (probe injection / testability) are explicitly out of scope.
 

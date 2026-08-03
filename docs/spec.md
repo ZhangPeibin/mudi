@@ -27,7 +27,8 @@ See `CONTEXT.md` for the authoritative domain vocabulary.
 - Compaction count badge + detail timeline.
 - SQLite incremental index, rebuildable from source.
 - macOS notifications while the TUI runs.
-- Bundled versioned pricing with local overrides.
+- Bundled, Model-Provider-scoped Model Catalog with sourced direct/Batch API prices, Context
+  Windows, and local overrides.
 - Standard dirs + env overrides + configurable extra directories.
 
 ## Out of scope (v1)
