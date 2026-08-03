@@ -1,15 +1,15 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ─────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
 ┌ PROJECTS 1 ───────────────────────────────────────────────── 5 OPEN SESSIONS ┐┌ RECENT SIGNALS 5 ───────── latest 5s ┐
 │sessionmesh                                                                   ││WT /Users/fixture/co...  Risk detected│
-│  ...ure/code/sessionmesh | main | WARNING Shared Worktree Risk x2            ││Before 1: CL:claude-critical          │
-│> CRITICAL Busy Claude claude-c [##############-] 90%  claude-opus... 30s     ││...CL:claude-critical, CX:codex-shared│
-│  SHARED   Busy Codex  codex-sh [######---------] 40%  gpt-5-codex    1m      ││CL clau... Ctx +Critical 160.0k>180.0k│
+│  ...ure/code/sessionmesh | main | WARNING Shared Worktree Risk x2            ││Before 1: CL:critical                 │
+│> CRITICAL Busy Claude critical       [###########-] 90%  claude-o... 30s     ││After 2: CL:critical, CX:x-shared     │
+│  SHARED   Busy Codex  x-shared       [#####-------] 40%  gpt-5-codex 1m      ││CL ...ical Ctx +Critical 160.0k>180.0k│
 │  /Users/fixture/code/sessionmesh-warning | warning                           ││CL .. Cmp auto 188.0k>100.0k -Critical│
-│  WARNING  Busy Claude claude-w [###########----] 75%  claude-sonn... 2m      ││CL claud... Ctx +Warning 120.0k>150.0k│
-│  /Users/fixture/code/sessionmesh-idle | idle                                 ││CX codex-idle Busy -> Idle            │
-│  IDLE     Idle Codex  codex-id [#####----------] 30%  gpt-5.2-codex  Idle 3m ││                                      │
+│  WARNING  Busy Claude -warning       [#########---] 75%  claude-s... 2m      ││CL -warning Ctx +Warning 120.0k>150.0k│
+│  /Users/fixture/code/sessionmesh-idle | idle                                 ││CX dex-idle Busy -> Idle              │
+│  IDLE     Idle Codex  dex-idle       [####--------] 30%  gpt-5.2-... Idle 3m ││                                      │
 │  /Users/fixture/code/sessionmesh-healthy | healthy                           ││                                      │
-│  BUSY     Busy Claude claude-h [###------------] 20%  claude-haik... 4m      ││                                      │
+│  BUSY     Busy Claude -healthy       [##----------] 20%  claude-h... 4m      ││                                      │
 │                                                                              ││                                      │
 │                                                                              ││                                      │
 │                                                                              ││                                      │
@@ -27,4 +27,4 @@
 │                                                                              ││                                      │
 │                                                                              ││                                      │
 └──────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────┘
-j/k | Enter Inspect | 1/2/3 | r | ? Guide | q Quit                                                         fixture ready
+j/k | Enter Inspect | e Edit title | 1/2/3 | r | ? Guide | q Quit                                          fixture ready

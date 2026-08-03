@@ -2,23 +2,23 @@
 ┌ Session detail - Esc to go back ─────────────────────────────────────────────┐
 │Provider      Claude Code / Busy                                              │
 │Project       sessionmesh                                                     │
-│Session       claude-critical                                                 │
+│Title         critical                                                        │
+│Session ID    claude-critical                                                 │
 │Model         claude-opus-4-8                                                 │
-│Context       180.0k / 200.0k (90.0%)                                         │
-│Atten┌ Copy source metadata ────────────────────────────────────────────┐     │
-│  CRI│Choose one complete metadata value                                │     │
-│  WAR│> Source log   /Users/fixture/.claude/projects/-Users-fixture-code│     │
-│Curre│  Worktree     /Users/fixture/code/sessionmesh                    │     │
-│in 1.│  cwd          /Users/fixture/code/sessionmesh                    │     │
-│Trans│  Session ID   claude-critical                                    │     │
+│Conte┌ Copy source metadata ────────────────────────────────────────────┐     │
+│Atten│Choose one complete metadata value                                │     │
+│  CRI│> Source log   /Users/fixture/.claude/projects/-Users-fixture-code│     │
+│  WAR│  Worktree     /Users/fixture/code/sessionmesh                    │     │
+│Curre│  cwd          /Users/fixture/code/sessionmesh                    │     │
+│in 1.│  Session ID   claude-critical                                    │     │
+│Trans│                                                                  │     │
 │in 12│                                                                  │2    │
 │Workt│                                                                  │     │
-│cwd  │                                                                  │     │
-│Sourc└───────────────────────────────────────── Enter Copy | Esc Cancel ┘mesh/│
+│cwd  └───────────────────────────────────────── Enter Copy | Esc Cancel ┘     │
+│Source log    /Users/fixture/.claude/projects/-Users-fixture-code-sessionmesh/│
 │              claude-critical.jsonl                                           │
 │Source format JSONL                                                           │
-│Compactions (2)                                                               │
-│  1m ago  trigger=auto  pre=188.0k                                            │
+│Compactions (2)  1m ago  trigger=auto  pre=188.0k                             │
 │  1m ago  trigger=manual  pre=181.0k                                          │
 └──────────────────────────────────────────────────────────── lines 1-20 of 20 ┘
 j/k Select | Enter Copy | Esc Cancel                   Estimated using API rates

@@ -2,7 +2,8 @@
 ┌ Session detail - Esc to go back ─────────────────────────────────────────────────────────────────────────────────────┐
 │Provider      Claude Code / Busy                                                                                      │
 │Project       sessionmesh                                                                                             │
-│Session       claude-critical                                                                                         │
+│Title         critical                                                                                                │
+│Session ID    claude-critical                                                                                         │
 │Model         claude-opus-4-8                                                                                         │
 │Context       180.0k / 200.0k (90.0%)                                                                                 │
 │Attention Conditions                                                                                                  │
@@ -16,8 +17,7 @@
 │cwd           /Users/fixture/code/sessionmesh                                                                         │
 │Source log    /Users/fixture/.claude/projects/-Users-fixture-code-sessionmesh/claude-critical.jsonl                   │
 │Source format JSONL                                                                                                   │
-│Compactions (2)                                                                                                       │
-│  1m ago  trigger=auto  pre=188.0k                                                                                    │
+│Compactions (2)  1m ago  trigger=auto  pre=188.0k                                                                     │
 │  1m ago  trigger=manual  pre=181.0k                                                                                  │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -27,4 +27,4 @@
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────── lines 1-19 of 19 ┘
-Esc | j/k Scroll | c Copy | 1/2/3 | ? Guide | q Quit                       fixture ready   ·   Estimated using API rates
+Esc | j/k | c Copy | e Edit title | 1/2/3 | ? Guide | q Quit               fixture ready   ·   Estimated using API rates
