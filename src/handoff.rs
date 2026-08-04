@@ -436,6 +436,8 @@ impl<L: WorkerLauncher> HandoffService<L> {
             worker_process_identity: None,
             provider_process_identity: None,
             prompt_sent_at_ms: None,
+            provider_exited_at_ms: None,
+            provider_exit_code: None,
             running_deadline_ms: None,
             cancellation_requested_at_ms: None,
             termination_requested_at_ms: None,
@@ -542,6 +544,8 @@ impl<L: WorkerLauncher> HandoffService<L> {
             worker_process_identity: None,
             provider_process_identity: None,
             prompt_sent_at_ms: None,
+            provider_exited_at_ms: None,
+            provider_exit_code: None,
             running_deadline_ms: None,
             cancellation_requested_at_ms: None,
             termination_requested_at_ms: None,
@@ -1621,6 +1625,9 @@ fn run_source_provider(
         .map_err(|_| ProviderRunError::Interrupted(None))?;
     let output = child
         .wait_with_output()
+        .map_err(|_| ProviderRunError::Interrupted(None))?;
+    store
+        .mark_provider_exited(&task.id, now_ms, output.status.code())
         .map_err(|_| ProviderRunError::Interrupted(None))?;
     let candidate = String::from_utf8(output.stdout).ok();
     if !output.status.success() {

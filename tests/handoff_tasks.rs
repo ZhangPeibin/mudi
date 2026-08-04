@@ -326,6 +326,19 @@ fn provider_that_returns_and_records_full_input(path: &Path, candidate: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+fn codex_that_requires_non_git_override_then_returns(path: &Path, candidate: &str) {
+    let escaped = candidate.replace("'", "'\\''");
+    fs::write(
+        path,
+        format!(
+            "#!/bin/sh\nallow_non_git=false\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"--skip-git-repo-check\" ]; then allow_non_git=true; fi\ndone\ncat > /dev/null\nif [ \"$allow_non_git\" != true ]; then exit 64; fi\nprintf '%s' '{escaped}'\n"
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
 fn provider_that_exits(path: &Path, code: i32) {
     fs::write(path, format!("#!/bin/sh\nexit {code}\n")).unwrap();
     #[cfg(unix)]
@@ -1562,7 +1575,7 @@ fn codex_worker_uses_the_same_artifact_contract_inside_a_read_only_sandbox() {
     assert_eq!(ready.state, OperationTaskState::Ready);
     assert_eq!(
         fs::read_to_string(codex.with_extension("args")).unwrap(),
-        "exec\n--sandbox\nread-only\nresume\ncodex-native-session\n-\n"
+        "exec\n--sandbox\nread-only\n--skip-git-repo-check\nresume\ncodex-native-session\n-\n"
     );
     assert_eq!(
         fs::read_to_string(codex.with_extension("prompt")).unwrap(),
@@ -1572,6 +1585,42 @@ fn codex_worker_uses_the_same_artifact_contract_inside_a_read_only_sandbox() {
         fs::read_to_string(cwd.join("unchanged.txt")).unwrap(),
         "source contents\n"
     );
+}
+
+#[test]
+fn codex_handoff_generates_from_a_non_git_project() {
+    let temp = TempDir::new("codex-non-git-project");
+    let source_path = temp.path().join("rollout.jsonl");
+    let cwd = temp.path().join("standalone-project");
+    let claude = temp.path().join("claude");
+    let codex = temp.path().join("codex");
+    fs::write(&source_path, "{}\n").unwrap();
+    fs::create_dir(&cwd).unwrap();
+    assert!(!cwd.join(".git").exists());
+    executable(&claude);
+    codex_that_requires_non_git_override_then_returns(&codex, valid_handoff());
+    let paths = HandoffPaths {
+        task_store: temp.path().join("tasks.db"),
+        artifact_root: temp.path().join("artifacts"),
+    };
+    let executables = ProviderExecutables::new(claude, codex);
+    let mut session = exited_session(source_path, cwd);
+    session.provider = Provider::CodexCli;
+    session.id = "codex-non-git-session".into();
+    let mut handoff = HandoffService::open(
+        paths.clone(),
+        executables.clone(),
+        RecordingWorkerLauncher::default(),
+    )
+    .unwrap();
+    let task = handoff.authorize_exited(&session, 10_000).unwrap();
+
+    let completed = HandoffWorker::new(paths, executables)
+        .run(&task.id, 20_000)
+        .unwrap();
+
+    assert_eq!(completed.state, OperationTaskState::Ready);
+    assert!(completed.artifact_path.is_some());
 }
 
 #[cfg(unix)]
@@ -3490,6 +3539,48 @@ fn a_known_codex_failure_becomes_failed_without_an_artifact() {
         Some("provider_invocation_failed")
     );
     assert!(failed.artifact_path.is_none());
+}
+
+#[test]
+fn provider_nonzero_exit_is_retained_as_execution_trace_metadata() {
+    let temp = TempDir::new("provider-exit-trace");
+    let source_path = temp.path().join("source.jsonl");
+    let cwd = temp.path().join("project");
+    let claude = temp.path().join("claude");
+    let codex = temp.path().join("codex");
+    fs::write(&source_path, "{}\n").unwrap();
+    fs::create_dir(&cwd).unwrap();
+    provider_that_exits(&claude, 23);
+    executable(&codex);
+    let paths = HandoffPaths {
+        task_store: temp.path().join("tasks.db"),
+        artifact_root: temp.path().join("artifacts"),
+    };
+    let executables = ProviderExecutables::new(claude, codex);
+    let mut handoff = HandoffService::open(
+        paths.clone(),
+        executables.clone(),
+        RecordingWorkerLauncher::default(),
+    )
+    .unwrap();
+    let task = handoff
+        .authorize_exited(&exited_session(source_path, cwd), 10_000)
+        .unwrap();
+
+    HandoffWorker::new(paths.clone(), executables)
+        .run(&task.id, 20_000)
+        .unwrap();
+    let retained = TaskStore::open(&paths.task_store)
+        .unwrap()
+        .get(&task.id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(retained.state, OperationTaskState::Failed);
+    assert!(retained.provider_process_identity.is_some());
+    assert!(retained.prompt_sent_at_ms.is_some());
+    assert!(retained.provider_exited_at_ms.is_some());
+    assert_eq!(retained.provider_exit_code, Some(23));
 }
 
 #[cfg(unix)]

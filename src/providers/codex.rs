@@ -69,6 +69,7 @@ impl ProviderAdapter for CodexAdapter {
             "exec",
             "--sandbox",
             "read-only",
+            "--skip-git-repo-check",
             "resume",
             native_session_id,
             "-",

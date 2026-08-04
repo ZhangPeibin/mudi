@@ -101,6 +101,8 @@ pub struct OperationTask {
     pub worker_process_identity: Option<ProcessIdentity>,
     pub provider_process_identity: Option<ProcessIdentity>,
     pub prompt_sent_at_ms: Option<i64>,
+    pub provider_exited_at_ms: Option<i64>,
+    pub provider_exit_code: Option<i32>,
     pub running_deadline_ms: Option<i64>,
     pub cancellation_requested_at_ms: Option<i64>,
     pub termination_requested_at_ms: Option<i64>,
@@ -181,6 +183,8 @@ impl TaskStore {
                 provider_pid             INTEGER,
                 provider_started_at_ms  INTEGER,
                 prompt_sent_at_ms        INTEGER,
+                provider_exited_at_ms   INTEGER,
+                provider_exit_code      INTEGER,
                 running_deadline_ms      INTEGER,
                 cancellation_requested_at_ms INTEGER,
                 termination_requested_at_ms INTEGER,
@@ -247,6 +251,8 @@ impl TaskStore {
             ("provider_pid", "INTEGER"),
             ("provider_started_at_ms", "INTEGER"),
             ("prompt_sent_at_ms", "INTEGER"),
+            ("provider_exited_at_ms", "INTEGER"),
+            ("provider_exit_code", "INTEGER"),
             ("running_deadline_ms", "INTEGER"),
             ("cancellation_requested_at_ms", "INTEGER"),
             ("termination_requested_at_ms", "INTEGER"),
@@ -351,7 +357,8 @@ impl TaskStore {
                    successor_started_at_ms, successor_exited_at_ms,
                    successor_exit_code, successor_session_id,
                    successor_linked_at_ms, deletion_requested_at_ms,
-                   deletion_failure_code
+                   deletion_failure_code, provider_exited_at_ms,
+                   provider_exit_code
             FROM operation_tasks
             WHERE task_id = ?1
             "#,
@@ -462,6 +469,8 @@ impl TaskStore {
                 .zip(row.get::<_, Option<i64>>(23)?)
                 .map(|(pid, started_at_ms)| ProcessIdentity { pid, started_at_ms }),
             prompt_sent_at_ms: row.get(24)?,
+            provider_exited_at_ms: row.get(46)?,
+            provider_exit_code: row.get(47)?,
             running_deadline_ms: row.get(25)?,
             cancellation_requested_at_ms: row.get(26)?,
             termination_requested_at_ms: row.get(27)?,
@@ -622,6 +631,27 @@ impl TaskStore {
         )?;
         if changed != 1 {
             return Err(anyhow!("Task cannot record Prompt evidence"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn mark_provider_exited(
+        &self,
+        task_id: &str,
+        now_ms: i64,
+        exit_code: Option<i32>,
+    ) -> Result<()> {
+        let changed = self.conn.execute(
+            r#"
+            UPDATE operation_tasks
+            SET provider_exited_at_ms = ?2, provider_exit_code = ?3
+            WHERE task_id = ?1 AND state = 'running'
+              AND provider_pid IS NOT NULL AND provider_exited_at_ms IS NULL
+            "#,
+            params![task_id, now_ms, exit_code],
+        )?;
+        if changed != 1 {
+            return Err(anyhow!("Task cannot record Provider exit"));
         }
         Ok(())
     }

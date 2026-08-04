@@ -3908,6 +3908,30 @@ fn draw_task_detail(f: &mut Frame, area: Rect, task: &OperationTask, snap: &Snap
         (false, _) => "Not terminal".into(),
     };
     let failure_code = task.failure_code.as_deref().unwrap_or("None");
+    let execution_trace = format!(
+        "Worker {} | Provider {} | Prompt {}",
+        task.worker_process_identity
+            .map(|identity| format!("started {}", fmt_datetime(identity.started_at_ms)))
+            .unwrap_or_else(|| "not started".into()),
+        task.provider_process_identity
+            .map(|identity| format!("started {}", fmt_datetime(identity.started_at_ms)))
+            .unwrap_or_else(|| "not started".into()),
+        task.prompt_sent_at_ms
+            .map(|at_ms| format!("sent {}", fmt_datetime(at_ms)))
+            .unwrap_or_else(|| "not sent".into()),
+    );
+    let provider_exit = task
+        .provider_exited_at_ms
+        .map(|at_ms| {
+            format!(
+                "Provider exited {} | Exit code {}",
+                fmt_datetime(at_ms),
+                task.provider_exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "Unavailable".into())
+            )
+        })
+        .unwrap_or_else(|| "Not observed".into());
     let failure_summary = match task.failure_code.as_deref() {
         Some("worker_start_failed") => "Detached Worker could not start.",
         Some("handoff_skill_missing") => {
@@ -4026,6 +4050,16 @@ fn draw_task_detail(f: &mut Frame, area: Rect, task: &OperationTask, snap: &Snap
         field("Latest transition", fmt_datetime(task.state_changed_at_ms)),
         field("Acknowledgement", acknowledgement),
     ];
+    if task.worker_process_identity.is_some()
+        || task.provider_process_identity.is_some()
+        || task.prompt_sent_at_ms.is_some()
+        || task.provider_exited_at_ms.is_some()
+    {
+        lines.extend([
+            field("Execution trace", execution_trace),
+            field("Provider exit", provider_exit),
+        ]);
+    }
     if let Some(_requested_at_ms) = task.deletion_requested_at_ms {
         lines.extend([
             field(
@@ -4649,6 +4683,8 @@ mod tests {
             worker_process_identity: None,
             provider_process_identity: None,
             prompt_sent_at_ms: None,
+            provider_exited_at_ms: None,
+            provider_exit_code: None,
             running_deadline_ms: None,
             cancellation_requested_at_ms: None,
             termination_requested_at_ms: None,
