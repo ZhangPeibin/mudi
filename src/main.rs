@@ -6,7 +6,7 @@
 //! snapshot from shared state each frame.
 
 use anyhow::Result;
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -226,11 +226,11 @@ fn run_tui<L: WorkerLauncher>(
 }
 
 fn enter_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
-    execute!(writer, EnterAlternateScreen, EnableMouseCapture)
+    execute!(writer, EnterAlternateScreen)
 }
 
 fn leave_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
-    execute!(writer, DisableMouseCapture, LeaveAlternateScreen)
+    execute!(writer, LeaveAlternateScreen)
 }
 
 fn event_loop<B: ratatui::backend::Backend, L: WorkerLauncher>(
@@ -405,19 +405,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tui_terminal_commands_capture_and_release_mouse_scrolling() {
+    fn tui_terminal_commands_preserve_native_mouse_text_selection() {
         let mut enter = Vec::new();
         enter_tui_screen(&mut enter).unwrap();
         let enter = String::from_utf8(enter).unwrap();
         assert!(enter.contains("\x1b[?1049h"));
-        assert!(enter.contains("\x1b[?1000h"));
-        assert!(enter.contains("\x1b[?1006h"));
+        assert!(!enter.contains("\x1b[?1000h"));
+        assert!(!enter.contains("\x1b[?1006h"));
 
         let mut leave = Vec::new();
         leave_tui_screen(&mut leave).unwrap();
         let leave = String::from_utf8(leave).unwrap();
-        assert!(leave.contains("\x1b[?1006l"));
-        assert!(leave.contains("\x1b[?1000l"));
+        assert!(!leave.contains("\x1b[?1006l"));
+        assert!(!leave.contains("\x1b[?1000l"));
         assert!(leave.contains("\x1b[?1049l"));
     }
 }
