@@ -297,7 +297,7 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true).mode(0o700).create(path)?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(unix))]
     fs::create_dir_all(path)
@@ -342,7 +342,7 @@ fn decode(contents: &[u8]) -> Result<HashMap<SessionKey, String>, String> {
     file.aliases
         .into_iter()
         .map(|record| {
-            let provider = Provider::from_str(&record.provider)
+            let provider = Provider::parse(&record.provider)
                 .ok_or_else(|| format!("unknown Provider {:?}", record.provider))?;
             let alias = validate_alias(&record.alias).map_err(|error| error.to_string())?;
             Ok((

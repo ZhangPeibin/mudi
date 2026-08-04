@@ -254,7 +254,7 @@ impl Index {
         let base: Vec<StoredSession> = stmt
             .query_map([], |row| {
                 let provider =
-                    Provider::from_str(&row.get::<_, String>(0)?).unwrap_or(Provider::ClaudeCode);
+                    Provider::parse(&row.get::<_, String>(0)?).unwrap_or(Provider::ClaudeCode);
                 let id: String = row.get(1)?;
                 let source_path = PathBuf::from(row.get::<_, String>(2)?);
                 let cwd: Option<String> = row.get(3)?;
