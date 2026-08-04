@@ -37,7 +37,6 @@ Artifact directly. The Worker is the sole writer: it validates the candidate, wr
 owner-only temporary file, and atomically renames that file to the declared Artifact path.
 Invalid or interrupted output never appears as a completed Artifact.
 
-Artifact generation is read-only with respect to the source Project and Worktree. The
-Provider may use existing Session context and read project files, while deterministic Git
-branch, status, and changed-file metadata may be supplied by the Worker. It must not edit
-project files, install dependencies, commit changes, launch other agents, or run new tests.
+Artifact generation is read-only with respect to the source Project and Worktree. The managed
+Skill uses the resumed Session context and does not invoke tools. It must not edit project files,
+install dependencies, commit changes, launch tools or agents, or run new tests.

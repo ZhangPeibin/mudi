@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Confirmed design; ready for issue breakdown |
-| Last updated | 2026-08-02 |
+| Last updated | 2026-08-04 |
 | Product phase | Post-v1 |
 | Parent direction | `docs/attention-first-ui-prd.md` |
 | Artifact contract | `docs/handoff-artifact.md` |
@@ -315,16 +315,27 @@ behind the same interface.
 
 ### 10.3 Source Provider execution
 
-The Worker invokes the source Provider non-interactively and supplies the built-in Handoff
-Prompt through standard input:
+The first explicitly authorized Handoff installs one canonical, versioned
+`sessionmesh-handoff` Skill into both Provider-standard user Skill directories. Installation
+and managed updates are atomic and owner-only. SessionMesh updates only copies carrying its
+ownership marker and refuses an unrelated same-name Skill.
+
+Authorization preflight verifies the managed copies before Task creation. The detached Worker
+revalidates the selected source Provider's copy immediately before Provider startup, then resumes
+the source Session non-interactively and explicitly invokes the Skill through standard input:
 
 ```text
-Codex:  codex exec resume <native-session-id> -
-Claude: claude --print --resume <native-session-id>
+Codex:  codex exec --sandbox read-only resume <native-session-id> -
+        $sessionmesh-handoff
+Claude: claude --print --resume <native-session-id> --bare --permission-mode plan --tools "" --strict-mcp-config
+        /sessionmesh-handoff
 ```
 
-The source Provider returns candidate Markdown as its final output. A Prompt template is
-the v1 mechanism; a Provider Skill adapter is deferred.
+Claude's bare mode keeps explicitly invoked Skills available while disabling unrelated hooks,
+plugins, MCP servers, agents, project instructions, and other customizations; the empty tool set
+prevents tool use. The Skill contains the complete Artifact contract and returns candidate
+Markdown as final output without writing files or invoking tools. The Worker remains the sole
+Artifact writer.
 
 ### 10.4 Ending an Open Current Run
 
@@ -391,9 +402,9 @@ and file mode is `0600`. The Provider has read access to the source Project for 
 but no write access to the Artifact directory; the Successor command is explicitly granted
 read access to its completed Artifact.
 
-The Provider may read existing source files and use deterministic Git branch, status, and
-changed-file metadata supplied by the Worker. It must not edit files, install dependencies,
-commit changes, launch other agents, or run new tests during Artifact generation.
+The managed Skill uses the resumed source Session context without invoking tools. It must not
+edit files, install dependencies, commit changes, launch tools or agents, or run new tests during
+Artifact generation.
 
 ## 12. Successor launch and linkage
 
@@ -523,7 +534,6 @@ separate interaction outcome.
 ## 16. Deferred work
 
 - Replace per-Task Workers with a long-lived daemon behind the same execution interface.
-- Add Provider Skill adapters as an alternative to the built-in Prompt template.
 - Copy or snapshot a complete source Session context into a separate directory.
 - Add configurable timeouts, automatic retention, bulk deletion, and storage reporting.
 - Add terminal adapters for Linux, Windows, iTerm2, Ghostty, Warp, and other terminals.
