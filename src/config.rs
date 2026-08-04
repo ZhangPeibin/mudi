@@ -81,6 +81,16 @@ impl Config {
         self.data_dir.join("index.db")
     }
 
+    /// Authoritative Operation Task Store, separate from the disposable Session index.
+    pub fn task_store_path(&self) -> PathBuf {
+        self.data_dir.join("tasks.db")
+    }
+
+    /// Private root for Task-owned Handoff Artifacts.
+    pub fn artifact_root(&self) -> PathBuf {
+        self.data_dir.join("handoff-artifacts")
+    }
+
     /// Local Profile preferences, stored separately from the disposable Session index.
     pub fn profile_path(&self) -> PathBuf {
         self.data_dir.join("profile.json")
@@ -166,6 +176,26 @@ mod tests {
             config.model_catalog_override_path(),
             PathBuf::from("/sessionmesh-data/models.json")
         );
+    }
+
+    #[test]
+    fn task_store_and_artifacts_are_separate_from_the_disposable_index() {
+        let config = Config {
+            claude_dir: PathBuf::from("/claude"),
+            codex_dir: PathBuf::from("/codex"),
+            data_dir: PathBuf::from("/sessionmesh-data"),
+            extra_dirs: Vec::new(),
+        };
+
+        assert_eq!(
+            config.task_store_path(),
+            PathBuf::from("/sessionmesh-data/tasks.db")
+        );
+        assert_eq!(
+            config.artifact_root(),
+            PathBuf::from("/sessionmesh-data/handoff-artifacts")
+        );
+        assert_ne!(config.task_store_path(), config.index_path());
     }
 
     #[test]

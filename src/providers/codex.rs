@@ -53,6 +53,7 @@ impl ProviderAdapter for CodexAdapter {
             return super::state::LiveState {
                 state: SessionState::Exited,
                 current_run_started_at_ms: None,
+                process_identity: None,
             };
         }
         probe.codex_state(source_path, latest_task_boundary(source_path))
@@ -62,6 +63,87 @@ impl ProviderAdapter for CodexAdapter {
         let text = std::fs::read_to_string(source_path).ok()?;
         Some(parse_current_run_str(&text, started_at_ms))
     }
+
+    fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String> {
+        [
+            "exec",
+            "--sandbox",
+            "read-only",
+            "resume",
+            native_session_id,
+            "-",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    fn handoff_skill_invocation(&self) -> &'static str {
+        "$sessionmesh-handoff"
+    }
+
+    fn resolve_successor_session(
+        &self,
+        cfg: &Config,
+        process: super::state::ProcessIdentity,
+    ) -> Option<String> {
+        resolve_successor_session(cfg, process)
+    }
+}
+
+fn resolve_successor_session(
+    cfg: &Config,
+    process: super::state::ProcessIdentity,
+) -> Option<String> {
+    let roots = cfg
+        .codex_session_roots()
+        .into_iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .collect::<Vec<_>>();
+    let mut rollouts = super::state::files_held_by_process(process)?
+        .into_iter()
+        .filter_map(|path| path.canonicalize().ok())
+        .filter(|path| roots.iter().any(|root| path.starts_with(root)))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
+        })
+        .collect::<Vec<_>>();
+    rollouts.sort();
+    rollouts.dedup();
+    let [rollout] = rollouts.as_slice() else {
+        return None;
+    };
+    let session_id = native_session_id(rollout)?;
+    if session_id.is_empty() || !super::state::process_identity_is_live(process) {
+        return None;
+    }
+    Some(session_id)
+}
+
+fn native_session_id(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut session_id: Option<String> = None;
+    for line in text.lines() {
+        let value: Value = serde_json::from_str(line.trim()).ok()?;
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let observed = value
+            .get("payload")
+            .and_then(|payload| payload.get("id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())?;
+        if session_id
+            .as_deref()
+            .is_some_and(|current| current != observed)
+        {
+            return None;
+        }
+        session_id = Some(observed.to_string());
+    }
+    session_id
 }
 
 /// The latest task boundary in a Codex rollout file: `Some(true)` if the last
