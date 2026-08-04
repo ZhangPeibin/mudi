@@ -27,4 +27,4 @@
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────── lines 1-19 of 19 ┘
-Esc | j/k | c Copy | e Edit title | 1/2/3 | ? Guide | q Quit               fixture ready   ·   Estimated using API rates
+Esc | j/k | c | e Edit title | h Handoff | 1/2/3 | ? | q Quit              fixture ready   ·   Estimated using API rates

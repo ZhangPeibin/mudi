@@ -1,4 +1,17 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ─────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
+                                                                                ┌ TASKS 0 ─────────────────────────────┐
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                │                                      │
+                                                                                └──────────────────────────────────────┘
 ┌ PROJECTS 1 ───────────────────────────────────────────────── 5 OPEN SESSIONS ┐┌ RECENT SIGNALS 5 ───────── latest 5s ┐
 │sessionmesh                                                                   ││WT /Users/fixture/co...  Risk detected│
 │  ...ure/code/sessionmesh | main | WARNING Shared Worktree Risk x2            ││Before 1: CL:critical                 │
@@ -10,19 +23,6 @@
 │  IDLE     Idle Codex  dex-idle       [####--------] 30%  gpt-5.2-... Idle 3m ││                                      │
 │  /Users/fixture/code/sessionmesh-healthy | healthy                           ││                                      │
 │  BUSY     Busy Claude -healthy       [##----------] 20%  claude-h... 4m      ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
 │                                                                              ││                                      │
 │                                                                              ││                                      │
 │                                                                              ││                                      │
