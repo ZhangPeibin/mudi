@@ -24,9 +24,16 @@ use sessionmesh::attention::AttentionEngine;
 use sessionmesh::clipboard::{Clipboard, MacosClipboard};
 use sessionmesh::collector;
 use sessionmesh::config::{theme_override_from_args, Config};
+use sessionmesh::handoff::{
+    CompletionNotice, CompletionNotifier, DetachedWorkerLauncher, HandoffPaths, HandoffService,
+    MacosCompletionNotifier, MacosCurrentRunControl, ProviderExecutables, WorkerLauncher,
+};
+use sessionmesh::handoff_skill::ManagedHandoffSkills;
 use sessionmesh::index::Index;
 use sessionmesh::models::ModelCatalog;
 use sessionmesh::signals::RecentSignalsEngine;
+use sessionmesh::successor::{MacosTerminalLauncher, TerminalLauncher};
+use sessionmesh::tasks::TaskStore;
 use sessionmesh::ui::{draw, Ui, UiAction};
 
 /// Shared snapshot updated by the collector, read by the UI.
@@ -34,9 +41,44 @@ type Shared = Arc<Mutex<Snapshot>>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if sessionmesh::successor::run_successor_from_args(std::env::args_os())? {
+        return Ok(());
+    }
+    if sessionmesh::handoff::run_worker_from_args(std::env::args_os())? {
+        return Ok(());
+    }
     let cfg = Config::load();
     let theme_override = theme_override_from_args(std::env::args());
     let ui = Ui::load(cfg.profile_path(), theme_override.as_deref())?;
+    let handoff_paths = HandoffPaths {
+        task_store: cfg.task_store_path(),
+        artifact_root: cfg.artifact_root(),
+    };
+    let sessionmesh_executable = std::env::current_exe()?;
+    let mut terminal_launcher = MacosTerminalLauncher::new(
+        sessionmesh_executable.clone(),
+        handoff_paths.task_store.clone(),
+    );
+    let provider_executables = ProviderExecutables::discover();
+    let claude_sessions_dir = cfg.claude_sessions_dir();
+    let user_home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let managed_handoff_skills = ManagedHandoffSkills::for_user_home(&user_home, &cfg.claude_dir);
+    let worker_launcher = DetachedWorkerLauncher::new(
+        sessionmesh_executable,
+        handoff_paths.clone(),
+        provider_executables.clone(),
+        claude_sessions_dir.clone(),
+    )
+    .with_managed_handoff_skills(managed_handoff_skills.clone())
+    .with_notifications();
+    let mut handoff = HandoffService::open_with_current_run_control(
+        handoff_paths,
+        provider_executables,
+        worker_launcher,
+        Arc::new(MacosCurrentRunControl::new(claude_sessions_dir)),
+    )?
+    .with_managed_handoff_skills(managed_handoff_skills);
+    handoff.reconcile_tasks(chrono::Utc::now().timestamp_millis())?;
     let shared: Shared = Arc::new(Mutex::new(Snapshot {
         status: "Starting…".to_string(),
         ..Default::default()
@@ -49,7 +91,13 @@ async fn main() -> Result<()> {
     let bg = tokio::spawn(collector_loop(cfg.clone(), shared.clone(), rescan_rx));
 
     // Run the TUI on the current thread.
-    let result = run_tui(shared.clone(), rescan_tx, ui);
+    let result = run_tui(
+        shared.clone(),
+        rescan_tx,
+        ui,
+        &mut handoff,
+        &mut terminal_launcher,
+    );
 
     bg.abort();
     result
@@ -63,6 +111,15 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
         Err(e) => {
             if let Ok(mut s) = shared.lock() {
                 s.status = format!("index error: {e}");
+            }
+            return;
+        }
+    };
+    let task_store = match TaskStore::open(&cfg.task_store_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            if let Ok(mut snapshot) = shared.lock() {
+                snapshot.status = format!("Task Store error: {error}");
             }
             return;
         }
@@ -93,10 +150,20 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
         let alert_counts = alerts::counts(&sessions);
 
         let now = chrono::Local::now().timestamp_millis();
+        let tasks = match task_store.list() {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                if let Ok(mut snapshot) = shared.lock() {
+                    snapshot.status = format!("Task Store error: {error}");
+                }
+                return;
+            }
+        };
         let attention = attention_engine.update(&sessions, now);
         let recent_signals = recent_signals_engine.update(&sessions, now).to_vec();
         let snap = Snapshot {
             sessions,
+            tasks,
             recent_signals,
             attention: Some(attention),
             stats,
@@ -128,7 +195,13 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
     }
 }
 
-fn run_tui(shared: Shared, rescan_tx: mpsc::UnboundedSender<()>, mut ui: Ui) -> Result<()> {
+fn run_tui<L: WorkerLauncher>(
+    shared: Shared,
+    rescan_tx: mpsc::UnboundedSender<()>,
+    mut ui: Ui,
+    handoff: &mut HandoffService<L>,
+    terminal_launcher: &mut dyn TerminalLauncher,
+) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     enter_tui_screen(&mut stdout)?;
@@ -136,7 +209,15 @@ fn run_tui(shared: Shared, rescan_tx: mpsc::UnboundedSender<()>, mut ui: Ui) -> 
     let mut terminal = Terminal::new(backend)?;
 
     let mut clipboard = MacosClipboard;
-    let res = event_loop(&mut terminal, &mut ui, &shared, &rescan_tx, &mut clipboard);
+    let res = event_loop(
+        &mut terminal,
+        &mut ui,
+        &shared,
+        &rescan_tx,
+        &mut clipboard,
+        handoff,
+        terminal_launcher,
+    );
 
     disable_raw_mode()?;
     leave_tui_screen(terminal.backend_mut())?;
@@ -152,12 +233,14 @@ fn leave_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
     execute!(writer, DisableMouseCapture, LeaveAlternateScreen)
 }
 
-fn event_loop<B: ratatui::backend::Backend>(
+fn event_loop<B: ratatui::backend::Backend, L: WorkerLauncher>(
     terminal: &mut Terminal<B>,
     ui: &mut Ui,
     shared: &Shared,
     rescan_tx: &mpsc::UnboundedSender<()>,
     clipboard: &mut dyn Clipboard,
+    handoff: &mut HandoffService<L>,
+    terminal_launcher: &mut dyn TerminalLauncher,
 ) -> Result<()> {
     loop {
         // Snapshot the shared state (cheap clone) so rendering holds no lock.
@@ -185,9 +268,136 @@ fn event_loop<B: ratatui::backend::Backend>(
             UiAction::Copy { field, value } => {
                 ui.copy_to_clipboard(clipboard, field, &value);
             }
+            UiAction::AuthorizeHandoff {
+                source_provider,
+                source_session_id,
+                successor_provider,
+                end_current_run,
+            } => {
+                let message = match snap.sessions.iter().find(|session| {
+                    session.provider == source_provider && session.id == source_session_id
+                }) {
+                    Some(session) => match handoff.authorize_session_to(
+                        session,
+                        successor_provider,
+                        end_current_run,
+                        chrono::Local::now().timestamp_millis(),
+                    ) {
+                        Ok(task) => {
+                            if task.state.is_terminal() {
+                                let _ = MacosCompletionNotifier.notify(&CompletionNotice {
+                                    task_id: task.id.clone(),
+                                    state: task.state,
+                                    source_provider: task.source_provider,
+                                    source_session_id: task.source_session_id.clone(),
+                                });
+                            }
+                            format!(
+                                "Handoff {}: {}",
+                                short_task_id(&task.id),
+                                task.state.label()
+                            )
+                        }
+                        Err(error) => error.to_string(),
+                    },
+                    None => "Handoff is ineligible: source Session is unavailable".to_string(),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+            }
+            UiAction::AcknowledgeTask { task_id } => {
+                if let Err(error) =
+                    handoff.acknowledge_task(&task_id, chrono::Local::now().timestamp_millis())
+                {
+                    ui.show_notice(format!("Task acknowledgement failed: {error}"));
+                }
+                let _ = rescan_tx.send(());
+            }
+            UiAction::CancelTask { task_id } => {
+                let message =
+                    match handoff.cancel_task(&task_id, chrono::Local::now().timestamp_millis()) {
+                        Ok(task) => format!(
+                            "Handoff {}: {}",
+                            short_task_id(&task.id),
+                            task.state.label()
+                        ),
+                        Err(error) => format!("Task cancellation failed: {error}"),
+                    };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+            }
+            UiAction::DeleteTask { task_id } => {
+                let message =
+                    match handoff.delete_task(&task_id, chrono::Local::now().timestamp_millis()) {
+                        Ok(()) => format!("Deleted Task and Artifact {}", short_task_id(&task_id)),
+                        Err(error) => format!("Task deletion failed: {error}"),
+                    };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+            }
+            UiAction::RetryTask {
+                predecessor_task_id,
+                source_provider,
+                source_session_id,
+                successor_provider,
+                end_current_run,
+            } => {
+                let message = match snap.sessions.iter().find(|session| {
+                    session.provider == source_provider && session.id == source_session_id
+                }) {
+                    Some(session) => match handoff.retry_task_to(
+                        &predecessor_task_id,
+                        session,
+                        successor_provider,
+                        end_current_run,
+                        chrono::Local::now().timestamp_millis(),
+                    ) {
+                        Ok(task) => format!(
+                            "Handoff Retry {}: {}",
+                            short_task_id(&task.id),
+                            task.state.label()
+                        ),
+                        Err(error) => error.to_string(),
+                    },
+                    None => "Handoff Retry is ineligible: source Session is unavailable".into(),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+            }
+            UiAction::CopySuccessorCommand { task_id } => match handoff.task(&task_id) {
+                Ok(Some(task)) => match sessionmesh::successor::render_successor_command(&task) {
+                    Ok(command) => {
+                        ui.copy_to_clipboard(clipboard, "Successor Launch Command", &command)
+                    }
+                    Err(error) => ui.show_notice(format!("Copy Command unavailable: {error}")),
+                },
+                Ok(None) => ui.show_notice("Copy Command unavailable: Task is missing"),
+                Err(error) => ui.show_notice(format!("Copy Command unavailable: {error}")),
+            },
+            UiAction::OpenSuccessorTerminal { task_id } => {
+                let message = match terminal_launcher
+                    .open(&task_id, chrono::Local::now().timestamp_millis())
+                {
+                    Ok(()) => "Opened Successor in Terminal.app".to_string(),
+                    Err(error) => format!("Open Terminal failed: {error}"),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+            }
             UiAction::Quit => return Ok(()),
         }
     }
+}
+
+fn short_task_id(task_id: &str) -> String {
+    task_id
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use crate::attention::AttentionSnapshot;
 use crate::collector::ScanStats;
 use crate::domain::{Provider, Session};
 use crate::signals::RecentSignal;
+use crate::tasks::OperationTask;
 use chrono::{Local, TimeZone};
 
 /// The three top-level tabs.
@@ -48,6 +49,7 @@ impl Tab {
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub sessions: Vec<Session>,
+    pub tasks: Vec<OperationTask>,
     pub recent_signals: Vec<RecentSignal>,
     pub attention: Option<AttentionSnapshot>,
     pub stats: ScanStats,
