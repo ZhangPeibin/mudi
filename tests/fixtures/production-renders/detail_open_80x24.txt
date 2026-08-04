@@ -21,4 +21,4 @@
 │Compactions (2)  1m ago  trigger=auto  pre=188.0k                             │
 │  1m ago  trigger=manual  pre=181.0k                                          │
 └──────────────────────────────────────────────────────────── lines 1-20 of 20 ┘
-Esc | j/k | c Copy | e Edit title | ? Guide | q Quit   Estimated using API rates
+Esc | j/k | c | e Edit title | h | ? | q Quit          Estimated using API rates

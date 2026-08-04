@@ -5,6 +5,7 @@
 //! read-only and defends against PID reuse by validating process start time.
 
 use crate::domain::SessionState;
+use chrono::{Local, NaiveDateTime, TimeZone};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,14 @@ pub struct StateDetector {
     claude: HashMap<String, LiveState>,
     /// Absolute rollout paths currently held by Codex, with the holder's
     /// validated process start when it is unambiguous.
-    codex_held: HashMap<PathBuf, Option<i64>>,
+    codex_held: HashMap<PathBuf, Option<ProcessIdentity>>,
+}
+
+/// Exact Provider CLI process evidence used to defend control actions from PID reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessIdentity {
+    pub pid: u32,
+    pub started_at_ms: i64,
 }
 
 /// Live lifecycle evidence and the validated start of its Current Run.
@@ -24,6 +32,7 @@ pub struct StateDetector {
 pub struct LiveState {
     pub state: SessionState,
     pub current_run_started_at_ms: Option<i64>,
+    pub process_identity: Option<ProcessIdentity>,
 }
 
 impl LiveState {
@@ -31,6 +40,7 @@ impl LiveState {
         LiveState {
             state: SessionState::Exited,
             current_run_started_at_ms: None,
+            process_identity: None,
         }
     }
 }
@@ -74,7 +84,8 @@ impl StateDetector {
         };
         LiveState {
             state,
-            current_run_started_at_ms: *started_at_ms,
+            current_run_started_at_ms: started_at_ms.map(|identity| identity.started_at_ms),
+            process_identity: *started_at_ms,
         }
     }
 }
@@ -125,6 +136,10 @@ fn detect_claude(sessions_dir: &Path) -> HashMap<String, LiveState> {
             LiveState {
                 state,
                 current_run_started_at_ms: started_at_ms,
+                process_identity: u32::try_from(pid)
+                    .ok()
+                    .zip(started_at_ms)
+                    .map(|(pid, started_at_ms)| ProcessIdentity { pid, started_at_ms }),
             },
         );
     }
@@ -166,6 +181,69 @@ fn process_matches(pid: i64, expected_started_ms: Option<i64>) -> bool {
     }
 }
 
+pub(crate) fn process_identity_is_live(identity: ProcessIdentity) -> bool {
+    process_identity(identity.pid)
+        .is_some_and(|live| (live.started_at_ms - identity.started_at_ms).abs() <= 2_000)
+}
+
+fn observe_process_identity(pid: u32) -> Option<(ProcessIdentity, bool)> {
+    let output = Command::new("ps")
+        .args(["-o", "stat=", "-o", "lstart=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut fields = stdout.trim().splitn(2, char::is_whitespace);
+    let state = fields.next()?;
+    let started_at_ms = parse_lstart(fields.next()?.trim())?;
+    Some((
+        ProcessIdentity { pid, started_at_ms },
+        state.starts_with('Z'),
+    ))
+}
+
+pub(crate) fn process_identity(pid: u32) -> Option<ProcessIdentity> {
+    observe_process_identity(pid).and_then(|(identity, is_zombie)| (!is_zombie).then_some(identity))
+}
+
+pub(crate) fn process_identity_after_spawn(pid: u32) -> Option<ProcessIdentity> {
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // Child::id remains reserved until its parent reaps it, so even a
+        // zombie's start timestamp is conclusive evidence for this spawn.
+        if let Some((identity, _)) = observe_process_identity(pid) {
+            return Some(identity);
+        }
+    }
+    None
+}
+
+pub(crate) fn files_held_by_process(process: ProcessIdentity) -> Option<Vec<PathBuf>> {
+    if !process_identity_is_live(process) {
+        return None;
+    }
+    let output = Command::new("lsof")
+        .arg("-p")
+        .arg(process.pid.to_string())
+        .arg("-Fn")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let files = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix('n'))
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    process_identity_is_live(process).then_some(files)
+}
+
 /// Parse `ps -o etime` output (`[[DD-]HH:]MM:SS`) into elapsed seconds.
 fn parse_etime(s: &str) -> Option<i64> {
     let (days, hms) = match s.split_once('-') {
@@ -185,7 +263,7 @@ fn parse_etime(s: &str) -> Option<i64> {
 }
 
 /// Rollout files currently held by Codex, joined to each holder's process start.
-fn codex_live_files() -> HashMap<PathBuf, Option<i64>> {
+fn codex_live_files() -> HashMap<PathBuf, Option<ProcessIdentity>> {
     // Find codex PIDs. No match → nothing is held.
     let pids = match Command::new("pgrep").arg("codex").output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
@@ -199,7 +277,8 @@ fn codex_live_files() -> HashMap<PathBuf, Option<i64>> {
     }
 
     let ps_output = Command::new("ps")
-        .args(["-o", "pid=,etime=", "-p", &pids.join(",")])
+        .args(["-o", "pid=,lstart=", "-p", &pids.join(",")])
+        .env("LC_ALL", "C")
         .output()
         .ok()
         .filter(|output| output.status.success())
@@ -226,15 +305,15 @@ fn codex_live_files() -> HashMap<PathBuf, Option<i64>> {
 fn parse_codex_live_files(
     lsof_output: &str,
     ps_output: &str,
-    now_ms: i64,
-) -> HashMap<PathBuf, Option<i64>> {
+    _now_ms: i64,
+) -> HashMap<PathBuf, Option<ProcessIdentity>> {
     let starts: HashMap<&str, i64> = ps_output
         .lines()
         .filter_map(|line| {
-            let mut fields = line.split_whitespace();
+            let mut fields = line.trim().splitn(2, char::is_whitespace);
             let pid = fields.next()?;
-            let elapsed_ms = parse_etime(fields.next()?)?.checked_mul(1_000)?;
-            Some((pid, now_ms.saturating_sub(elapsed_ms)))
+            let started_at_ms = parse_lstart(fields.next()?.trim())?;
+            Some((pid, started_at_ms))
         })
         .collect();
 
@@ -252,16 +331,29 @@ fn parse_codex_live_files(
             continue;
         }
 
-        let started_at_ms = current_pid.and_then(|pid| starts.get(pid).copied());
+        let process_identity = current_pid.and_then(|pid| {
+            Some(ProcessIdentity {
+                pid: pid.parse().ok()?,
+                started_at_ms: starts.get(pid).copied()?,
+            })
+        });
         held.entry(PathBuf::from(name))
             .and_modify(|existing| {
-                if *existing != started_at_ms {
+                if *existing != process_identity {
                     *existing = None;
                 }
             })
-            .or_insert(started_at_ms);
+            .or_insert(process_identity);
     }
     held
+}
+
+fn parse_lstart(value: &str) -> Option<i64> {
+    let local = NaiveDateTime::parse_from_str(value, "%a %b %e %H:%M:%S %Y").ok()?;
+    Local
+        .from_local_datetime(&local)
+        .single()
+        .map(|started| started.timestamp_millis())
 }
 
 #[cfg(test)]
@@ -272,7 +364,13 @@ mod tests {
     fn codex_state_maps_boundary_when_held() {
         let d = StateDetector {
             claude: HashMap::new(),
-            codex_held: HashMap::from([(PathBuf::from("/x/sessions/a.jsonl"), Some(1_234))]),
+            codex_held: HashMap::from([(
+                PathBuf::from("/x/sessions/a.jsonl"),
+                Some(ProcessIdentity {
+                    pid: 42,
+                    started_at_ms: 1_234,
+                }),
+            )]),
         };
         let held = Path::new("/x/sessions/a.jsonl");
         assert_eq!(d.codex_state(held, Some(true)).state, SessionState::Busy);
@@ -281,6 +379,19 @@ mod tests {
         // Not held → exited regardless of boundary.
         let other = Path::new("/x/sessions/b.jsonl");
         assert_eq!(d.codex_state(other, Some(true)).state, SessionState::Exited);
+    }
+
+    #[test]
+    fn missing_codex_rollout_holder_has_no_controllable_current_run() {
+        let detector = StateDetector {
+            claude: HashMap::new(),
+            codex_held: HashMap::new(),
+        };
+
+        let live = detector.codex_state(Path::new("/x/sessions/not-held.jsonl"), Some(true));
+
+        assert_eq!(live.state, SessionState::Exited);
+        assert_eq!(live.process_identity, None);
     }
 
     #[test]
@@ -360,17 +471,69 @@ mod tests {
     }
 
     #[test]
+    fn stale_claude_pid_state_is_not_treated_as_an_open_current_run() {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let dir = std::env::temp_dir().join(format!(
+            "sessionmesh-claude-stale-state-{}-{now_ms}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("state.json"),
+            format!(
+                "{{\"pid\":{},\"sessionId\":\"stale-session\",\"status\":\"idle\",\"startedAt\":0}}",
+                std::process::id()
+            ),
+        )
+        .unwrap();
+
+        let live = StateDetector::gather(&dir).claude_state("stale-session");
+
+        assert_eq!(live.state, SessionState::Exited);
+        assert_eq!(live.process_identity, None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn codex_live_file_uses_the_holding_process_start_as_run_boundary() {
         let now_ms = 1_800_000;
-        let ps = "42 01:30\n";
+        let ps = "42 Mon Aug  3 12:34:56 2026\n";
         let lsof = "p42\nn/tmp/codex/sessions/rollout-live.jsonl\n";
 
         let live = parse_codex_live_files(lsof, ps, now_ms);
 
         assert_eq!(
             live.get(Path::new("/tmp/codex/sessions/rollout-live.jsonl")),
-            Some(&Some(1_710_000))
+            Some(&Some(ProcessIdentity {
+                pid: 42,
+                started_at_ms: Local
+                    .with_ymd_and_hms(2026, 8, 3, 12, 34, 56)
+                    .single()
+                    .unwrap()
+                    .timestamp_millis(),
+            }))
         );
+    }
+
+    #[test]
+    fn codex_process_identity_is_stable_across_rechecks() {
+        let ps = "42 Mon Aug  3 12:34:56 2026\n";
+        let lsof = "p42\nn/tmp/codex/sessions/rollout-live.jsonl\n";
+
+        let first = parse_codex_live_files(lsof, ps, 1_800_123);
+        let second = parse_codex_live_files(lsof, ps, 9_999_987);
+
+        assert_eq!(
+            first.get(Path::new("/tmp/codex/sessions/rollout-live.jsonl")),
+            second.get(Path::new("/tmp/codex/sessions/rollout-live.jsonl"))
+        );
+        assert!(matches!(
+            first.get(Path::new("/tmp/codex/sessions/rollout-live.jsonl")),
+            Some(Some(ProcessIdentity { pid: 42, .. }))
+        ));
     }
 
     #[test]

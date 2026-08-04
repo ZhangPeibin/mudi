@@ -16,6 +16,7 @@ use crate::domain::{
 };
 use crate::session_labels::SessionLabels;
 use crate::signals::{ContextAlertLevel, RecentSignal, RecentSignalKind};
+use crate::tasks::OperationTask;
 use chrono::Local;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -55,8 +56,36 @@ struct SessionIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct HandoffConfirmation {
+    session: SessionIdentity,
+    source_state: SessionState,
+    successor_provider: Provider,
+    end_current_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskCancellationConfirmation {
+    task_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskDeletionConfirmation {
+    task_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskRetryConfirmation {
+    predecessor_task_id: String,
+    session: SessionIdentity,
+    source_state: SessionState,
+    successor_provider: Provider,
+    end_current_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct DetailView {
     session: SessionIdentity,
+    task_id: Option<String>,
     scroll: usize,
     origin_signal: Option<RecentSignal>,
     copy_menu_selected: Option<usize>,
@@ -113,6 +142,7 @@ impl CopyField {
 enum AllRegion {
     Now,
     RecentSignals,
+    Tasks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,6 +259,7 @@ pub struct Ui {
     pub selected: usize,
     all_region: AllRegion,
     signal_selected: usize,
+    task_selected: usize,
     detail: Option<DetailView>,
     expanded_provider_disclosures: HashSet<ProviderDisclosureKey>,
     guide_open: bool,
@@ -238,6 +269,10 @@ pub struct Ui {
     // Wrapping depends on the rendered viewport, so draw records the latest usable limit.
     guide_max_scroll: StateCell<usize>,
     edit_title: Option<TitleEditor>,
+    handoff_confirmation: Option<HandoffConfirmation>,
+    task_cancellation_confirmation: Option<TaskCancellationConfirmation>,
+    task_deletion_confirmation: Option<TaskDeletionConfirmation>,
+    task_retry_confirmation: Option<TaskRetryConfirmation>,
     labels: SessionLabels,
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
@@ -257,7 +292,38 @@ struct ProfilePreferences {
 pub enum UiAction {
     None,
     Rescan,
-    Copy { field: &'static str, value: String },
+    Copy {
+        field: &'static str,
+        value: String,
+    },
+    AuthorizeHandoff {
+        source_provider: Provider,
+        source_session_id: String,
+        successor_provider: Provider,
+        end_current_run: bool,
+    },
+    AcknowledgeTask {
+        task_id: String,
+    },
+    CancelTask {
+        task_id: String,
+    },
+    DeleteTask {
+        task_id: String,
+    },
+    RetryTask {
+        predecessor_task_id: String,
+        source_provider: Provider,
+        source_session_id: String,
+        successor_provider: Provider,
+        end_current_run: bool,
+    },
+    CopySuccessorCommand {
+        task_id: String,
+    },
+    OpenSuccessorTerminal {
+        task_id: String,
+    },
     Quit,
 }
 
@@ -268,6 +334,7 @@ impl Default for Ui {
             selected: 0,
             all_region: AllRegion::Now,
             signal_selected: 0,
+            task_selected: 0,
             detail: None,
             expanded_provider_disclosures: HashSet::new(),
             guide_open: false,
@@ -276,6 +343,10 @@ impl Default for Ui {
             guide_scroll: 0,
             guide_max_scroll: StateCell::new(UNMEASURED_GUIDE_MAX_SCROLL),
             edit_title: None,
+            handoff_confirmation: None,
+            task_cancellation_confirmation: None,
+            task_deletion_confirmation: None,
+            task_retry_confirmation: None,
             labels: SessionLabels::default(),
             profile_path: None,
             profile: ProfilePreferences::default(),
@@ -339,6 +410,10 @@ impl Ui {
         self.status_notice = Some((message, Instant::now() + Duration::from_secs(2)));
     }
 
+    pub fn show_notice(&mut self, message: impl Into<String>) {
+        self.status_notice = Some((message.into(), Instant::now() + Duration::from_secs(4)));
+    }
+
     /// Apply one user key through the UI's public interaction interface.
     pub fn handle_key(
         &mut self,
@@ -348,6 +423,116 @@ impl Ui {
         self.clamp_selections(snap);
         if self.edit_title.is_some() {
             self.handle_title_editor_key(key);
+            return Ok(UiAction::None);
+        }
+        if let Some(target) = self.handoff_confirmation.clone() {
+            return match key.code {
+                crossterm::event::KeyCode::Esc => {
+                    self.handoff_confirmation = None;
+                    Ok(UiAction::None)
+                }
+                crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right => {
+                    if let Some(confirmation) = self.handoff_confirmation.as_mut() {
+                        confirmation.successor_provider = match confirmation.successor_provider {
+                            Provider::ClaudeCode => Provider::CodexCli,
+                            Provider::CodexCli => Provider::ClaudeCode,
+                        };
+                    }
+                    Ok(UiAction::None)
+                }
+                crossterm::event::KeyCode::Enter => {
+                    self.handoff_confirmation = None;
+                    Ok(UiAction::AuthorizeHandoff {
+                        source_provider: target.session.provider,
+                        source_session_id: target.session.native_id,
+                        successor_provider: target.successor_provider,
+                        end_current_run: target.end_current_run,
+                    })
+                }
+                _ => Ok(UiAction::None),
+            };
+        }
+        if let Some(target) = self.task_cancellation_confirmation.clone() {
+            return match key.code {
+                crossterm::event::KeyCode::Esc => {
+                    self.task_cancellation_confirmation = None;
+                    Ok(UiAction::None)
+                }
+                crossterm::event::KeyCode::Enter => {
+                    self.task_cancellation_confirmation = None;
+                    Ok(UiAction::CancelTask {
+                        task_id: target.task_id,
+                    })
+                }
+                _ => Ok(UiAction::None),
+            };
+        }
+        if let Some(target) = self.task_deletion_confirmation.clone() {
+            return match key.code {
+                crossterm::event::KeyCode::Esc => {
+                    self.task_deletion_confirmation = None;
+                    Ok(UiAction::None)
+                }
+                crossterm::event::KeyCode::Enter => {
+                    self.task_deletion_confirmation = None;
+                    Ok(UiAction::DeleteTask {
+                        task_id: target.task_id,
+                    })
+                }
+                _ => Ok(UiAction::None),
+            };
+        }
+        if let Some(target) = self.task_retry_confirmation.clone() {
+            return match key.code {
+                crossterm::event::KeyCode::Esc => {
+                    self.task_retry_confirmation = None;
+                    Ok(UiAction::None)
+                }
+                crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right => {
+                    if let Some(confirmation) = self.task_retry_confirmation.as_mut() {
+                        confirmation.successor_provider = match confirmation.successor_provider {
+                            Provider::ClaudeCode => Provider::CodexCli,
+                            Provider::CodexCli => Provider::ClaudeCode,
+                        };
+                    }
+                    Ok(UiAction::None)
+                }
+                crossterm::event::KeyCode::Enter => {
+                    self.task_retry_confirmation = None;
+                    Ok(UiAction::RetryTask {
+                        predecessor_task_id: target.predecessor_task_id,
+                        source_provider: target.session.provider,
+                        source_session_id: target.session.native_id,
+                        successor_provider: target.successor_provider,
+                        end_current_run: target.end_current_run,
+                    })
+                }
+                _ => Ok(UiAction::None),
+            };
+        }
+        if key.code == crossterm::event::KeyCode::Char('r')
+            && self
+                .detail_task(snap)
+                .is_some_and(OperationTask::offers_retry)
+        {
+            let task = self.detail_task(snap).expect("checked above");
+            let source_state = snap
+                .sessions
+                .iter()
+                .find(|session| {
+                    session.provider == task.source_provider && session.id == task.source_session_id
+                })
+                .map_or(SessionState::Exited, |session| session.state);
+            self.task_retry_confirmation = Some(TaskRetryConfirmation {
+                predecessor_task_id: task.id.clone(),
+                session: SessionIdentity {
+                    provider: task.source_provider,
+                    native_id: task.source_session_id.clone(),
+                },
+                source_state,
+                successor_provider: task.source_provider,
+                end_current_run: source_state.is_open(),
+            });
             return Ok(UiAction::None);
         }
         if key.code == crossterm::event::KeyCode::Char('q')
@@ -379,12 +564,69 @@ impl Ui {
             crossterm::event::KeyCode::Char('e') if self.labels.is_editable() => {
                 self.open_title_editor(snap);
             }
-            crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::BackTab
-                if self.detail.is_none() && self.tab == Tab::All =>
+            crossterm::event::KeyCode::Char('h') if self.detail_session(snap).is_some() => {
+                let session = self.detail_session(snap).expect("checked above");
+                self.handoff_confirmation = Some(HandoffConfirmation {
+                    session: SessionIdentity {
+                        provider: session.provider,
+                        native_id: session.id.clone(),
+                    },
+                    source_state: session.state,
+                    successor_provider: session.provider,
+                    end_current_run: session.state.is_open(),
+                });
+            }
+            crossterm::event::KeyCode::Char('x')
+                if self
+                    .detail_task(snap)
+                    .is_some_and(|task| !task.state.is_terminal()) =>
             {
+                let task_id = self.detail_task(snap).expect("checked above").id.clone();
+                self.task_cancellation_confirmation =
+                    Some(TaskCancellationConfirmation { task_id });
+            }
+            crossterm::event::KeyCode::Char('d')
+                if self
+                    .detail_task(snap)
+                    .is_some_and(OperationTask::offers_deletion) =>
+            {
+                let task_id = self.detail_task(snap).expect("checked above").id.clone();
+                self.task_deletion_confirmation = Some(TaskDeletionConfirmation { task_id });
+            }
+            crossterm::event::KeyCode::Char('c')
+                if self.detail_task(snap).is_some_and(|task| {
+                    task.state == crate::tasks::OperationTaskState::Ready
+                        && !task.is_being_deleted()
+                        && task.successor_launch_plan.is_some()
+                }) =>
+            {
+                return Ok(UiAction::CopySuccessorCommand {
+                    task_id: self.detail_task(snap).expect("checked above").id.clone(),
+                });
+            }
+            crossterm::event::KeyCode::Char('o')
+                if self.detail_task(snap).is_some_and(|task| {
+                    task.state == crate::tasks::OperationTaskState::Ready
+                        && !task.is_being_deleted()
+                        && task.successor_launch_plan.is_some()
+                }) =>
+            {
+                return Ok(UiAction::OpenSuccessorTerminal {
+                    task_id: self.detail_task(snap).expect("checked above").id.clone(),
+                });
+            }
+            crossterm::event::KeyCode::Tab if self.detail.is_none() && self.tab == Tab::All => {
                 self.all_region = match self.all_region {
                     AllRegion::Now => AllRegion::RecentSignals,
+                    AllRegion::RecentSignals => AllRegion::Tasks,
+                    AllRegion::Tasks => AllRegion::Now,
+                };
+            }
+            crossterm::event::KeyCode::BackTab if self.detail.is_none() && self.tab == Tab::All => {
+                self.all_region = match self.all_region {
+                    AllRegion::Now => AllRegion::Tasks,
                     AllRegion::RecentSignals => AllRegion::Now,
+                    AllRegion::Tasks => AllRegion::RecentSignals,
                 };
             }
             crossterm::event::KeyCode::Char('c') if self.detail.is_some() => {
@@ -449,6 +691,22 @@ impl Ui {
                 self.signal_selected = self.signal_selected.saturating_sub(1);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
+                if self.detail.is_none()
+                    && self.tab == Tab::All
+                    && self.all_region == AllRegion::Tasks =>
+            {
+                if self.task_selected + 1 < snap.tasks.len() {
+                    self.task_selected += 1;
+                }
+            }
+            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
+                if self.detail.is_none()
+                    && self.tab == Tab::All
+                    && self.all_region == AllRegion::Tasks =>
+            {
+                self.task_selected = self.task_selected.saturating_sub(1);
+            }
+            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
                 if self.detail.is_none() =>
             {
                 let visible_len = self.selectable_len(snap);
@@ -461,8 +719,37 @@ impl Ui {
             {
                 self.selected = self.selected.saturating_sub(1);
             }
+            crossterm::event::KeyCode::Enter
+                if self.detail.is_none()
+                    && self.tab == Tab::All
+                    && self.all_region == AllRegion::Tasks =>
+            {
+                if let Some(action) = self.open_selected_task(snap) {
+                    return Ok(action);
+                }
+            }
             crossterm::event::KeyCode::Enter if self.detail.is_none() => {
                 self.activate_selection(snap);
+            }
+            crossterm::event::KeyCode::Enter if self.detail_task(snap).is_some() => {
+                let successor = self.detail_task(snap).and_then(|task| {
+                    let session_id = task.successor_session_id.as_ref()?;
+                    snap.sessions.iter().find(|session| {
+                        session.provider == task.successor_provider && &session.id == session_id
+                    })
+                });
+                if let Some(successor) = successor {
+                    self.detail = Some(DetailView {
+                        session: SessionIdentity {
+                            provider: successor.provider,
+                            native_id: successor.id.clone(),
+                        },
+                        task_id: None,
+                        scroll: 0,
+                        origin_signal: None,
+                        copy_menu_selected: None,
+                    });
+                }
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
                 if self.detail.is_some() =>
@@ -548,7 +835,12 @@ impl Ui {
         self.selected = 0;
         self.all_region = AllRegion::Now;
         self.signal_selected = 0;
+        self.task_selected = 0;
         self.detail = None;
+        self.handoff_confirmation = None;
+        self.task_cancellation_confirmation = None;
+        self.task_deletion_confirmation = None;
+        self.task_retry_confirmation = None;
     }
 
     fn guide_category_for_context(&self) -> GuideCategory {
@@ -613,6 +905,14 @@ impl Ui {
                 self.signal_selected = index;
             }
             self.clamp_selections(snap);
+            self.detail = None;
+            return;
+        }
+        if let Some(task_id) = detail.task_id {
+            self.all_region = AllRegion::Tasks;
+            if let Some(index) = snap.tasks.iter().position(|task| task.id == task_id) {
+                self.task_selected = index;
+            }
             self.detail = None;
             return;
         }
@@ -682,13 +982,27 @@ impl Ui {
         } else if self.signal_selected >= snap.recent_signals.len() {
             self.signal_selected = snap.recent_signals.len() - 1;
         }
+        if snap.tasks.is_empty() {
+            self.task_selected = 0;
+        } else if self.task_selected >= snap.tasks.len() {
+            self.task_selected = snap.tasks.len() - 1;
+        }
     }
 
     fn detail_session<'a>(&self, snap: &'a Snapshot) -> Option<&'a Session> {
-        let identity = &self.detail.as_ref()?.session;
+        let detail = self.detail.as_ref()?;
+        if detail.task_id.is_some() {
+            return None;
+        }
+        let identity = &detail.session;
         snap.sessions.iter().find(|session| {
             session.provider == identity.provider && session.id == identity.native_id
         })
+    }
+
+    fn detail_task<'a>(&self, snap: &'a Snapshot) -> Option<&'a OperationTask> {
+        let task_id = self.detail.as_ref()?.task_id.as_deref()?;
+        snap.tasks.iter().find(|task| task.id == task_id)
     }
 
     fn selected_session<'a>(&self, snap: &'a Snapshot) -> Option<&'a Session> {
@@ -808,6 +1122,24 @@ impl Ui {
         )
     }
 
+    fn open_selected_task(&mut self, snap: &Snapshot) -> Option<UiAction> {
+        let task = snap.tasks.get(self.task_selected)?;
+        self.detail = Some(DetailView {
+            session: SessionIdentity {
+                provider: task.source_provider,
+                native_id: task.source_session_id.clone(),
+            },
+            task_id: Some(task.id.clone()),
+            scroll: 0,
+            origin_signal: None,
+            copy_menu_selected: None,
+        });
+        (task.state.is_terminal() && task.acknowledged_at_ms.is_none() && !task.is_being_deleted())
+            .then(|| UiAction::AcknowledgeTask {
+                task_id: task.id.clone(),
+            })
+    }
+
     fn activate_selection(&mut self, snap: &Snapshot) {
         if self.tab.provider().is_some() {
             match self.provider_targets(snap).into_iter().nth(self.selected) {
@@ -817,6 +1149,7 @@ impl Ui {
                             provider: session.provider,
                             native_id: session.id.clone(),
                         },
+                        task_id: None,
                         scroll: 0,
                         origin_signal: None,
                         copy_menu_selected: None,
@@ -850,6 +1183,7 @@ impl Ui {
                                 provider: *provider,
                                 native_id: session_id.clone(),
                             },
+                            task_id: None,
                             scroll: 0,
                             origin_signal: Some(signal.clone()),
                             copy_menu_selected: None,
@@ -885,6 +1219,7 @@ impl Ui {
                     provider: session.provider,
                     native_id: session.id.clone(),
                 },
+                task_id: None,
                 scroll: 0,
                 origin_signal: None,
                 copy_menu_selected: None,
@@ -947,6 +1282,226 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     if ui.edit_title.is_some() {
         draw_title_editor(f, ui);
     }
+
+    if ui.handoff_confirmation.is_some() {
+        draw_handoff_confirmation(f, snap, ui);
+    }
+    if ui.task_cancellation_confirmation.is_some() {
+        draw_task_cancellation_confirmation(f, ui);
+    }
+    if ui.task_deletion_confirmation.is_some() {
+        draw_task_deletion_confirmation(f, ui);
+    }
+    if ui.task_retry_confirmation.is_some() {
+        draw_task_retry_confirmation(f, ui);
+    }
+}
+
+fn draw_task_retry_confirmation(f: &mut Frame, ui: &Ui) {
+    let Some(target) = ui.task_retry_confirmation.as_ref() else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let area = centered_rect(68, 52, f.area());
+    f.render_widget(Clear, area);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Authorize Retry?",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("Previous Task  {}", target.predecessor_task_id)),
+        Line::from(format!(
+            "Provider       {}",
+            target.session.provider.label()
+        )),
+        Line::from(format!("Session ID     {}", target.session.native_id)),
+        Line::from(match target.successor_provider {
+            Provider::ClaudeCode => "Successor  [Claude Code]  Codex CLI",
+            Provider::CodexCli => "Successor  Claude Code  [Codex CLI]",
+        }),
+        Line::from(""),
+        Line::from("A new Task, deadlines, Artifact, and authorization will be used."),
+    ];
+    if target.end_current_run {
+        lines.push(Line::from(format!(
+            "The {} Current Run may be ended after revalidation.",
+            match target.source_state {
+                SessionState::Busy => "Busy",
+                SessionState::Idle => "Idle",
+                SessionState::Exited => "Exited",
+            }
+        )));
+    }
+    lines.extend([
+        Line::from("The previous Task remains unchanged."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter Authorize   Esc Cancel",
+            Style::default().fg(theme.accent),
+        )),
+    ]);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(" Retry Handoff "),
+            )
+            .style(Style::default().fg(theme.foreground).bg(theme.background)),
+        area,
+    );
+}
+
+fn draw_task_cancellation_confirmation(f: &mut Frame, ui: &Ui) {
+    let Some(target) = ui.task_cancellation_confirmation.as_ref() else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let area = centered_rect(64, 38, f.area());
+    f.render_widget(Clear, area);
+    let lines = vec![
+        Line::from(Span::styled(
+            "Cancel Task?",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("Task ID  {}", target.task_id)),
+        Line::from(""),
+        Line::from("A valid Handoff Result can still become Ready."),
+        Line::from("No Prompt will be resent and no Retry will start."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter Confirm   Esc Keep Task",
+            Style::default().fg(theme.accent),
+        )),
+    ];
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(" Cancel Task "),
+            )
+            .style(Style::default().fg(theme.foreground).bg(theme.background)),
+        area,
+    );
+}
+
+fn draw_task_deletion_confirmation(f: &mut Frame, ui: &Ui) {
+    let Some(target) = ui.task_deletion_confirmation.as_ref() else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let area = centered_rect(70, 46, f.area());
+    f.render_widget(Clear, area);
+    let lines = vec![
+        Line::from(Span::styled(
+            "Delete Task and Artifact?",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("Task ID  {}", target.task_id)),
+        Line::from(""),
+        Line::from("This irreversible action removes the Operation Task,"),
+        Line::from("its Handoff Artifact, Successor Launch Plan, and interaction metadata."),
+        Line::from("Source and Successor Sessions remain unchanged."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter Delete   Esc Keep Task",
+            Style::default().fg(theme.accent),
+        )),
+    ];
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(" Delete Task and Artifact "),
+            )
+            .style(Style::default().fg(theme.foreground).bg(theme.background)),
+        area,
+    );
+}
+
+fn draw_handoff_confirmation(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
+    let Some(target) = ui.handoff_confirmation.as_ref() else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let session = snap.sessions.iter().find(|session| {
+        session.provider == target.session.provider && session.id == target.session.native_id
+    });
+    let cwd = session
+        .and_then(|session| session.cwd.as_deref())
+        .unwrap_or("N/A");
+    let area = centered_rect(72, 64, f.area());
+    f.render_widget(Clear, area);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Authorize one Handoff Operation?",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("Provider    {}", target.session.provider.label())),
+        Line::from(format!("Session ID  {}", target.session.native_id)),
+        Line::from(format!("cwd         {cwd}")),
+        Line::from(match target.successor_provider {
+            Provider::ClaudeCode => "Successor  [Claude Code]  Codex CLI",
+            Provider::CodexCli => "Successor  Claude Code  [Codex CLI]",
+        }),
+    ];
+    if target.end_current_run {
+        let current_run_state = match target.source_state {
+            SessionState::Busy => "Busy",
+            SessionState::Idle => "Idle",
+            SessionState::Exited => "Exited",
+        };
+        lines.extend([
+            Line::from(format!("Current Run {current_run_state}")),
+            Line::from(""),
+            Line::from("This authorization may end this one Current Run."),
+            Line::from("A Busy Current Run waits until Idle and is never interrupted."),
+            Line::from("SessionMesh revalidates it before requesting graceful exit."),
+            Line::from("The users Terminal and shell remain open."),
+        ]);
+    }
+    lines.extend([
+        Line::from(""),
+        Line::from("Generation keeps the source Project and Worktree read-only."),
+        Line::from("The detached Task continues after SessionMesh closes."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter Authorize   Esc Cancel",
+            Style::default().fg(theme.accent),
+        )),
+    ]);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(" Authorize Handoff "),
+            )
+            .style(Style::default().fg(theme.foreground).bg(theme.background)),
+        area,
+    );
 }
 
 fn draw_terminal_too_small(f: &mut Frame, theme: Theme) {
@@ -1249,9 +1804,18 @@ fn guide_content(
             Line::from("Tab / Shift+Tab  Change region or Guide pane"),
             Line::from("Up/Down or j/k  Move or scroll"),
             Line::from("Enter  Inspect or expand"),
+            Line::from("Enter  View an indexed linked Successor from Task Detail"),
             Line::from("Esc  Back or close"),
             Line::from("c  Copy source metadata in Session Detail"),
-            Line::from("r  Refresh"),
+            Line::from("h  Authorize a Handoff from Session Detail"),
+            Line::from("Left/Right  Choose a Successor Provider"),
+            Line::from("o  Open a Ready Successor in Terminal.app"),
+            Line::from("c  Copy a Ready Successor command"),
+            Line::from("Exact launched-process evidence confirms Successor linkage."),
+            Line::from("x  Cancel a non-terminal Task after confirmation"),
+            Line::from("r  Refresh, or Retry an eligible Task"),
+            Line::from("d  Delete a terminal Task and owned Artifact after confirmation"),
+            Line::from("Tasks and Artifacts never expire automatically."),
             Line::from("?  Guide"),
             Line::from("q  Quit"),
         ],
@@ -1455,21 +2019,43 @@ fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
 
 fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
-    let (now_area, signals_area) = if area.width >= 120 {
-        let areas = Layout::default()
+    let now_ms = snapshot_now_ms(snap);
+    let (now_area, tasks_area, signals_area) = if area.width >= 120 {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .split(area);
+        let upper = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
+            .split(rows[0]);
+        let lower = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
+            .split(rows[1]);
+        (lower[0], Some(upper[1]), Some(lower[1]))
+    } else if !snap.tasks.is_empty() && area.height >= 18 {
+        let areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Length(10),
+                Constraint::Min(3),
+            ])
             .split(area);
-        (areas[0], Some(areas[1]))
+        (areas[1], Some(areas[0]), Some(areas[2]))
     } else if area.height >= 14 {
         let areas = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(14), Constraint::Min(0)])
             .split(area);
-        (areas[0], (areas[1].height >= 3).then_some(areas[1]))
+        (areas[0], None, (areas[1].height >= 3).then_some(areas[1]))
     } else {
-        (area, None)
+        (area, None, None)
     };
+    if let Some(tasks_area) = tasks_area {
+        draw_minimal_tasks(f, tasks_area, &snap.tasks, now_ms, ui);
+    }
     let attention = current_attention(snap);
     let now = group_open_sessions(&snap.sessions, &attention);
     let visible_sessions = now
@@ -1487,7 +2073,6 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .map(|session| (session.provider, session.id.as_str()))
         .collect::<Vec<_>>();
     let mut titles = ui.labels.titles_for(&visible_identities).into_iter();
-    let now_ms = snapshot_now_ms(snap);
     let open_project_count = now
         .iter()
         .filter(|project| project.project.is_some())
@@ -1608,6 +2193,87 @@ fn draw_all(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     if let Some(signals_area) = signals_area {
         draw_recent_signals(f, signals_area, &snap.recent_signals, now_ms, ui);
     }
+}
+
+fn draw_minimal_tasks(f: &mut Frame, area: Rect, tasks: &[OperationTask], now_ms: i64, ui: &Ui) {
+    let theme = ui.theme.palette();
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    let content_width = area.width.saturating_sub(2) as usize;
+    let offset = ui
+        .task_selected
+        .saturating_sub(visible_rows.saturating_sub(1));
+    let task_identities = tasks
+        .iter()
+        .map(|task| (task.source_provider, task.source_session_id.as_str()))
+        .collect::<Vec<_>>();
+    let task_titles = ui.labels.titles_for(&task_identities);
+    let lines = tasks
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible_rows)
+        .map(|(index, task)| {
+            let provider = match task.source_provider {
+                Provider::ClaudeCode => "CL",
+                Provider::CodexCli => "CX",
+            };
+            let unread = task.state.is_terminal() && task.acknowledged_at_ms.is_none();
+            let unread_label = if unread { "NEW " } else { "    " };
+            let state = task.state.label();
+            let transition_age = fmt_relative(task.state_changed_at_ms, now_ms);
+            let fixed_width = UnicodeWidthStr::width(unread_label)
+                + UnicodeWidthStr::width("Handoff ")
+                + UnicodeWidthStr::width(provider)
+                + UnicodeWidthStr::width(":")
+                + UnicodeWidthStr::width(" ")
+                + UnicodeWidthStr::width(state)
+                + UnicodeWidthStr::width(" ")
+                + UnicodeWidthStr::width(transition_age.as_str());
+            let source_label_width = content_width.saturating_sub(fixed_width).max(1);
+            let resolved_label = &task_titles[index];
+            let source_label = fit_title(resolved_label, source_label_width, true);
+            let base_style = if unread {
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.foreground)
+            };
+            let style = if ui.all_region == AllRegion::Tasks && index == ui.task_selected {
+                selected_style(theme)
+            } else {
+                base_style
+            };
+            Line::from(Span::styled(
+                format!("{unread_label}Handoff {provider}:{source_label} {state} {transition_age}"),
+                style,
+            ))
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(if ui.all_region == AllRegion::Tasks {
+                    theme.accent
+                } else {
+                    theme.border
+                }))
+                .title(Line::from(vec![
+                    Span::styled(
+                        " TASKS ",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{} ", tasks.len()),
+                        Style::default().fg(theme.foreground),
+                    ),
+                ])),
+        ),
+        area,
+    );
 }
 
 fn draw_recent_signals(f: &mut Frame, area: Rect, signals: &[RecentSignal], now_ms: i64, ui: &Ui) {
@@ -1831,7 +2497,7 @@ fn recent_signal_lines(signal: &RecentSignal, width: usize, titles: &VisibleTitl
     };
     let fixed_width = provider.chars().count() + evidence.chars().count() + 2;
     let session_width = width.saturating_sub(fixed_width);
-    let session = shorten_end(&title, session_width);
+    let session = shorten_end(title, session_width);
     let text = if session.is_empty() {
         format!("{provider} {evidence}")
     } else {
@@ -3020,6 +3686,10 @@ fn push_usage_summary(
 }
 
 fn draw_detail(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
+    if let Some(task) = ui.detail_task(snap) {
+        draw_task_detail(f, area, task, snap, ui);
+        return;
+    }
     let Some(s) = ui.detail_session(snap) else {
         return;
     };
@@ -3210,6 +3880,291 @@ fn draw_detail(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .scroll((scroll as u16, 0))
         .wrap(wrap);
     f.render_widget(p, area);
+}
+
+fn draw_task_detail(f: &mut Frame, area: Rect, task: &OperationTask, snap: &Snapshot, ui: &Ui) {
+    let theme = ui.theme.palette();
+    let field = |label: &str, value: String| {
+        Line::from(vec![
+            Span::styled(format!("{label:<24}"), Style::default().fg(theme.muted)),
+            Span::styled(value, Style::default().fg(theme.foreground)),
+        ])
+    };
+    let successor_provider = task.successor_provider;
+    let successor_is_indexed = task
+        .successor_session_id
+        .as_ref()
+        .is_some_and(|session_id| {
+            snap.sessions.iter().any(|session| {
+                session.provider == task.successor_provider && &session.id == session_id
+            })
+        });
+    let result_ready = task.state == crate::tasks::OperationTaskState::Ready
+        && task.artifact_path.is_some()
+        && task.successor_launch_plan.is_some();
+    let acknowledgement = match (task.state.is_terminal(), task.acknowledged_at_ms) {
+        (true, Some(at_ms)) => format!("Acknowledged {}", fmt_datetime(at_ms)),
+        (true, None) => "Unread terminal outcome".into(),
+        (false, _) => "Not terminal".into(),
+    };
+    let failure_code = task.failure_code.as_deref().unwrap_or("None");
+    let execution_trace = format!(
+        "Worker {} | Provider {} | Prompt {}",
+        task.worker_process_identity
+            .map(|identity| format!("started {}", fmt_datetime(identity.started_at_ms)))
+            .unwrap_or_else(|| "not started".into()),
+        task.provider_process_identity
+            .map(|identity| format!("started {}", fmt_datetime(identity.started_at_ms)))
+            .unwrap_or_else(|| "not started".into()),
+        task.prompt_sent_at_ms
+            .map(|at_ms| format!("sent {}", fmt_datetime(at_ms)))
+            .unwrap_or_else(|| "not sent".into()),
+    );
+    let provider_exit = task
+        .provider_exited_at_ms
+        .map(|at_ms| {
+            format!(
+                "Provider exited {} | Exit code {}",
+                fmt_datetime(at_ms),
+                task.provider_exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "Unavailable".into())
+            )
+        })
+        .unwrap_or_else(|| "Not observed".into());
+    let failure_summary = match task.failure_code.as_deref() {
+        Some("worker_start_failed") => "Detached Worker could not start.",
+        Some("handoff_skill_missing") => {
+            "The managed Handoff Skill was missing before Provider startup."
+        }
+        Some("handoff_skill_stale") => "The managed Handoff Skill changed after authorization.",
+        Some("handoff_skill_unreadable") => {
+            "The managed Handoff Skill became unreadable before Provider startup."
+        }
+        Some("handoff_skill_conflict") => {
+            "The managed Handoff Skill path contains a conflicting entry."
+        }
+        Some("provider_invocation_failed") => "Provider invocation failed.",
+        Some("provider_outcome_uncertain") => "Provider outcome could not be established safely.",
+        Some("invalid_artifact") => "Candidate Markdown did not satisfy the Artifact contract.",
+        Some("artifact_publish_failed") => "Validated Artifact publication failed.",
+        Some("current_run_authority_expired") => {
+            "Unused Current Run authority expired at its deadline."
+        }
+        Some("source_current_run_identity_changed") => {
+            "The exact source Current Run identity changed."
+        }
+        Some("source_current_run_control_uncertain") => {
+            "The graceful-exit outcome could not be established safely."
+        }
+        Some("source_current_run_observation_uncertain") => {
+            "The source Current Run could not be observed conclusively."
+        }
+        Some("cancelled_by_user") => "Cancellation completed with no valid Handoff Result.",
+        Some("worker_start_deadline_exceeded") => {
+            "The detached Worker did not establish startup within 30 seconds."
+        }
+        Some("running_deadline_exceeded") => {
+            "Generation reached 30 minutes and graceful termination completed."
+        }
+        Some("execution_outcome_uncertain") => {
+            "Process and Result evidence could not establish the outcome."
+        }
+        Some("worker_lost_before_prompt") | Some("worker_lost_before_control") => {
+            "The Worker exited before any Provider Prompt or Current Run control."
+        }
+        Some("worker_lost_after_current_run_control") => {
+            "The Worker exited after Current Run control and before generation."
+        }
+        Some("provider_termination_uncertain") | Some("current_run_reconciliation_uncertain") => {
+            "Graceful termination evidence is uncertain."
+        }
+        Some(_) => "A normalized Task failure was recorded.",
+        None => "No failure recorded.",
+    };
+    let retry_of_task = task
+        .retry_of_task_id
+        .as_ref()
+        .map(|predecessor_id| {
+            if snap
+                .tasks
+                .iter()
+                .any(|candidate| &candidate.id == predecessor_id)
+            {
+                predecessor_id.clone()
+            } else {
+                format!("{predecessor_id} (unavailable)")
+            }
+        })
+        .unwrap_or_else(|| "None".into());
+    let mut action = if task.is_being_deleted() {
+        "Esc Back".to_string()
+    } else if !task.state.is_terminal() {
+        "x Cancel Task | Esc Back".to_string()
+    } else if task.offers_retry() {
+        "r Retry | d Delete | Esc Back".to_string()
+    } else if task.state == crate::tasks::OperationTaskState::Ready {
+        "o Open Terminal | c Copy Command | d Delete | Esc Close for Later".to_string()
+    } else {
+        "d Delete | Esc Back".to_string()
+    };
+    if successor_is_indexed {
+        action = format!("Enter View Successor | {action}");
+    }
+    let mut lines = vec![
+        field("Task ID", task.id.clone()),
+        field("Operation", "Handoff".into()),
+        field("Retry of Task", retry_of_task),
+        Line::from(""),
+        field("Source Provider", task.source_provider.label().into()),
+        field("Source Session", task.source_session_id.clone()),
+        field(
+            "Working directory",
+            task.source_working_directory.to_string_lossy().into_owned(),
+        ),
+        field("Successor Provider", successor_provider.label().into()),
+        field(
+            "Successor Session",
+            task.successor_session_id
+                .clone()
+                .unwrap_or_else(|| "Not linked".into()),
+        ),
+        field(
+            "Successor linkage",
+            match (task.successor_session_id.is_some(), successor_is_indexed) {
+                (true, true) => "Linked and indexed",
+                (true, false) => "Linked, not indexed",
+                (false, _) => "Not linked",
+            }
+            .into(),
+        ),
+        field(
+            "Linked at",
+            task.successor_linked_at_ms
+                .map(fmt_datetime)
+                .unwrap_or_else(|| "None".into()),
+        ),
+        Line::from(""),
+        field("State", task.state.label().into()),
+        field("Created", fmt_datetime(task.created_at_ms)),
+        field("Latest transition", fmt_datetime(task.state_changed_at_ms)),
+        field("Acknowledgement", acknowledgement),
+    ];
+    if task.worker_process_identity.is_some()
+        || task.provider_process_identity.is_some()
+        || task.prompt_sent_at_ms.is_some()
+        || task.provider_exited_at_ms.is_some()
+    {
+        lines.extend([
+            field("Execution trace", execution_trace),
+            field("Provider exit", provider_exit),
+        ]);
+    }
+    if let Some(_requested_at_ms) = task.deletion_requested_at_ms {
+        lines.extend([
+            field(
+                "Deletion",
+                if task.deletion_failure_code.is_some() {
+                    "Failed; will retry"
+                } else {
+                    "In progress"
+                }
+                .into(),
+            ),
+            field(
+                "Deletion failure",
+                task.deletion_failure_code
+                    .clone()
+                    .unwrap_or_else(|| "None".into()),
+            ),
+        ]);
+    }
+    if task.end_current_run_authorized {
+        let waiting_reason = match task.waiting_reason.as_deref() {
+            Some("source_current_run_busy") => "Source Current Run is Busy",
+            Some("source_current_run_idle") => "Source Current Run is Idle",
+            Some(_) => "Source Current Run is not ready",
+            None => "None",
+        };
+        lines.extend([
+            field("Waiting reason", waiting_reason.into()),
+            field(
+                "Authorization deadline",
+                task.waiting_deadline_ms
+                    .map(fmt_datetime)
+                    .unwrap_or_else(|| "None".into()),
+            ),
+            field(
+                "Current Run control",
+                task.control_used_at_ms
+                    .map(|at_ms| format!("Used {}", fmt_datetime(at_ms)))
+                    .unwrap_or_else(|| "Not used".into()),
+            ),
+        ]);
+    }
+    lines.extend([
+        Line::from(""),
+        field("Failure", failure_code.into()),
+        field("Failure detail", failure_summary.into()),
+        field(
+            "Result",
+            if result_ready { "Ready" } else { "Not ready" }.into(),
+        ),
+        field(
+            "Artifact",
+            if task.artifact_path.is_some() {
+                "Published"
+            } else {
+                "Not published"
+            }
+            .into(),
+        ),
+        field(
+            "Launch Plan",
+            if task.successor_launch_plan.is_some() {
+                "Ready"
+            } else {
+                "Not ready"
+            }
+            .into(),
+        ),
+        Line::from(""),
+        field("Available actions", action),
+    ]);
+    if task.state == crate::tasks::OperationTaskState::Ready {
+        lines.push(Line::from(Span::styled(
+            "The Handoff Result remains in TASKS after closing.",
+            Style::default().fg(theme.muted),
+        )));
+    }
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let wrap = Wrap { trim: false };
+    let total_lines = Paragraph::new(lines.clone())
+        .wrap(wrap)
+        .line_count(area.width.saturating_sub(2));
+    let max_scroll = total_lines.saturating_sub(inner_height);
+    let scroll = ui
+        .detail
+        .as_ref()
+        .map_or(0, |detail| detail.scroll.min(max_scroll));
+    f.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(theme.foreground).bg(theme.background))
+            .scroll((scroll as u16, 0))
+            .wrap(wrap)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(Span::styled(
+                        " Task detail ",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            ),
+        area,
+    );
 }
 
 fn draw_compact_detail(
@@ -3500,6 +4455,7 @@ fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     let compact = area.width < 100;
     let can_edit_title = ui.labels.is_editable() && ui.selected_session(snap).is_some();
+    let can_handoff = ui.detail_session(snap).is_some();
     let now = Instant::now();
     let status_notice = ui
         .status_notice
@@ -3507,16 +4463,38 @@ fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .filter(|(_, until)| now < *until)
         .map(|(message, _)| message.clone());
     let label_error = ui.labels.error().map(str::to_string);
-    let left = if compact && status_notice.is_some() {
+    let task_detail = ui.detail_task(snap);
+    let left = if ui.task_retry_confirmation.is_some() {
+        "Left/Right Provider | Enter Authorize Retry | Esc Cancel"
+    } else if ui.task_cancellation_confirmation.is_some() {
+        "Enter Confirm Cancel | Esc Keep Task"
+    } else if ui.handoff_confirmation.is_some() {
+        "Left/Right Provider | Enter Authorize | Esc Cancel"
+    } else if task_detail.is_some_and(OperationTask::is_being_deleted) {
+        "Esc Back | j/k Scroll | 1/2/3 | ? Guide | q Quit"
+    } else if task_detail.is_some_and(OperationTask::offers_retry) {
+        "d Delete | r Retry | Esc | j/k | 1/2/3 | ? | q Quit"
+    } else if task_detail.is_some_and(|task| task.state == crate::tasks::OperationTaskState::Ready)
+    {
+        "d Delete | o Open Terminal | c Copy Command | Esc"
+    } else if task_detail.is_some_and(|task| !task.state.is_terminal()) {
+        "x Cancel | Esc Back | j/k Scroll | 1/2/3 | ? Guide | q Quit"
+    } else if task_detail.is_some() {
+        "d Delete | Esc | j/k | 1/2/3 | ? | q Quit"
+    } else if compact && status_notice.is_some() {
         ""
     } else if ui.copy_menu_is_open() && area.width < 100 {
         "j/k Select | Enter Copy | Esc Cancel"
     } else if ui.copy_menu_is_open() {
         "Up/Down or j/k Select | Enter Copy | Esc Cancel"
+    } else if ui.detail.is_some() && compact && can_edit_title && can_handoff {
+        "Esc | j/k | c | e Edit title | h | ? | q Quit"
     } else if ui.detail.is_some() && compact && can_edit_title {
         "Esc | j/k | c Copy | e Edit title | ? Guide | q Quit"
     } else if ui.detail.is_some() && compact {
         "Esc Back | j/k Scroll | c Copy | ? Guide | q Quit"
+    } else if ui.detail.is_some() && can_edit_title && can_handoff {
+        "Esc | j/k | c | e Edit title | h Handoff | 1/2/3 | ? | q Quit"
     } else if ui.detail.is_some() && can_edit_title {
         "Esc | j/k | c Copy | e Edit title | 1/2/3 | ? Guide | q Quit"
     } else if ui.detail.is_some() {
@@ -3688,6 +4666,478 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    fn operation_task(state: crate::tasks::OperationTaskState) -> OperationTask {
+        OperationTask {
+            id: format!("task-{}", state.label().to_lowercase()),
+            state,
+            source_provider: Provider::ClaudeCode,
+            source_session_id: "source-session".into(),
+            source_record_path: PathBuf::from("/private/source.jsonl"),
+            source_working_directory: PathBuf::from("/private/project"),
+            successor_provider: Provider::ClaudeCode,
+            successor_executable: PathBuf::from("/usr/local/bin/claude"),
+            created_at_ms: 1_000,
+            state_changed_at_ms: 2_000,
+            worker_process_identity: None,
+            provider_process_identity: None,
+            prompt_sent_at_ms: None,
+            provider_exited_at_ms: None,
+            provider_exit_code: None,
+            running_deadline_ms: None,
+            cancellation_requested_at_ms: None,
+            termination_requested_at_ms: None,
+            retry_of_task_id: None,
+            retry_ready_at_ms: None,
+            artifact_path: None,
+            successor_launch_plan: None,
+            successor_launch_metadata: None,
+            successor_session_id: None,
+            successor_linked_at_ms: None,
+            failure_code: None,
+            acknowledged_at_ms: None,
+            end_current_run_authorized: false,
+            source_process_identity: None,
+            waiting_reason: None,
+            waiting_deadline_ms: None,
+            control_used_at_ms: None,
+            deletion_requested_at_ms: None,
+            deletion_failure_code: None,
+        }
+    }
+
+    #[test]
+    fn dismissing_cancel_confirmation_changes_no_non_terminal_task() {
+        for state in [
+            crate::tasks::OperationTaskState::Queued,
+            crate::tasks::OperationTaskState::Waiting,
+            crate::tasks::OperationTaskState::Running,
+        ] {
+            let task = operation_task(state);
+            let snapshot = Snapshot {
+                tasks: vec![task.clone()],
+                ..Snapshot::default()
+            };
+            let mut ui = Ui {
+                all_region: AllRegion::Tasks,
+                ..Ui::default()
+            };
+            let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+            ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+            assert_eq!(
+                ui.handle_key(key(KeyCode::Char('x')), &snapshot).unwrap(),
+                UiAction::None
+            );
+            assert!(rendered_with_snapshot(&ui, &snapshot).contains("Cancel Task?"));
+            assert_eq!(
+                ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap(),
+                UiAction::None
+            );
+            assert!(!rendered_with_snapshot(&ui, &snapshot).contains("Cancel Task?"));
+            assert_eq!(snapshot.tasks, vec![task]);
+        }
+    }
+
+    #[test]
+    fn confirming_cancel_emits_the_selected_non_terminal_task_identity() {
+        let task = operation_task(crate::tasks::OperationTaskState::Running);
+        let snapshot = Snapshot {
+            tasks: vec![task.clone()],
+            ..Snapshot::default()
+        };
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+            UiAction::None
+        );
+        ui.handle_key(key(KeyCode::Char('x')), &snapshot).unwrap();
+
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+            UiAction::CancelTask { task_id: task.id }
+        );
+    }
+
+    #[test]
+    fn declining_irreversible_task_deletion_preserves_the_terminal_task() {
+        let mut task = operation_task(crate::tasks::OperationTaskState::Ready);
+        let artifact_path = PathBuf::from("/private/artifacts/task-ready/handoff.md");
+        task.artifact_path = Some(artifact_path.clone());
+        task.successor_launch_plan = Some(crate::tasks::SuccessorLaunchPlan {
+            successor_provider: Provider::ClaudeCode,
+            working_directory: PathBuf::from("/private/project"),
+            executable: PathBuf::from("/usr/local/bin/claude"),
+            arguments: vec!["continue".into()],
+            artifact_path,
+        });
+        task.acknowledged_at_ms = Some(2_500);
+        let snapshot = Snapshot {
+            tasks: vec![task.clone()],
+            ..Snapshot::default()
+        };
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Char('d')), &snapshot).unwrap(),
+            UiAction::None
+        );
+        let confirmation = rendered_with_snapshot(&ui, &snapshot);
+        assert!(confirmation.contains("Delete Task and Artifact?"));
+        assert!(confirmation.contains(&task.id));
+        assert!(confirmation.contains("irreversible"));
+        assert!(confirmation.contains("Handoff Artifact"));
+        assert!(confirmation.contains("Successor Launch Plan"));
+
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap(),
+            UiAction::None
+        );
+        assert!(!rendered_with_snapshot(&ui, &snapshot).contains("Delete Task and Artifact?"));
+        assert_eq!(snapshot.tasks, vec![task]);
+    }
+
+    #[test]
+    fn confirming_irreversible_task_deletion_emits_the_selected_task_identity() {
+        let task = operation_task(crate::tasks::OperationTaskState::Cancelled);
+        let snapshot = Snapshot {
+            tasks: vec![task.clone()],
+            ..Snapshot::default()
+        };
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Char('d')), &snapshot).unwrap();
+
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+            UiAction::DeleteTask {
+                task_id: task.id.clone()
+            }
+        );
+        assert!(!rendered_with_snapshot(&ui, &snapshot).contains("Delete Task and Artifact?"));
+        assert_eq!(snapshot.tasks, vec![task]);
+    }
+
+    #[test]
+    fn deleting_task_detail_shows_progress_or_recoverable_failure_without_conflicting_actions() {
+        let mut task = operation_task(crate::tasks::OperationTaskState::Ready);
+        task.deletion_requested_at_ms = Some(3_000);
+        let mut snapshot = Snapshot {
+            tasks: vec![task.clone()],
+            ..Snapshot::default()
+        };
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+            UiAction::None
+        );
+
+        let in_progress = rendered_with_snapshot(&ui, &snapshot);
+        assert!(in_progress.contains("Deletion                In progress"));
+        for unavailable in ["d Delete", "r Retry", "o Open Terminal", "c Copy Command"] {
+            assert!(!in_progress.contains(unavailable));
+        }
+
+        task.deletion_failure_code = Some("artifact_remove_failed".into());
+        snapshot.tasks = vec![task];
+        let failed = rendered_with_snapshot(&ui, &snapshot);
+        assert!(failed.contains("Deletion                Failed; will retry"));
+        assert!(failed.contains("Deletion failure        artifact_remove_failed"));
+        assert!(!failed.contains("d Delete"));
+    }
+
+    #[test]
+    fn retained_retry_marks_its_deleted_predecessor_identity_as_unavailable() {
+        let mut retry = operation_task(crate::tasks::OperationTaskState::Failed);
+        retry.id = "retry-task".into();
+        retry.retry_of_task_id = Some("deleted-predecessor-uuid".into());
+        let snapshot = Snapshot {
+            tasks: vec![retry],
+            ..Snapshot::default()
+        };
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+
+        assert!(rendered_with_snapshot(&ui, &snapshot)
+            .contains("deleted-predecessor-uuid (unavailable)"));
+    }
+
+    #[test]
+    fn task_deletion_is_available_only_for_terminal_states() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        for state in [
+            crate::tasks::OperationTaskState::Ready,
+            crate::tasks::OperationTaskState::Failed,
+            crate::tasks::OperationTaskState::Interrupted,
+            crate::tasks::OperationTaskState::Cancelled,
+        ] {
+            let snapshot = Snapshot {
+                tasks: vec![operation_task(state)],
+                ..Snapshot::default()
+            };
+            let mut ui = Ui {
+                all_region: AllRegion::Tasks,
+                ..Ui::default()
+            };
+            ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+            assert!(rendered_with_snapshot(&ui, &snapshot).contains("d Delete"));
+            ui.handle_key(key(KeyCode::Char('d')), &snapshot).unwrap();
+            assert!(rendered_with_snapshot(&ui, &snapshot).contains("Delete Task and Artifact?"));
+        }
+
+        for state in [
+            crate::tasks::OperationTaskState::Queued,
+            crate::tasks::OperationTaskState::Waiting,
+            crate::tasks::OperationTaskState::Running,
+        ] {
+            let snapshot = Snapshot {
+                tasks: vec![operation_task(state)],
+                ..Snapshot::default()
+            };
+            let mut ui = Ui {
+                all_region: AllRegion::Tasks,
+                ..Ui::default()
+            };
+            ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+            assert!(!rendered_with_snapshot(&ui, &snapshot).contains("d Delete"));
+            ui.handle_key(key(KeyCode::Char('d')), &snapshot).unwrap();
+            assert!(!rendered_with_snapshot(&ui, &snapshot).contains("Delete Task and Artifact?"));
+        }
+    }
+
+    #[test]
+    fn task_detail_offers_retry_only_for_eligible_terminal_outcomes() {
+        for state in [
+            crate::tasks::OperationTaskState::Failed,
+            crate::tasks::OperationTaskState::Cancelled,
+        ] {
+            let snapshot = Snapshot {
+                tasks: vec![operation_task(state)],
+                ..Snapshot::default()
+            };
+            let mut ui = Ui {
+                all_region: AllRegion::Tasks,
+                ..Ui::default()
+            };
+            ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+                .unwrap();
+            assert!(rendered_with_snapshot(&ui, &snapshot).contains("r Retry"));
+        }
+
+        let mut interrupted = operation_task(crate::tasks::OperationTaskState::Interrupted);
+        let mut snapshot = Snapshot {
+            tasks: vec![interrupted.clone()],
+            ..Snapshot::default()
+        };
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+        assert!(!rendered_with_snapshot(&ui, &snapshot).contains("r Retry"));
+
+        interrupted.retry_ready_at_ms = Some(3_000);
+        snapshot.tasks = vec![interrupted];
+        assert!(rendered_with_snapshot(&ui, &snapshot).contains("r Retry"));
+
+        snapshot.tasks = vec![operation_task(crate::tasks::OperationTaskState::Ready)];
+        assert!(!rendered_with_snapshot(&ui, &snapshot).contains("r Retry"));
+    }
+
+    #[test]
+    fn retry_requires_fresh_confirmation_before_emitting_an_action() {
+        let mut snapshot = demo_snapshot();
+        snapshot.sessions[0].state = SessionState::Exited;
+        let mut task = operation_task(crate::tasks::OperationTaskState::Failed);
+        task.source_provider = snapshot.sessions[0].provider;
+        task.source_session_id = snapshot.sessions[0].id.clone();
+        snapshot.tasks = vec![task.clone()];
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Char('r')), &snapshot).unwrap(),
+            UiAction::None
+        );
+        assert!(rendered_with_snapshot(&ui, &snapshot).contains("Authorize Retry?"));
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap(),
+            UiAction::None
+        );
+
+        ui.handle_key(key(KeyCode::Char('r')), &snapshot).unwrap();
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+            UiAction::RetryTask {
+                predecessor_task_id: task.id,
+                source_provider: snapshot.sessions[0].provider,
+                source_session_id: snapshot.sessions[0].id.clone(),
+                successor_provider: snapshot.sessions[0].provider,
+                end_current_run: false,
+            }
+        );
+    }
+
+    #[test]
+    fn retry_defaults_to_the_source_provider_and_emits_a_fresh_successor_choice() {
+        let mut snapshot = demo_snapshot();
+        snapshot.sessions[0].state = SessionState::Exited;
+        let mut task = operation_task(crate::tasks::OperationTaskState::Failed);
+        task.source_provider = snapshot.sessions[0].provider;
+        task.source_session_id = snapshot.sessions[0].id.clone();
+        task.successor_provider = Provider::CodexCli;
+        snapshot.tasks = vec![task.clone()];
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        ui.handle_key(key(KeyCode::Char('r')), &snapshot).unwrap();
+
+        assert!(
+            rendered_with_snapshot(&ui, &snapshot).contains("Successor  [Claude Code]  Codex CLI")
+        );
+        ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+        assert!(
+            rendered_with_snapshot(&ui, &snapshot).contains("Successor  Claude Code  [Codex CLI]")
+        );
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+            UiAction::RetryTask {
+                predecessor_task_id: task.id,
+                source_provider: snapshot.sessions[0].provider,
+                source_session_id: snapshot.sessions[0].id.clone(),
+                successor_provider: Provider::CodexCli,
+                end_current_run: false,
+            }
+        );
+    }
+
+    #[test]
+    fn ready_task_offers_open_terminal_and_copy_command_for_the_same_result() {
+        let mut task = operation_task(crate::tasks::OperationTaskState::Ready);
+        let artifact_path = PathBuf::from("/private/artifacts/task/handoff.md");
+        task.artifact_path = Some(artifact_path.clone());
+        task.successor_launch_plan = Some(crate::tasks::SuccessorLaunchPlan {
+            successor_provider: Provider::ClaudeCode,
+            working_directory: PathBuf::from("/private/project"),
+            executable: PathBuf::from("/usr/local/bin/claude"),
+            arguments: vec!["Read the Handoff Artifact and continue.".into()],
+            artifact_path,
+        });
+        let snapshot = Snapshot {
+            tasks: vec![task.clone()],
+            ..Snapshot::default()
+        };
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+        let detail = rendered_with_snapshot(&ui, &snapshot);
+        assert!(detail.contains("o Open Terminal"));
+        assert!(detail.contains("c Copy Command"));
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Char('c')), &snapshot).unwrap(),
+            UiAction::CopySuccessorCommand {
+                task_id: task.id.clone()
+            }
+        );
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Char('o')), &snapshot).unwrap(),
+            UiAction::OpenSuccessorTerminal { task_id: task.id }
+        );
+    }
+
+    #[test]
+    fn linked_successor_becomes_navigable_after_the_session_reaches_the_index() {
+        let mut task = operation_task(crate::tasks::OperationTaskState::Ready);
+        task.successor_provider = Provider::CodexCli;
+        task.successor_session_id = Some("indexed-codex-successor".into());
+        task.successor_linked_at_ms = Some(3_000);
+        let mut snapshot = Snapshot {
+            tasks: vec![task],
+            ..Snapshot::default()
+        };
+        let mut ui = Ui {
+            all_region: AllRegion::Tasks,
+            ..Ui::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+        let waiting_for_index = rendered_with_snapshot(&ui, &snapshot);
+        assert!(waiting_for_index.contains("Successor Session       indexed-codex-successor"));
+        assert!(waiting_for_index.contains("Linked, not indexed"));
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+        assert!(rendered_with_snapshot(&ui, &snapshot).contains("Task ID"));
+
+        let mut successor = demo_snapshot().sessions.remove(0);
+        successor.provider = Provider::CodexCli;
+        successor.id = "indexed-codex-successor".into();
+        snapshot.sessions.push(successor);
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+        let successor_detail = rendered_with_snapshot(&ui, &snapshot);
+        assert!(successor_detail.contains("Session detail"));
+        assert!(successor_detail.contains("indexed-codex-successor"));
+        assert!(!successor_detail.contains("Task ID"));
+    }
+
+    #[test]
+    fn non_terminal_task_detail_shows_the_authorized_cross_provider_successor() {
+        for state in [
+            crate::tasks::OperationTaskState::Queued,
+            crate::tasks::OperationTaskState::Waiting,
+            crate::tasks::OperationTaskState::Running,
+        ] {
+            let mut task = operation_task(state);
+            task.successor_provider = Provider::CodexCli;
+            task.successor_executable = PathBuf::from("/usr/local/bin/codex");
+            let snapshot = Snapshot {
+                tasks: vec![task],
+                ..Snapshot::default()
+            };
+            let mut ui = Ui {
+                all_region: AllRegion::Tasks,
+                ..Ui::default()
+            };
+            ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+                .unwrap();
+
+            let detail = rendered_with_snapshot(&ui, &snapshot);
+            assert!(detail.contains("Successor Provider      Codex CLI"));
+        }
     }
 
     fn rendered_rows_at(ui: &Ui, snapshot: &Snapshot, width: u16, height: u16) -> String {
@@ -5155,13 +6605,28 @@ mod tests {
             &Snapshot::default(),
         )
         .unwrap();
-        let guide = rendered(&ui);
+        let mut guide = rendered(&ui);
+        ui.handle_key(
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            &Snapshot::default(),
+        )
+        .unwrap();
+        for _ in 0..20 {
+            ui.handle_key(
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                &Snapshot::default(),
+            )
+            .unwrap();
+            guide.push_str(&rendered(&ui));
+        }
 
         for expected in [
             "1 / 2 / 3",
             "Tab / Shift+Tab",
             "Up/Down or j/k",
             "Enter",
+            "View an indexed linked Successor",
+            "Exact launched-process evidence",
             "Refresh",
             "?  Guide",
             "Esc",

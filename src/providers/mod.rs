@@ -30,6 +30,17 @@ pub trait ProviderAdapter {
     /// Usage observed at or after a validated Current Run start. `None` means
     /// the source cannot be read; an empty successful Run returns zero Usage.
     fn current_run_usage(&self, source_path: &Path, started_at_ms: i64) -> Option<ParsedUsage>;
+    /// Provider-native arguments for read-only, noninteractive Handoff generation.
+    fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String>;
+    /// Explicit Provider-native invocation for the managed Handoff Skill.
+    fn handoff_skill_invocation(&self) -> &'static str;
+    /// Resolve one exact launched process to a Provider-native Successor Session.
+    /// `None` means the available source evidence is not conclusive.
+    fn resolve_successor_session(
+        &self,
+        cfg: &Config,
+        process: state::ProcessIdentity,
+    ) -> Option<String>;
 }
 
 /// Every provider adapter, in display order. Iterated instead of matching on

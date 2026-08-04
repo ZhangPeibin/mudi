@@ -10,10 +10,12 @@ use sessionmesh::domain::{
     Compaction, ContextState, ModelUsage, Project, ProjectIdentity, Provider, Session,
     SessionState, SourceFormat, SourceMetadata, Usage, UsageSummary, Worktree,
 };
+use sessionmesh::providers::state::ProcessIdentity;
 use sessionmesh::signals::{
     ContextAlertLevel, RecentSignal, RecentSignalKind, SharedWorktreeRiskChange,
 };
-use sessionmesh::ui::{draw, Ui};
+use sessionmesh::tasks::{OperationTask, OperationTaskState, SuccessorLaunchPlan};
+use sessionmesh::ui::{draw, Ui, UiAction};
 
 use std::io;
 use std::path::PathBuf;
@@ -196,9 +198,9 @@ fn fixture_session(
     state: SessionState,
     context_tokens: u64,
     last_activity_ms: i64,
-    worktree_root: &str,
-    branch: &str,
+    worktree: (&str, &str),
 ) -> Session {
+    let (worktree_root, branch) = worktree;
     let usage = Usage {
         input: 12_345,
         output: 2_345,
@@ -272,8 +274,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         180_000,
         NOW - 30_000,
-        shared_root,
-        "main",
+        (shared_root, "main"),
     );
     critical.compactions = vec![
         Compaction {
@@ -297,8 +298,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         80_000,
         NOW - 60_000,
-        shared_root,
-        "main",
+        (shared_root, "main"),
     );
     let warning = fixture_session(
         Provider::ClaudeCode,
@@ -307,8 +307,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         150_000,
         NOW - 120_000,
-        "/Users/fixture/code/sessionmesh-warning",
-        "warning",
+        ("/Users/fixture/code/sessionmesh-warning", "warning"),
     );
     let idle = fixture_session(
         Provider::CodexCli,
@@ -317,8 +316,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Idle,
         60_000,
         NOW - 180_000,
-        "/Users/fixture/code/sessionmesh-idle",
-        "idle",
+        ("/Users/fixture/code/sessionmesh-idle", "idle"),
     );
     let healthy = fixture_session(
         Provider::ClaudeCode,
@@ -327,8 +325,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         40_000,
         NOW - 240_000,
-        "/Users/fixture/code/sessionmesh-healthy",
-        "healthy",
+        ("/Users/fixture/code/sessionmesh-healthy", "healthy"),
     );
     let older = fixture_session(
         Provider::ClaudeCode,
@@ -337,8 +334,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Exited,
         50_000,
         NOW - 8 * DAY,
-        "/Users/fixture/code/sessionmesh-older",
-        "archive",
+        ("/Users/fixture/code/sessionmesh-older", "archive"),
     );
     let recent_exited = fixture_session(
         Provider::CodexCli,
@@ -347,8 +343,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Exited,
         70_000,
         NOW - DAY,
-        "/Users/fixture/code/sessionmesh-exited",
-        "done",
+        ("/Users/fixture/code/sessionmesh-exited", "done"),
     );
     let sessions = vec![
         critical,
@@ -520,6 +515,1056 @@ fn linear(channel: u8) -> f64 {
 }
 
 #[test]
+fn exited_session_handoff_requires_explicit_confirmation() {
+    let mut snapshot = production_snapshot();
+    let mut exited = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.provider == Provider::ClaudeCode && !session.state.is_open())
+        .unwrap()
+        .clone();
+    exited.last_activity_ms = snapshot.generated_ms - 1_000;
+    let native_id = exited.id.clone();
+    snapshot.sessions = vec![exited];
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('2'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    assert!(render(&snapshot, &ui, 120, 30).text.contains("h Handoff"));
+    let open_action = ui
+        .handle_key(
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+            &snapshot,
+        )
+        .unwrap();
+    let confirmation = render(&snapshot, &ui, 120, 30).text;
+
+    assert_eq!(open_action, UiAction::None);
+    for required in [
+        "Authorize Handoff",
+        "Claude Code",
+        native_id.as_str(),
+        "read-only",
+        "continues after SessionMesh closes",
+        "Enter Authorize",
+        "Esc Cancel",
+    ] {
+        assert!(
+            confirmation.contains(required),
+            "missing confirmation text {required:?}\n{confirmation}"
+        );
+    }
+
+    let cancelled = ui
+        .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+    assert_eq!(cancelled, UiAction::None);
+    assert!(!render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Authorize one Handoff Operation?"));
+    ui.handle_key(
+        KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        &snapshot,
+    )
+    .unwrap();
+    let confirmed = ui
+        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+    assert_eq!(
+        confirmed,
+        UiAction::AuthorizeHandoff {
+            source_provider: Provider::ClaudeCode,
+            source_session_id: native_id,
+            successor_provider: Provider::ClaudeCode,
+            end_current_run: false,
+        }
+    );
+}
+
+#[test]
+fn handoff_authorization_defaults_to_the_source_provider_and_offers_both_successors() {
+    let mut snapshot = production_snapshot();
+    let mut exited = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.provider == Provider::ClaudeCode && !session.state.is_open())
+        .unwrap()
+        .clone();
+    exited.last_activity_ms = snapshot.generated_ms - 1_000;
+    snapshot.sessions = vec![exited];
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('2'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('h'));
+
+    let defaulted = render(&snapshot, &ui, 120, 30).text;
+    assert!(defaulted.contains("Successor  [Claude Code]  Codex CLI"));
+
+    press(&mut ui, &snapshot, KeyCode::Right);
+    let selected = render(&snapshot, &ui, 120, 30).text;
+    assert!(selected.contains("Successor  Claude Code  [Codex CLI]"));
+
+    press(&mut ui, &snapshot, KeyCode::Left);
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Successor  [Claude Code]  Codex CLI"));
+}
+
+#[test]
+fn handoff_authorization_emits_the_selected_successor_provider() {
+    let mut snapshot = production_snapshot();
+    let mut exited = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.provider == Provider::ClaudeCode && !session.state.is_open())
+        .unwrap()
+        .clone();
+    exited.last_activity_ms = snapshot.generated_ms - 1_000;
+    let native_id = exited.id.clone();
+    snapshot.sessions = vec![exited];
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('2'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('h'));
+    press(&mut ui, &snapshot, KeyCode::Right);
+
+    let confirmed = ui
+        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+
+    assert_eq!(
+        confirmed,
+        UiAction::AuthorizeHandoff {
+            source_provider: Provider::ClaudeCode,
+            source_session_id: native_id,
+            successor_provider: Provider::CodexCli,
+            end_current_run: false,
+        }
+    );
+}
+
+#[test]
+fn open_session_handoff_explicitly_authorizes_ending_only_its_current_run() {
+    let snapshot = production_snapshot();
+    let source = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.provider == Provider::ClaudeCode && session.state.is_open())
+        .unwrap();
+    let native_id = source.id.clone();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let open_action = ui
+        .handle_key(
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+            &snapshot,
+        )
+        .unwrap();
+    let confirmation = render(&snapshot, &ui, 120, 30).text;
+
+    assert_eq!(open_action, UiAction::None);
+    for required in [
+        "Authorize Handoff",
+        "Current Run",
+        "Busy",
+        "waits until Idle",
+        "end this one Current Run",
+        "graceful exit",
+        "Terminal and shell remain open",
+        "Enter Authorize",
+        "Esc Cancel",
+    ] {
+        assert!(
+            confirmation.contains(required),
+            "missing confirmation text {required:?}\n{confirmation}"
+        );
+    }
+    assert_eq!(
+        ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
+            .unwrap(),
+        UiAction::None
+    );
+    ui.handle_key(
+        KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        &snapshot,
+    )
+    .unwrap();
+    assert_eq!(
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap(),
+        UiAction::AuthorizeHandoff {
+            source_provider: Provider::ClaudeCode,
+            source_session_id: native_id,
+            successor_provider: Provider::ClaudeCode,
+            end_current_run: true,
+        }
+    );
+}
+
+#[test]
+fn retained_handoff_task_appears_in_the_minimal_upper_right_tasks_surface() {
+    let mut snapshot = production_snapshot();
+    let queued = OperationTask {
+        id: "task-00000001".into(),
+        state: OperationTaskState::Queued,
+        source_provider: Provider::ClaudeCode,
+        source_session_id: "claude-critical".into(),
+        source_record_path: PathBuf::from("/private/provider-output-must-not-render"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::ClaudeCode,
+        successor_executable: PathBuf::from("/usr/local/bin/claude"),
+        created_at_ms: snapshot.generated_ms - 1_000,
+        state_changed_at_ms: snapshot.generated_ms - 1_000,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: None,
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: None,
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    };
+    let mut ready = queued.clone();
+    ready.id = "task-00000002".into();
+    ready.state = OperationTaskState::Ready;
+    ready.state_changed_at_ms += 1;
+    ready.artifact_path = Some(PathBuf::from("/private/artifact-must-not-render.md"));
+    let mut failed = queued.clone();
+    failed.id = "task-00000003".into();
+    failed.state = OperationTaskState::Failed;
+    failed.state_changed_at_ms += 2;
+    failed.failure_code = Some("private-failure-detail-must-not-render".into());
+    snapshot.tasks = vec![failed, ready, queued];
+
+    let rendered = render(&snapshot, &Ui::default(), 120, 30).text;
+
+    for expected in [
+        "TASKS", "Handoff", "CL", "critical", "Queued", "Ready", "Failed",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "missing Task metadata {expected:?}"
+        );
+    }
+    assert!(!rendered.contains("provider-output-must-not-render"));
+    assert!(!rendered.contains("artifact-must-not-render"));
+    assert!(!rendered.contains("private-failure-detail-must-not-render"));
+    let tasks_row = rendered
+        .lines()
+        .position(|line| line.contains("TASKS"))
+        .unwrap();
+    let signals_row = rendered
+        .lines()
+        .position(|line| line.contains("RECENT SIGNALS"))
+        .unwrap();
+    assert!(tasks_row < signals_row);
+}
+
+#[test]
+fn task_deletion_confirmation_progress_failure_removal_and_history_render_in_production() {
+    let mut snapshot = production_snapshot();
+    let task = OperationTask {
+        id: "task-delete-render".into(),
+        state: OperationTaskState::Ready,
+        source_provider: Provider::ClaudeCode,
+        source_session_id: "claude-critical".into(),
+        source_record_path: PathBuf::from("/private/source.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::CodexCli,
+        successor_executable: PathBuf::from("/usr/local/bin/codex"),
+        created_at_ms: snapshot.generated_ms - 10_000,
+        state_changed_at_ms: snapshot.generated_ms - 2_000,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: Some(PathBuf::from(
+            "/private/artifacts/task-delete-render/handoff.md",
+        )),
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: Some(snapshot.generated_ms - 1_000),
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    };
+    snapshot.tasks = vec![task.clone()];
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('d'));
+
+    let confirmation = render(&snapshot, &ui, 120, 30).text;
+    for expected in [
+        "Delete Task and Artifact?",
+        "task-delete-render",
+        "irreversible",
+        "Handoff Artifact",
+        "Successor Launch Plan",
+        "Enter Delete",
+        "Esc Keep Task",
+    ] {
+        assert!(
+            confirmation.contains(expected),
+            "missing {expected:?}\n{confirmation}"
+        );
+    }
+    assert_eq!(
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap(),
+        UiAction::DeleteTask {
+            task_id: task.id.clone()
+        }
+    );
+
+    let mut deleting = task.clone();
+    deleting.deletion_requested_at_ms = Some(snapshot.generated_ms);
+    snapshot.tasks = vec![deleting.clone()];
+    let in_progress = render(&snapshot, &ui, 120, 30).text;
+    assert!(in_progress.contains("In progress"));
+    assert!(!in_progress.contains("d Delete"));
+    assert!(!in_progress.contains("o Open Terminal"));
+
+    deleting.deletion_failure_code = Some("artifact_remove_failed".into());
+    snapshot.tasks = vec![deleting];
+    let failed = render(&snapshot, &ui, 120, 30).text;
+    assert!(failed.contains("Failed; will retry"));
+    assert!(failed.contains("artifact_remove_failed"));
+
+    let mut retained_retry = task.clone();
+    retained_retry.id = "retained-retry".into();
+    retained_retry.state = OperationTaskState::Failed;
+    retained_retry.artifact_path = None;
+    retained_retry.retry_of_task_id = Some("deleted-predecessor-uuid".into());
+    snapshot.tasks = vec![retained_retry];
+    let mut retry_ui = Ui::default();
+    press(&mut retry_ui, &snapshot, KeyCode::Tab);
+    press(&mut retry_ui, &snapshot, KeyCode::Tab);
+    press(&mut retry_ui, &snapshot, KeyCode::Enter);
+    let history = render(&snapshot, &retry_ui, 120, 30).text;
+    assert!(history.contains("deleted-predecessor-uuid (unavailable)"));
+
+    snapshot.tasks.clear();
+    let removed = render(&snapshot, &Ui::default(), 120, 30).text;
+    assert!(removed.contains("TASKS 0"));
+    assert!(!removed.contains("task-delete-render"));
+}
+
+#[test]
+fn wide_home_reserves_the_upper_left_and_places_now_and_signals_below_tasks() {
+    let mut snapshot = production_snapshot();
+    snapshot.tasks = vec![OperationTask {
+        id: "task-wide-layout".into(),
+        state: OperationTaskState::Queued,
+        source_provider: Provider::ClaudeCode,
+        source_session_id: "claude-critical".into(),
+        source_record_path: PathBuf::from("/private/source.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::ClaudeCode,
+        successor_executable: PathBuf::from("/usr/local/bin/claude"),
+        created_at_ms: snapshot.generated_ms - 1_000,
+        state_changed_at_ms: snapshot.generated_ms - 1_000,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: None,
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: None,
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    }];
+
+    let rendered = render(&snapshot, &Ui::default(), 120, 30).text;
+    let (tasks_row, tasks_column) = rendered
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            line.find("TASKS")
+                .map(|byte| (row, line[..byte].chars().count()))
+        })
+        .unwrap();
+    let (now_row, now_column) = rendered
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            line.find("PROJECTS")
+                .map(|byte| (row, line[..byte].chars().count()))
+        })
+        .unwrap();
+    let (signals_row, signals_column) = rendered
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            line.find("RECENT SIGNALS")
+                .map(|byte| (row, line[..byte].chars().count()))
+        })
+        .unwrap();
+
+    assert!(tasks_row < now_row);
+    assert_eq!(now_row, signals_row);
+    assert!(tasks_column > now_column);
+    assert!(signals_column > now_column);
+    for line in rendered.lines().take(now_row).skip(tasks_row) {
+        assert!(
+            line.chars()
+                .take(tasks_column - 2)
+                .all(|character| character == ' '),
+            "upper-left region is not empty: {line:?}"
+        );
+    }
+}
+
+#[test]
+fn compact_tasks_can_receive_focus_and_scroll_to_every_retained_task() {
+    let mut snapshot = production_snapshot();
+    snapshot.tasks = (0..8)
+        .map(|index| OperationTask {
+            id: format!("task-{index:02}"),
+            state: OperationTaskState::Queued,
+            source_provider: Provider::ClaudeCode,
+            source_session_id: format!("source-{index:02}"),
+            source_record_path: PathBuf::from("/private/source.jsonl"),
+            source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+            successor_provider: Provider::ClaudeCode,
+            successor_executable: PathBuf::from("/usr/local/bin/claude"),
+            created_at_ms: snapshot.generated_ms - index * 1_000,
+            state_changed_at_ms: snapshot.generated_ms - index * 1_000,
+            worker_process_identity: None,
+            provider_process_identity: None,
+            prompt_sent_at_ms: None,
+            provider_exited_at_ms: None,
+            provider_exit_code: None,
+            running_deadline_ms: None,
+            cancellation_requested_at_ms: None,
+            termination_requested_at_ms: None,
+            retry_of_task_id: None,
+            retry_ready_at_ms: None,
+            artifact_path: None,
+            successor_launch_plan: None,
+            successor_launch_metadata: None,
+            successor_session_id: None,
+            successor_linked_at_ms: None,
+            failure_code: None,
+            acknowledged_at_ms: None,
+            end_current_run_authorized: false,
+            source_process_identity: None,
+            waiting_reason: None,
+            waiting_deadline_ms: None,
+            control_used_at_ms: None,
+            deletion_requested_at_ms: None,
+            deletion_failure_code: None,
+        })
+        .collect();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    for _ in 0..7 {
+        press(&mut ui, &snapshot, KeyCode::Down);
+    }
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+
+    assert!(rendered.text.contains("TASKS"));
+    assert!(rendered.text.contains("ource-07"));
+    assert!(!rendered.text.contains("ource-00"));
+    assert_eq!(
+        rendered.style_at("ource-07").bg,
+        Some(Color::Rgb(68, 61, 43))
+    );
+}
+
+#[test]
+fn task_rows_show_transition_time_and_unread_only_for_unacknowledged_terminal_outcomes() {
+    let mut snapshot = production_snapshot();
+    let ready = OperationTask {
+        id: "task-ready".into(),
+        state: OperationTaskState::Ready,
+        source_provider: Provider::ClaudeCode,
+        source_session_id: "ready-id".into(),
+        source_record_path: PathBuf::from("/private/source.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::ClaudeCode,
+        successor_executable: PathBuf::from("/usr/local/bin/claude"),
+        created_at_ms: snapshot.generated_ms - 10_000,
+        state_changed_at_ms: snapshot.generated_ms - 1_000,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: Some(PathBuf::from("/private/artifact.md")),
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: None,
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    };
+    let mut failed = ready.clone();
+    failed.id = "task-failed".into();
+    failed.state = OperationTaskState::Failed;
+    failed.source_provider = Provider::CodexCli;
+    failed.source_session_id = "failedid".into();
+    failed.state_changed_at_ms = snapshot.generated_ms - 2_000;
+    failed.artifact_path = None;
+    failed.failure_code = Some("provider_invocation_failed".into());
+    failed.acknowledged_at_ms = Some(snapshot.generated_ms - 500);
+    snapshot.tasks = vec![ready, failed];
+
+    let rendered = render(&snapshot, &Ui::default(), 120, 30).text;
+    let ready_row = rendered
+        .lines()
+        .find(|line| line.contains("ready-id"))
+        .unwrap();
+    let failed_row = rendered
+        .lines()
+        .find(|line| line.contains("failedid"))
+        .unwrap();
+
+    for expected in ["NEW", "Handoff", "CL:ready-id", "Ready", "1s"] {
+        assert!(
+            ready_row.contains(expected),
+            "missing {expected:?}: {ready_row}"
+        );
+    }
+    for expected in ["Handoff", "CX:failedid", "Failed", "2s"] {
+        assert!(
+            failed_row.contains(expected),
+            "missing {expected:?}: {failed_row}"
+        );
+    }
+    assert!(!failed_row.contains("NEW"));
+}
+
+#[test]
+fn task_rows_resolve_the_current_session_alias_without_changing_task_identity() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-task-title-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let mut snapshot = production_snapshot();
+    snapshot.tasks = vec![OperationTask {
+        id: "task-session-title".into(),
+        state: OperationTaskState::Queued,
+        source_provider: Provider::ClaudeCode,
+        source_session_id: "claude-critical".into(),
+        source_record_path: PathBuf::from("/private/source.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::ClaudeCode,
+        successor_executable: PathBuf::from("/usr/local/bin/claude"),
+        created_at_ms: snapshot.generated_ms - 1_000,
+        state_changed_at_ms: snapshot.generated_ms - 1_000,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: None,
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: None,
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    }];
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "Release coordinator".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Tab);
+
+    let rendered = render(&snapshot, &ui, 80, 24).text;
+
+    assert!(rendered.contains("CL:Release coordinator"));
+    assert!(!rendered.contains("CL:critical"));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn task_rows_disambiguate_colliding_session_labels() {
+    let mut snapshot = production_snapshot();
+    let task = OperationTask {
+        id: "task-a".into(),
+        state: OperationTaskState::Queued,
+        source_provider: Provider::CodexCli,
+        source_session_id: "codex-Asame0000".into(),
+        source_record_path: PathBuf::from("/private/source.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::CodexCli,
+        successor_executable: PathBuf::from("/usr/local/bin/codex"),
+        created_at_ms: snapshot.generated_ms - 1_000,
+        state_changed_at_ms: snapshot.generated_ms - 1_000,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: None,
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: None,
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    };
+    let mut other = task.clone();
+    other.id = "task-b".into();
+    other.source_session_id = "codex-Bsame0000".into();
+    snapshot.tasks = vec![task, other];
+
+    let rendered = render(&snapshot, &Ui::default(), 80, 24).text;
+
+    assert!(rendered.contains("CX:Asame0000"));
+    assert!(rendered.contains("CX:Bsame0000"));
+}
+
+#[test]
+fn opening_task_detail_requests_deliberate_acknowledgement_for_an_unread_terminal_task() {
+    let mut snapshot = production_snapshot();
+    snapshot.tasks = vec![OperationTask {
+        id: "task-open-detail".into(),
+        state: OperationTaskState::Ready,
+        source_provider: Provider::ClaudeCode,
+        source_session_id: "ready-id".into(),
+        source_record_path: PathBuf::from("/private/source-must-not-render.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::ClaudeCode,
+        successor_executable: PathBuf::from("/usr/local/bin/claude"),
+        created_at_ms: snapshot.generated_ms - 10_000,
+        state_changed_at_ms: snapshot.generated_ms - 1_000,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: Some(PathBuf::from("/private/artifact-must-not-render.md")),
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: None,
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    }];
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Tab);
+
+    let action = ui
+        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+
+    assert_eq!(
+        action,
+        UiAction::AcknowledgeTask {
+            task_id: "task-open-detail".into()
+        }
+    );
+    let detail = render(&snapshot, &ui, 120, 30).text;
+    assert!(detail.contains("Task detail"));
+    assert!(detail.contains("task-open-detail"));
+    assert!(!detail.contains("RECENT SIGNALS"));
+}
+
+#[test]
+fn failed_task_detail_explains_identity_timing_failure_result_and_available_actions() {
+    let mut snapshot = production_snapshot();
+    snapshot.tasks = vec![OperationTask {
+        id: "task-failed-detail".into(),
+        state: OperationTaskState::Failed,
+        source_provider: Provider::CodexCli,
+        source_session_id: "codex-failed-session".into(),
+        source_record_path: PathBuf::from("/private/provider-record.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::CodexCli,
+        successor_executable: PathBuf::from("/usr/local/bin/codex"),
+        created_at_ms: snapshot.generated_ms - 10_000,
+        state_changed_at_ms: snapshot.generated_ms - 2_000,
+        worker_process_identity: Some(ProcessIdentity {
+            pid: 42,
+            started_at_ms: snapshot.generated_ms - 9_000,
+        }),
+        provider_process_identity: Some(ProcessIdentity {
+            pid: 43,
+            started_at_ms: snapshot.generated_ms - 5_000,
+        }),
+        prompt_sent_at_ms: Some(snapshot.generated_ms - 4_000),
+        provider_exited_at_ms: Some(snapshot.generated_ms - 2_000),
+        provider_exit_code: Some(23),
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: None,
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: Some("provider_invocation_failed".into()),
+        acknowledged_at_ms: None,
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    }];
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+
+    let detail = render(&snapshot, &ui, 120, 30).text;
+
+    for expected in [
+        "Task detail",
+        "task-failed-detail",
+        "Handoff",
+        "Source Provider",
+        "Codex CLI",
+        "codex-failed-session",
+        "/Users/fixture/code/sessionmesh",
+        "Successor Provider",
+        "Failed",
+        "Created",
+        "Latest transition",
+        "Execution trace",
+        "Worker started",
+        "Provider started",
+        "Prompt sent",
+        "Provider exited",
+        "Exit code",
+        "23",
+        "provider_invocation_failed",
+        "Provider invocation failed.",
+        "Result",
+        "Not ready",
+        "Esc Back",
+    ] {
+        assert!(detail.contains(expected), "missing {expected:?}\n{detail}");
+    }
+    assert!(!detail.contains("provider-record.jsonl"));
+}
+
+#[test]
+fn waiting_task_detail_shows_its_reason_and_fixed_authorization_deadline() {
+    let mut snapshot = production_snapshot();
+    let deadline_ms = snapshot.generated_ms + 7_200_000;
+    snapshot.tasks = vec![OperationTask {
+        id: "task-waiting-detail".into(),
+        state: OperationTaskState::Waiting,
+        source_provider: Provider::ClaudeCode,
+        source_session_id: "claude-critical".into(),
+        source_record_path: PathBuf::from("/private/provider-record-must-not-render.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::ClaudeCode,
+        successor_executable: PathBuf::from("/usr/local/bin/claude"),
+        created_at_ms: snapshot.generated_ms,
+        state_changed_at_ms: snapshot.generated_ms,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: None,
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: None,
+        end_current_run_authorized: true,
+        source_process_identity: Some(ProcessIdentity {
+            pid: 42,
+            started_at_ms: snapshot.generated_ms - 1_000,
+        }),
+        waiting_reason: Some("source_current_run_busy".into()),
+        waiting_deadline_ms: Some(deadline_ms),
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    }];
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Tab);
+
+    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+    let detail = render(&snapshot, &ui, 120, 30).text;
+
+    for expected in [
+        "Waiting",
+        "Waiting reason",
+        "Source Current Run is Busy",
+        "Authorization deadline",
+        &sessionmesh::app::fmt_datetime(deadline_ms),
+    ] {
+        assert!(detail.contains(expected), "missing {expected:?}\n{detail}");
+    }
+    assert!(!detail.contains("provider-record-must-not-render"));
+    assert!(!detail.contains("PID 42"));
+}
+
+#[test]
+fn expired_waiting_authority_is_an_unread_cancelled_task_with_a_clear_explanation() {
+    let mut snapshot = production_snapshot();
+    let deadline_ms = snapshot.generated_ms - 1_000;
+    snapshot.tasks = vec![OperationTask {
+        id: "task-cancelled-detail".into(),
+        state: OperationTaskState::Cancelled,
+        source_provider: Provider::CodexCli,
+        source_session_id: "codex-idle".into(),
+        source_record_path: PathBuf::from("/private/rollout.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::CodexCli,
+        successor_executable: PathBuf::from("/usr/local/bin/codex"),
+        created_at_ms: snapshot.generated_ms - 7_201_000,
+        state_changed_at_ms: deadline_ms,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: None,
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: Some("current_run_authority_expired".into()),
+        acknowledged_at_ms: None,
+        end_current_run_authorized: true,
+        source_process_identity: Some(ProcessIdentity {
+            pid: 42,
+            started_at_ms: snapshot.generated_ms - 8_000_000,
+        }),
+        waiting_reason: Some("source_current_run_busy".into()),
+        waiting_deadline_ms: Some(deadline_ms),
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    }];
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    let tasks = render(&snapshot, &ui, 120, 30).text;
+
+    let cancelled_row = tasks
+        .lines()
+        .find(|line| line.contains("Cancelled"))
+        .unwrap();
+    for expected in ["NEW", "Handoff", "CX:", "Cancelled"] {
+        assert!(
+            cancelled_row.contains(expected),
+            "missing {expected:?}: {cancelled_row}"
+        );
+    }
+    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+    let detail = render(&snapshot, &ui, 120, 30).text;
+
+    for expected in [
+        "Cancelled",
+        "current_run_authority_expired",
+        "Unused Current Run authority expired at its deadline",
+        "Authorization deadline",
+    ] {
+        assert!(detail.contains(expected), "missing {expected:?}\n{detail}");
+    }
+}
+
+#[test]
+fn close_for_later_returns_to_tasks_without_hiding_or_invalidating_the_ready_result() {
+    let mut snapshot = production_snapshot();
+    let artifact_path = PathBuf::from("/private/handoff.md");
+    snapshot.tasks = vec![OperationTask {
+        id: "task-ready-later".into(),
+        state: OperationTaskState::Ready,
+        source_provider: Provider::ClaudeCode,
+        source_session_id: "ready-id".into(),
+        source_record_path: PathBuf::from("/private/source.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::ClaudeCode,
+        successor_executable: PathBuf::from("/usr/local/bin/claude"),
+        created_at_ms: snapshot.generated_ms - 10_000,
+        state_changed_at_ms: snapshot.generated_ms - 2_000,
+        worker_process_identity: Some(ProcessIdentity {
+            pid: 42,
+            started_at_ms: snapshot.generated_ms - 2_000,
+        }),
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: Some(artifact_path.clone()),
+        successor_launch_plan: Some(SuccessorLaunchPlan {
+            successor_provider: Provider::ClaudeCode,
+            working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+            executable: PathBuf::from("/usr/local/bin/claude"),
+            arguments: vec!["Read the Handoff Artifact and continue.".into()],
+            artifact_path: artifact_path.clone(),
+        }),
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: Some(snapshot.generated_ms - 1_000),
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    }];
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    assert_eq!(
+        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+            .unwrap(),
+        UiAction::None
+    );
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Esc Close for Later"));
+
+    let close = ui
+        .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+    let home = render(&snapshot, &ui, 120, 30).text;
+
+    assert_eq!(close, UiAction::None);
+    assert!(home.contains("TASKS"));
+    assert!(home.contains("ready-id"));
+    assert!(home.contains("Ready"));
+    assert_eq!(
+        snapshot.tasks[0].artifact_path.as_ref(),
+        Some(&artifact_path)
+    );
+    assert!(snapshot.tasks[0].successor_launch_plan.is_some());
+}
+
+#[test]
 fn terminal_below_the_hard_minimum_renders_only_the_too_small_state() {
     let rendered = render(&Snapshot::default(), &Ui::default(), 79, 23);
 
@@ -567,11 +1612,17 @@ fn global_header_combines_navigation_with_indexed_usage_and_project_totals() {
     assert!(!wide_header.contains("2 Claude"));
     assert!(!wide_header.contains("3 Codex"));
     assert!(wide_header.contains("In 86.4k  Out 16.4k | 1 Project"));
-    assert!(wide
+    let tasks_row = wide
         .text
         .lines()
-        .nth(1)
-        .is_some_and(|line| line.contains("PROJECT") && line.contains("RECENT SIGNALS")));
+        .position(|line| line.contains("TASKS"))
+        .unwrap();
+    let lower_row = wide
+        .text
+        .lines()
+        .position(|line| line.contains("PROJECT") && line.contains("RECENT SIGNALS"))
+        .unwrap();
+    assert!(tasks_row < lower_row);
 
     let compact = render(&snapshot, &Ui::default(), 80, 24);
     let compact_header = compact.text.lines().next().unwrap();
@@ -591,8 +1642,6 @@ fn global_header_combines_navigation_with_indexed_usage_and_project_totals() {
 fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
     let snapshot = production_snapshot();
     let rendered = render(&snapshot, &Ui::default(), 120, 30);
-    let titles = rendered.text.lines().nth(1).unwrap();
-
     for expected in [
         "PROJECTS 1",
         "5 OPEN SESSIONS",
@@ -600,7 +1649,7 @@ fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
         "latest 5s",
     ] {
         assert!(
-            titles.contains(expected),
+            rendered.text.lines().any(|line| line.contains(expected)),
             "missing frame summary: {expected}"
         );
     }
@@ -716,8 +1765,7 @@ fn all_page_abbreviates_the_current_users_home_in_worktree_paths() {
         SessionState::Busy,
         100_000,
         1_700_000_000_000,
-        &root_text,
-        "main",
+        (&root_text, "main"),
     );
     let snapshot = Snapshot {
         sessions: vec![session],
@@ -1808,6 +2856,7 @@ fn edit_title_shortcut_is_shown_only_for_a_concrete_session_target() {
     assert!(!render(&snapshot, &ui, 120, 30).text.contains("Edit title"));
 
     press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Tab);
     press(&mut ui, &snapshot, KeyCode::Enter);
     assert!(render(&snapshot, &ui, 120, 30)
         .text
@@ -1916,7 +2965,13 @@ fn navigation_guide_lists_global_and_contextual_controls_without_theme_cycling()
         "Enter  Inspect or expand",
         "Esc  Back or close",
         "c  Copy source metadata in Session Detail",
+        "h  Authorize a Handoff from Session Detail",
+        "Left/Right  Choose a Successor Provider",
+        "o  Open a Ready Successor in Terminal.app",
+        "c  Copy a Ready Successor command",
         "r  Refresh",
+        "d  Delete a terminal Task and owned Artifact after confirmation",
+        "Tasks and Artifacts never expire automatically.",
         "?  Guide",
         "q  Quit",
     ] {

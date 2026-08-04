@@ -48,6 +48,7 @@ impl ProviderAdapter for ClaudeAdapter {
             None => super::state::LiveState {
                 state: SessionState::Exited,
                 current_run_started_at_ms: None,
+                process_identity: None,
             },
         }
     }
@@ -56,6 +57,81 @@ impl ProviderAdapter for ClaudeAdapter {
         let text = std::fs::read_to_string(source_path).ok()?;
         Some(parse_current_run_str(&text, started_at_ms))
     }
+
+    fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String> {
+        [
+            "--print",
+            "--resume",
+            native_session_id,
+            "--bare",
+            "--permission-mode",
+            "plan",
+            "--tools",
+            "",
+            "--strict-mcp-config",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    fn handoff_skill_invocation(&self) -> &'static str {
+        "/sessionmesh-handoff"
+    }
+
+    fn resolve_successor_session(
+        &self,
+        cfg: &Config,
+        process: super::state::ProcessIdentity,
+    ) -> Option<String> {
+        resolve_successor_session(cfg, process)
+    }
+}
+
+fn resolve_successor_session(
+    cfg: &Config,
+    process: super::state::ProcessIdentity,
+) -> Option<String> {
+    if !super::state::process_identity_is_live(process) {
+        return None;
+    }
+    let mut session_id: Option<String> = None;
+    for entry in std::fs::read_dir(cfg.claude_sessions_dir()).ok()?.flatten() {
+        if entry
+            .path()
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("json")
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        if value.get("pid").and_then(Value::as_u64) != Some(u64::from(process.pid)) {
+            continue;
+        }
+        let recorded_start = value.get("startedAt").and_then(Value::as_i64)?;
+        if (recorded_start - process.started_at_ms).abs() > 2_000 {
+            continue;
+        }
+        let observed = value
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .filter(|session_id| !session_id.is_empty())?;
+        if session_id
+            .as_deref()
+            .is_some_and(|current| current != observed)
+        {
+            return None;
+        }
+        session_id = Some(observed.to_string());
+    }
+    let session_id = session_id?;
+    super::state::process_identity_is_live(process).then_some(session_id)
 }
 
 /// Parse a Claude transcript file. Returns `None` if the file is unreadable or yields
@@ -158,22 +234,22 @@ pub fn parse_str(id: &str, text: &str) -> Option<ParsedSession> {
                     },
                 );
             }
-            Some("system") => {
-                if v.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
-                    let meta = v.get("compactMetadata");
-                    let trigger = meta
-                        .and_then(|m| m.get("trigger"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    let pre_tokens = meta
-                        .and_then(|m| m.get("preTokens"))
-                        .and_then(Value::as_u64);
-                    compactions.push(Compaction {
-                        at_ms: ts.unwrap_or(last_activity_ms),
-                        trigger,
-                        pre_tokens,
-                    });
-                }
+            Some("system")
+                if v.get("subtype").and_then(Value::as_str) == Some("compact_boundary") =>
+            {
+                let meta = v.get("compactMetadata");
+                let trigger = meta
+                    .and_then(|m| m.get("trigger"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let pre_tokens = meta
+                    .and_then(|m| m.get("preTokens"))
+                    .and_then(Value::as_u64);
+                compactions.push(Compaction {
+                    at_ms: ts.unwrap_or(last_activity_ms),
+                    trigger,
+                    pre_tokens,
+                });
             }
             _ => {}
         }
@@ -307,6 +383,73 @@ fn u(v: &Value, key: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conflicting_pid_state_records_do_not_identify_a_successor_session() {
+        let process = super::super::state::process_identity(std::process::id()).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "sessionmesh-claude-link-conflict-{}-{}",
+            process.pid,
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let sessions = root.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let state = |session_id: &str| {
+            format!(
+                "{{\"pid\":{},\"sessionId\":\"{session_id}\",\"status\":\"idle\",\"startedAt\":{}}}",
+                process.pid, process.started_at_ms
+            )
+        };
+        std::fs::write(
+            sessions.join(format!("{}.json", process.pid)),
+            state("successor-a"),
+        )
+        .unwrap();
+        std::fs::write(sessions.join("conflict.json"), state("successor-b")).unwrap();
+        let config = Config {
+            claude_dir: root.clone(),
+            codex_dir: root.join("codex"),
+            data_dir: root.join("data"),
+            extra_dirs: Vec::new(),
+        };
+
+        let resolved = ClaudeAdapter.resolve_successor_session(&config, process);
+
+        assert_eq!(resolved, None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_pid_state_record_does_not_identify_a_successor_session() {
+        let process = super::super::state::process_identity(std::process::id()).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "sessionmesh-claude-link-stale-{}-{}",
+            process.pid,
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let sessions = root.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join(format!("{}.json", process.pid)),
+            format!(
+                "{{\"pid\":{},\"sessionId\":\"stale-successor\",\"status\":\"idle\",\"startedAt\":{}}}",
+                process.pid,
+                process.started_at_ms - 60_000
+            ),
+        )
+        .unwrap();
+        let config = Config {
+            claude_dir: root.clone(),
+            codex_dir: root.join("codex"),
+            data_dir: root.join("data"),
+            extra_dirs: Vec::new(),
+        };
+
+        let resolved = ClaudeAdapter.resolve_successor_session(&config, process);
+
+        assert_eq!(resolved, None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn dedups_streamed_records_by_message_id() {
