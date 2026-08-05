@@ -10,7 +10,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1608,18 +1608,28 @@ fn run_source_provider(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| ProviderRunError::Failed(None))?;
-    let provider_process = crate::providers::state::process_identity_after_spawn(child.id())
-        .ok_or(ProviderRunError::Interrupted(None))?;
+    let Some(provider_process) = crate::providers::state::process_identity_after_spawn(child.id())
+    else {
+        // A short-lived Provider can exit before its process identity is sampled. Its exit
+        // status is still conclusive, so do not report an uncertain outcome prematurely.
+        return record_provider_exit_before_prompt(child, task, store, now_ms);
+    };
     store
         .mark_provider_started(&task.id, provider_process)
         .map_err(|_| ProviderRunError::Interrupted(None))?;
     let invocation = crate::providers::adapter_for(task.source_provider).handoff_skill_invocation();
-    child
-        .stdin
-        .take()
-        .ok_or(ProviderRunError::Interrupted(None))?
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => return record_provider_exit_before_prompt(child, task, store, now_ms),
+    };
+    if stdin
         .write_all(format!("{invocation}\n").as_bytes())
-        .map_err(|_| ProviderRunError::Interrupted(None))?;
+        .is_err()
+    {
+        drop(stdin);
+        return record_provider_exit_before_prompt(child, task, store, now_ms);
+    }
+    drop(stdin);
     store
         .mark_prompt_sent(&task.id, now_ms)
         .map_err(|_| ProviderRunError::Interrupted(None))?;
@@ -1638,6 +1648,26 @@ fn run_source_provider(
         });
     }
     candidate.ok_or(ProviderRunError::Failed(None))
+}
+
+fn record_provider_exit_before_prompt(
+    child: Child,
+    task: &OperationTask,
+    store: &TaskStore,
+    now_ms: i64,
+) -> std::result::Result<String, ProviderRunError> {
+    let output = child
+        .wait_with_output()
+        .map_err(|_| ProviderRunError::Interrupted(None))?;
+    store
+        .mark_provider_exited(&task.id, now_ms, output.status.code())
+        .map_err(|_| ProviderRunError::Interrupted(None))?;
+    let candidate = String::from_utf8(output.stdout).ok();
+    Err(if output.status.code().is_some() {
+        ProviderRunError::Failed(candidate)
+    } else {
+        ProviderRunError::Interrupted(candidate)
+    })
 }
 
 pub(crate) fn validate_handoff_artifact(candidate: &str) -> Result<()> {
