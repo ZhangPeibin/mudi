@@ -98,18 +98,20 @@ source record.
 
 ### 7.1 Home layout
 
-At the confirmed wide layout, `TASKS` owns the complete upper-right panel. The upper-left
-region remains intentionally empty. `NOW` and `RECENT SIGNALS` form the lower row.
+The home page has a compact upper status strip above the full-width `PROJECTS` (`NOW`)
+region. The upper-left third remains intentionally empty. The upper-right places
+`RECENT SIGNALS` and `TASKS` side by side; both are supporting status surfaces and share
+the strip's small fixed height.
 
 ```text
-+------------------------------------++------------------------------------+
-|                                    || TASKS                              |
-|         reserved and empty         ||                                    |
-+------------------------------------++------------------------------------+
-+------------------------------------++------------------------------------+
-| NOW                                || RECENT SIGNALS                     |
-|                                    ||                                    |
-+------------------------------------++------------------------------------+
+                         +------------------------++------------------------+
+                         | RECENT SIGNALS         || TASKS                  |
+                         |                        ||                        |
+                         +------------------------++------------------------+
++--------------------------------------------------------------------------+
+| PROJECTS / NOW                                                           |
+|                                                                          |
++--------------------------------------------------------------------------+
 ```
 
 `TASKS` is focusable and keyboard-scrollable. Compact layouts may reduce its visible
@@ -511,7 +513,7 @@ separate interaction outcome.
 
 ### UI and notification
 
-- The upper-right `TASKS` panel shows every retained Task in confirmed time order.
+- The upper-right status row keeps every retained Task reachable in confirmed time order.
 - Unread presentation changes only after deliberate acknowledgement.
 - `Close for Later` preserves a discoverable Result.
 - TUI exit does not suppress Worker completion or persistent Task state.

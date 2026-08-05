@@ -233,11 +233,13 @@ existing regions, and the explicitly authorized control extension adds a third:
 | `TASKS` | Confirmed | Time-ordered Operation Tasks and their current execution states |
 | Reserved upper-left region | Confirmed empty | Remains unlabelled and unassigned |
 
-On wide terminals, `TASKS` is a complete panel in the upper-right. The reserved region to
-its left remains empty by design. `NOW` and `RECENT SIGNALS` form the lower row, with
-`NOW` on the left and `RECENT SIGNALS` on the right. `TASKS` must not expand leftward into
-the reserved region merely because it has more items. Compact-width degradation and Task
-navigation are specified separately.
+The page has a compact upper status strip and a full-width lower `PROJECTS` (`NOW`)
+region. The status strip remains eight rows high at the supported full and compact target
+sizes. Its left third stays empty by design; the remaining right side places
+`RECENT SIGNALS` and `TASKS` next to each other with equal widths. Neither status panel
+expands leftward merely because it has more items. `PROJECTS` owns all remaining height
+and the complete page width.
+Compact-width degradation and Task navigation are specified separately.
 
 ### 8.3 Operation Task state model
 
@@ -605,8 +607,8 @@ Recent Signal; repeated observations of an unchanged Idle Session are not new si
 - `RECENT SIGNALS` is visually and semantically distinct from current Session state.
 - `RECENT SIGNALS` retains at most five entries, orders them newest first, and provides no
   scrolling, expansion, or `View more` action.
-- A compact viewport reduces visible Recent Signals before reducing the space required to
-  understand `NOW`.
+- The compact status strip shortens status evidence and reduces visible Tasks before
+  reducing the space required to understand `NOW`.
 - `Tab` and `Shift+Tab` move focus among `TASKS`, `NOW`, and `RECENT SIGNALS`; the focused
   region is visibly identified and each list retains its own selected row.
 - `Enter` on a Task row opens its Task detail and state-appropriate actions.
@@ -821,11 +823,12 @@ the only evidence.
 
 **Status: Confirmed**
 
-Use `120x30` as the full-layout target and `80x24` as the hard minimum. At the full
-target, `NOW` and `RECENT SIGNALS` may render side by side. The
-compact layout stacks them and degrades fields in this order: shorten Worktree path, hide
-model, hide last activity, replace the Context bar with its percentage, then compress
-Recent Signal evidence to one line.
+Use `120x30` as the full-layout target and `80x24` as the hard minimum. At both targets,
+the compact upper status strip keeps its left third empty. The right two-thirds are split
+equally between `RECENT SIGNALS` on the left and `TASKS` on the right. The full-width lower
+`PROJECTS` region owns the remaining height. Narrow layouts degrade fields in this order:
+shorten Worktree path, hide model, hide last activity, replace the Context bar with its
+percentage, then shorten status-row evidence.
 
 Attention kind and severity, Project and Worktree identity, Session State, Provider,
 Current Context percentage, selection, and access to Inspect through the persistent
@@ -998,8 +1001,8 @@ and direct usability observation.
 | 2026-07-30 | Show complete working-directory and source-log metadata in Session Detail without exposing raw contents. | Confirmed | Local paths and native identity support investigation, while raw JSONL, prompt/response, tool, and source-code content remain outside the privacy boundary. |
 | 2026-07-30 | Group provider-page sessions by Project while retaining one row per Session. | Confirmed | Project supplies context without losing session-specific state or detail navigation. |
 | 2026-07-30 | Render Current Context as a percentage progress bar with threshold colors. | Confirmed | Makes Current Context occupancy scannable while retaining precise text and unknown-state handling. |
-| 2026-07-30 | Divide the main terminal screen into regions, with `NOW` and `RECENT SIGNALS` as the only assigned regions. | Superseded | The lower row still owns observation, while the upper-right region is now assigned to `TASKS`. |
-| 2026-07-30 | Leave the other two proposed homepage regions unassigned. | Superseded | The upper-right region became `TASKS`; only the upper-left region remains deliberately empty. |
+| 2026-07-30 | Divide the main terminal screen into regions, with `NOW` and `RECENT SIGNALS` as the only assigned regions. | Superseded | `RECENT SIGNALS` and `TASKS` now share the compact upper-right status row, while `PROJECTS` owns the full-width lower region. |
+| 2026-07-30 | Leave the other two proposed homepage regions unassigned. | Superseded | The upper-right region now contains the two side-by-side status panels; only the upper-left region remains deliberately empty. |
 | 2026-07-30 | Show Current Run Usage separately from Transcript Lifetime Usage in Session detail. | Confirmed | Current Run supports comparison with Claude Code `/usage`; transcript lifetime preserves inherited usage without presenting it as the same total. |
 | 2026-07-30 | Use the provider Run boundary, not the latest model, to calculate Current Run Usage. | Confirmed | A single Run may use multiple models, while a resumed Session may retain earlier transcript usage. |
 | 2026-07-30 | Show Current Run Usage only while a Session is Open; show only Transcript Lifetime Usage after exit. | Confirmed | JSONL timestamps preserve lifetime Usage but not a durable provider Run boundary. Avoiding inferred or persisted Last Run Usage keeps the index rebuildable and the lifecycle language precise. |
@@ -1038,6 +1041,7 @@ and direct usability observation.
 | 2026-08-02 | Order one unified Task timeline by its most recent execution-state transition. | Confirmed | Meaningful transitions, especially new terminal outcomes, become immediately visible without heartbeats causing row movement or state grouping fragmenting time order. |
 | 2026-08-02 | Record Task Acknowledgement only after deliberate user interaction. | Confirmed | Notification delivery, panel rendering, and startup loading cannot prove that the user saw a terminal outcome; unread presentation must not alter execution truth. |
 | 2026-08-02 | Keep every retained Task in the scrollable `TASKS` panel after acknowledgement. | Confirmed | `Close for Later` must leave the result discoverable without creating a separate history surface; only retention or explicit deletion removes a Task. |
+| 2026-08-04 | Rebalance the home page into side-by-side Signals and Tasks in a compact upper-right status area above a full-width `PROJECTS` region. | Confirmed | Recent Signals and Operation Tasks are supporting status metadata, while the current Project inventory is the core surface; the upper-left region remains reserved and empty. |
 | 2026-08-02 | Apply fixed deadlines of 30 seconds in `Queued`, 2 hours in `Waiting`, and 30 minutes in `Running`. | Confirmed | Startup failures should surface quickly, stale control authorization must expire, and runaway Provider execution must begin graceful termination without force killing or automatic retry. |
 | 2026-08-02 | Treat Task cancellation as an intent whose outcome is determined by reconciliation evidence. | Confirmed | A valid result, verified cancellation, and uncertain outcome must remain distinguishable; cancellation must not force-kill processes, close the user's shell, or conceal uncertainty. |
 | 2026-08-02 | Implement manual retry as a newly authorized Task linked to an immutable terminal predecessor. | Confirmed | Reopening or overwriting the original would erase evidence, reuse stale assumptions, and risk duplicate execution while an Interrupted Provider might still be live. |

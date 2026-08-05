@@ -15,9 +15,9 @@ cargo test --test production_renders
 
 | Fixture | Production state covered |
 |---|---|
-| `all_populated_120x30.txt` | Full All page with side-by-side PROJECT and populated RECENT SIGNALS |
-| `all_populated_80x24.txt` | Stacked compact All page with Critical, Shared Worktree Risk, Warning, Idle, and healthy Busy states |
-| `all_empty_signals_80x24.txt` | Compact All page with the empty Signals state |
+| `all_populated_120x30.txt` | All-page Session editor with a selected Session driving the tree, compact inspector, and unavailable workspace |
+| `all_populated_80x24.txt` | Compact Session editor below the side-by-side status strip |
+| `all_empty_signals_80x24.txt` | Compact Session editor with the explicit empty Signals state |
 | `claude_120x30.txt` | Full Claude provider inventory and complete lifetime Usage columns |
 | `claude_older_expanded_80x24.txt` | Compact expanded per-Project older-session disclosure |
 | `codex_80x24.txt` | Compact Codex provider inventory, including an Exited Session |

@@ -1,24 +1,24 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
-┌ PROJECTS 1 ───────────────────────────────────────────────── 5 OPEN SESSIONS ┐
-│sessionmesh                                                                   │
-│  ...ur┌ Guide ───────────────────────────────────────────────────────┐       │
-│> CRITI│> Overview    │Overview                                       │0s     │
-│  SHARE│  Navigation  │SessionMesh is local to this Mac.              │m      │
-│  /User│  Sessions    │Passive observation is the default.            │       │
-│  WARNI│  Signals     │Control Operations require explicit            │m      │
-│  /User│  Theme       │authorization.                                 │       │
-│  IDLE │              │Pages                                          │dle 3m │
-│  /User│              │1  All                                         │       │
-│  BUSY │              │2  Claude Code                                 │m      │
-│       │              │3  Codex CLI                                   │       │
-│       │              │Current and recent                             │       │
-└───────│              │NOW shows current conditions.                  │───────┘
-┌ RECENT│              │Recent Signals show transitions.               │est 5s ┐
-│WT /Use│              │                                               │       │
-│CL crit│              │                                               │       │
-│CL crit│              │                                               │       │
-│CL -war│              │                                               │       │
-│CX dex-└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘       │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-j/k | Enter | e Edit title | ? Guide | q Quit                      fixture ready
+                          ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
+                          │WT /Use...  Risk detected││                         │
+        ┌ Guide ───────────────────────────────────────────────────────┐       │
+        │> Overview    │Overview                                       │       │
+        │  Navigation  │SessionMesh is local to this Mac.              │       │
+        │  Sessions    │Passive observation is the default.            │       │
+        │  Signals     │Control Operations require explicit            │       │
+        │  Theme       │authorization.                                 │───────┘
+┌ SESSIO│              │Pages                                          │───────┐
+│    - s│              │1  All                                         │       │
+│    > C│              │2  Claude Code                                 │       │
+└───────│              │3  Codex CLI                                   │       │
+┌ Select│              │Current and recent                             │       │
+│Session│              │NOW shows current conditions.                  │       │
+│Provide│              │Recent Signals show transitions.               │       │
+│Project│              │                                               │       │
+│Worktre│              │                                               │       │
+│Latest │              │                                               │       │
+│Current│              │                                               │       │
+│Current└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘       │
+│Operation Task N/A                 ││                                         │
+└───────────────────────────────────┘└─────────────────────────────────────────┘
+j/k | Left/Right | Enter | e Edit | ? | q Quit                     fixture ready

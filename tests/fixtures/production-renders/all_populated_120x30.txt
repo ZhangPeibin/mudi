@@ -1,30 +1,30 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ─────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
-                                                                                ┌ TASKS 0 ─────────────────────────────┐
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                │                                      │
-                                                                                └──────────────────────────────────────┘
-┌ PROJECTS 1 ───────────────────────────────────────────────── 5 OPEN SESSIONS ┐┌ RECENT SIGNALS 5 ───────── latest 5s ┐
-│sessionmesh                                                                   ││WT /Users/fixture/co...  Risk detected│
-│  ...ure/code/sessionmesh | main | WARNING Shared Worktree Risk x2            ││Before 1: CL:critical                 │
-│> CRITICAL Busy Claude critical       [###########-] 90%  claude-o... 30s     ││After 2: CL:critical, CX:x-shared     │
-│  SHARED   Busy Codex  x-shared       [#####-------] 40%  gpt-5-codex 1m      ││CL ...ical Ctx +Critical 160.0k>180.0k│
-│  /Users/fixture/code/sessionmesh-warning | warning                           ││CL .. Cmp auto 188.0k>100.0k -Critical│
-│  WARNING  Busy Claude -warning       [#########---] 75%  claude-s... 2m      ││CL -warning Ctx +Warning 120.0k>150.0k│
-│  /Users/fixture/code/sessionmesh-idle | idle                                 ││CX dex-idle Busy -> Idle              │
-│  IDLE     Idle Codex  dex-idle       [####--------] 30%  gpt-5.2-... Idle 3m ││                                      │
-│  /Users/fixture/code/sessionmesh-healthy | healthy                           ││                                      │
-│  BUSY     Busy Claude -healthy       [##----------] 20%  claude-h... 4m      ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-│                                                                              ││                                      │
-└──────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────┘
-j/k | Enter Inspect | e Edit title | 1/2/3 | r | ? Guide | q Quit                                          fixture ready
+                                        ┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
+                                        │WT /Users/fixture/co...  Risk detected││                                      │
+                                        │CL ...ical Ctx +Critical 160.0k>180.0k││                                      │
+                                        │CL .. Cmp auto 188.0k>100.0k -Critical││                                      │
+                                        │CL -warning Ctx +Warning 120.0k>150.0k││                                      │
+                                        │CX dex-idle Busy -> Idle              ││                                      │
+                                        │                                      ││                                      │
+                                        └──────────────────────────────────────┘└──────────────────────────────────────┘
+┌ SESSION TREE 1 ──────────────────── 5 OPEN SESSIONS ┐┌ Session Workspace ────────────────────────────────────────────┐
+│  - sessionmesh (7)                                  ││Session Claude Code / critical                                 │
+│    - sessionmesh | main | Risk x2                   ││Conversation unavailable.                                      │
+│    > CRITICAL Busy Claude critical           90% 30s││                                                               │
+│      SHARED Busy Codex x-shared               40% 1m││                                                               │
+│    - sessionmesh-warning | warning                  ││                                                               │
+│      WARNING Busy Claude -warning             75% 2m││                                                               │
+│    - sessionmesh-idle | idle                        ││                                                               │
+│      IDLE Idle Codex dex-idle                 30% 3m││                                                               │
+└─────────────────────────────────────────────────────┘│                                                               │
+┌ Selected Session ───────────────────────────────────┐│                                                               │
+│Session Label critical                               ││                                                               │
+│Provider / Lifecycle Claude Code / Busy              ││                                                               │
+│Project sessionmesh                                  ││                                                               │
+│Worktree /Users/fixture/code/sessionmesh @ main      ││                                                               │
+│Latest model claude-opus-4-8                         ││                                                               │
+│Current Context 180.0k (90%)                         ││                                                               │
+│Current Run Busy (usage available)                   ││                                                               │
+│Operation Task N/A                                   ││                                                               │
+└─────────────────────────────────────────────────────┘└───────────────────────────────────────────────────────────────┘
+j/k | Left/Right | Enter | e Edit title | 1/2/3 | r | ? | q Quit                                           fixture ready
