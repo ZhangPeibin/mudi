@@ -16,9 +16,9 @@
       ✦ │              │Recent Signals show transitions.               │
    ▾ idl│              │                                               │
       ◎ │              │                                               │
-   ▾ hea│              │                                               │
  DETAILS│              │                                               │
-Provider└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘
-Worktree   ...essionmesh @ main│
-Model      claude-opus-4-8     │
+        │              │                                               │
+ Provide└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘
+ Worktree   ...ssionmesh @ main│
+ Model      claude-opus-4-8    │
 j/k | Left/Right | Enter | e Edit | ? | q Quit                     fixture ready

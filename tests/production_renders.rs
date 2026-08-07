@@ -1908,6 +1908,20 @@ fn workspace_and_details_headings_keep_horizontal_section_rules() {
 }
 
 #[test]
+fn selected_session_details_align_content_below_one_breathing_row() {
+    let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
+    let lines = rendered.text.lines().collect::<Vec<_>>();
+    let details_row = lines
+        .iter()
+        .position(|line| line.contains("DETAILS"))
+        .unwrap();
+    let left_pane = |row: usize| lines[row].split_once('│').unwrap().0;
+
+    assert!(left_pane(details_row + 1).trim().is_empty());
+    assert!(left_pane(details_row + 2).starts_with(" Provider"));
+}
+
+#[test]
 fn mouse_wheel_navigates_only_when_pointer_is_over_project_rows() {
     let snapshot = production_snapshot();
     let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);

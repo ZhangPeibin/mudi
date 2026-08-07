@@ -7,15 +7,23 @@ use crate::tasks::OperationTask;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
 
 const COMPACT_USAGE_WIDTH: usize = 45;
+const DETAILS_PADDING: Padding = Padding::new(1, 0, 1, 0);
+const DETAILS_BORDER_HEIGHT: usize = 1;
+
+fn content_width(width: u16) -> usize {
+    usize::from(width.saturating_sub(DETAILS_PADDING.left + DETAILS_PADDING.right))
+}
 
 pub(super) fn preferred_height(snap: &Snapshot, ui: &Ui, width: u16) -> u16 {
-    detail_lines(snap, ui, width.saturating_sub(1) as usize)
+    detail_lines(snap, ui, content_width(width))
         .len()
-        .saturating_add(1) as u16
+        .saturating_add(
+            DETAILS_BORDER_HEIGHT + usize::from(DETAILS_PADDING.top + DETAILS_PADDING.bottom),
+        ) as u16
 }
 
 pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
@@ -23,12 +31,13 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         return;
     }
     let theme = ui.theme.palette();
-    let lines = detail_lines(snap, ui, area.width as usize);
+    let lines = detail_lines(snap, ui, content_width(area.width));
     f.render_widget(
         Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(theme.border))
+                .padding(DETAILS_PADDING)
                 .title(Span::styled(
                     " DETAILS ",
                     Style::default()
