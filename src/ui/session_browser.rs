@@ -47,11 +47,33 @@ const DECORATED_HEADER: HeaderFormat = HeaderFormat {
 
 const COMPACT_HEADER: HeaderFormat = HeaderFormat {
     project_heading: "PROJECT TREE ",
-    project_count_prefix: "",
-    project_count_suffix: "/",
-    open_count_prefix: "OPEN",
+    project_count_prefix: "P",
+    project_count_suffix: " ",
+    open_count_prefix: "O",
     open_suffix: "",
 };
+
+fn compact_count(count: usize) -> String {
+    if count < 10_000 {
+        return count.to_string();
+    }
+
+    let count = count as u128;
+    for (threshold, suffix) in [
+        (1_000_000_000_000_000_000_u128, "E"),
+        (1_000_000_000_000_000_u128, "Q"),
+        (1_000_000_000_000_u128, "T"),
+        (1_000_000_000_u128, "B"),
+        (1_000_000_u128, "M"),
+        (1_000_u128, "K"),
+    ] {
+        if count >= threshold {
+            return format!("{}{suffix}", count / threshold);
+        }
+    }
+
+    unreachable!("counts below 10,000 return before unit selection")
+}
 
 /// Draw the Project Tree above Selected Session Details in one unframed pane.
 pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
@@ -61,14 +83,23 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
-    let project_count = project_count.to_string();
-    let open_session_count = open_session_count.to_string();
-    let header_format = if DECORATED_HEADER.total_width(&project_count, &open_session_count)
+    let full_project_count = project_count.to_string();
+    let full_open_session_count = open_session_count.to_string();
+    let (header_format, project_count, open_session_count) = if DECORATED_HEADER
+        .total_width(&full_project_count, &full_open_session_count)
         > usize::from(area.width)
     {
-        COMPACT_HEADER
+        (
+            COMPACT_HEADER,
+            compact_count(project_count),
+            compact_count(open_session_count),
+        )
     } else {
-        DECORATED_HEADER
+        (
+            DECORATED_HEADER,
+            full_project_count,
+            full_open_session_count,
+        )
     };
     let header = Layout::default()
         .direction(Direction::Horizontal)

@@ -1888,8 +1888,8 @@ fn overview_workspace_uses_one_unframed_split_surface() {
 }
 
 #[test]
-fn minimum_width_header_keeps_three_digit_project_and_open_counts_distinct() {
-    let sessions = (0..100)
+fn minimum_width_header_keeps_four_digit_project_and_open_counts_distinct() {
+    let sessions = (0..1000)
         .map(|index| {
             let mut session = fixture_session(
                 Provider::ClaudeCode,
@@ -1948,9 +1948,8 @@ fn minimum_width_header_keeps_three_digit_project_and_open_counts_distinct() {
         .take(24)
         .collect::<String>();
     assert!(left_header.contains("PROJECT TREE"), "{left_header:?}");
-    assert!(left_header.contains("OPEN"), "{left_header:?}");
-    assert_eq!(left_header.matches("100").count(), 2, "{left_header:?}");
-    assert!(!left_header.contains("100100"), "{left_header:?}");
+    assert!(left_header.contains("P1000"), "{left_header:?}");
+    assert!(left_header.contains("O1000"), "{left_header:?}");
 }
 
 #[test]
