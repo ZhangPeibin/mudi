@@ -33,18 +33,20 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     let lines = detail_lines(snap, ui, content_width(area.width));
     f.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(theme.border))
-                .padding(DETAILS_PADDING)
-                .title(Span::styled(
-                    " DETAILS ",
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        ),
+        Paragraph::new(lines)
+            .style(Style::default().add_modifier(Modifier::BOLD))
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(theme.border))
+                    .padding(DETAILS_PADDING)
+                    .title(Span::styled(
+                        " DETAILS ",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            ),
         area,
     );
 }

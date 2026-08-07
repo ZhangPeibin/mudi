@@ -9,6 +9,8 @@ use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 
 const MIN_TREE_HEIGHT: u16 = 4;
+const DETAILS_HEIGHT_NUMERATOR: u32 = 2;
+const DETAILS_HEIGHT_DENOMINATOR: u32 = 5;
 
 #[derive(Clone, Copy)]
 struct Areas {
@@ -23,7 +25,10 @@ fn areas(area: Rect, snap: &Snapshot, ui: &Ui) -> Areas {
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
     let inner = pane[1];
+    let proportional_details_height = (u32::from(area.height) * DETAILS_HEIGHT_NUMERATOR)
+        .div_ceil(DETAILS_HEIGHT_DENOMINATOR) as u16;
     let details_height = selected_session::preferred_height(snap, ui, inner.width)
+        .max(proportional_details_height)
         .min(inner.height.saturating_sub(MIN_TREE_HEIGHT));
     let sections = Layout::default()
         .direction(Direction::Vertical)

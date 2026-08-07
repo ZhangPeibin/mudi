@@ -1919,6 +1919,11 @@ fn selected_session_details_align_content_below_one_breathing_row() {
 
     assert!(left_pane(details_row + 1).trim().is_empty());
     assert!(left_pane(details_row + 2).starts_with(" Provider"));
+    assert_eq!(rendered.height as usize - 1 - details_row, 8);
+    assert!(rendered
+        .style_at("Provider")
+        .add_modifier
+        .contains(Modifier::BOLD));
 }
 
 #[test]

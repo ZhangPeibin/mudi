@@ -15,10 +15,10 @@
    ▾ war│              │NOW shows current conditions.                  │
       ✦ │              │Recent Signals show transitions.               │
    ▾ idl│              │                                               │
-      ◎ │              │                                               │
  DETAILS│              │                                               │
         │              │                                               │
- Provide└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘
- Worktree   ...ssionmesh @ main│
+ Provide│              │                                               │
+ Worktre└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘
  Model      claude-opus-4-8    │
+                               │
 j/k | Left/Right | Enter | e Edit | ? | q Quit                     fixture ready
