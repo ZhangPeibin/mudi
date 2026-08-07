@@ -305,7 +305,6 @@ fn section_line(
 ) -> Line<'static> {
     let label = match section {
         ProjectTreeSection::OlderProjects => "Older Projects",
-        ProjectTreeSection::Unavailable => "Unavailable",
     };
     group_line(label, item_count, 0, expanded, selected, width, theme)
 }

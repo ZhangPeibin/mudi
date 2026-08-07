@@ -18,7 +18,6 @@ pub(super) enum SessionAgeBand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ProjectTreeSection {
     OlderProjects,
-    Unavailable,
 }
 
 /// Stable identity for every selectable Project Tree node.
@@ -39,7 +38,7 @@ pub(super) enum ProjectTreeKey {
 }
 
 impl ProjectTreeKey {
-    /// Historical groups default closed; Projects, Worktrees, and Unavailable default open.
+    /// Historical groups default closed; Projects and Worktrees default open.
     pub(super) fn uses_disclosure_state(&self) -> bool {
         matches!(
             self,
@@ -184,27 +183,6 @@ pub(super) fn rows<'a>(
         }
     }
 
-    if !inventory.unavailable.is_empty() {
-        let key = ProjectTreeKey::Section(ProjectTreeSection::Unavailable);
-        let expanded = !collapsed.contains(&key);
-        rows.push(ProjectTreeRow::Section {
-            key: key.clone(),
-            section: ProjectTreeSection::Unavailable,
-            item_count: inventory.unavailable.len(),
-            expanded,
-        });
-        if expanded {
-            append_session_buckets(
-                &mut rows,
-                inventory.unavailable,
-                None,
-                None,
-                key,
-                1,
-                expanded_disclosures,
-            );
-        }
-    }
     rows
 }
 
@@ -391,7 +369,7 @@ fn session_tree_key(session: &Session) -> ProjectTreeKey {
     ProjectTreeKey::Session(SessionIdentity::from(session))
 }
 
-/// 返回可解析 Project 总数和非临时目录中的 Open Session 总数。
+/// 返回可解析 Project 总数和这些 Project 下的 Open Session 总数。
 pub(super) fn tree_counts(snap: &Snapshot) -> (usize, usize) {
     let project_count = snap
         .sessions
@@ -405,12 +383,13 @@ pub(super) fn tree_counts(snap: &Snapshot) -> (usize, usize) {
         .sessions
         .iter()
         .filter(|session| !is_system_temporary_cwd(session.cwd.as_deref()))
+        .filter(|session| session.project.is_some())
         .filter(|session| session.state.is_open())
         .count();
     (project_count, open_session_count)
 }
 
-/// 按首页 Attention 顺序返回所有 Open Session。
+/// 按首页 Attention 顺序返回已解析到 Project 的 Open Session。
 pub(super) fn sessions(snap: &Snapshot) -> Vec<&Session> {
     let attention = current_attention(snap);
     let collapsed = HashSet::new();
@@ -486,10 +465,9 @@ struct WorktreeGroup<'a> {
 struct ProjectInventory<'a> {
     current_projects: Vec<ProjectGroup<'a>>,
     older_projects: Vec<ProjectGroup<'a>>,
-    unavailable: SessionBuckets<'a>,
 }
 
-/// 将全部可浏览 Session 分组，并按 Project 最新 Session 活动时间倒序排列。
+/// 将已解析 Project 的 Session 分组，并按 Project 最新 Session 活动时间倒序排列。
 fn grouped_sessions<'a>(
     sessions: &'a [Session],
     attention: &AttentionSnapshot,
@@ -498,14 +476,12 @@ fn grouped_sessions<'a>(
     const SEVEN_DAYS_MS: i64 = 7 * 86_400_000;
     let cutoff_ms = now_ms - SEVEN_DAYS_MS;
     let mut projects: Vec<ProjectGroup<'_>> = Vec::new();
-    let mut unavailable = SessionBuckets::default();
 
     for session in sessions {
         if is_system_temporary_cwd(session.cwd.as_deref()) {
             continue;
         }
         let Some(resolved_project) = session.project.as_ref() else {
-            unavailable.push(session, session_bucket(session, cutoff_ms));
             continue;
         };
         let project_index = projects
@@ -563,15 +539,12 @@ fn grouped_sessions<'a>(
             .cmp(&left.latest_activity_ms)
             .then_with(|| left.project.label.cmp(&right.project.label))
     });
-    unavailable.sort(attention);
-
     let (current_projects, older_projects) = projects
         .into_iter()
         .partition(|project| project.has_open_session || project.latest_activity_ms >= cutoff_ms);
     ProjectInventory {
         current_projects,
         older_projects,
-        unavailable,
     }
 }
 

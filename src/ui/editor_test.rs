@@ -1,14 +1,20 @@
 use super::*;
-use crate::domain::{ContextState, Provider, Session, SessionState, SourceMetadata, Usage};
+use crate::domain::{
+    ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceMetadata, Usage,
+};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use std::path::PathBuf;
 
 fn session() -> Session {
     Session {
         provider: Provider::ClaudeCode,
         id: "selected".into(),
         source: SourceMetadata::default(),
-        project: None,
+        project: Some(Project {
+            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/test/sessionmesh")),
+            label: "sessionmesh".into(),
+        }),
         worktree: None,
         cwd: None,
         latest_model: Some("test-model".into()),

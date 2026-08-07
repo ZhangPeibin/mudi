@@ -203,7 +203,7 @@ fn open_session_operational_evidence_uses_stable_columns() {
 }
 
 #[test]
-fn unresolved_sessions_use_one_unavailable_section_and_keep_provider_scoped_identities() {
+fn unresolved_sessions_are_excluded_from_the_project_tree() {
     let sessions = vec![
         unresolved_open_session(Provider::ClaudeCode, "same-native-id"),
         unresolved_open_session(Provider::CodexCli, "same-native-id"),
@@ -216,23 +216,7 @@ fn unresolved_sessions_use_one_unavailable_section_and_keep_provider_scoped_iden
         &HashSet::new(),
     );
 
-    assert!(!tree
-        .iter()
-        .any(|row| matches!(row, ProjectTreeRow::Project { .. })));
-    assert!(tree.iter().any(|row| matches!(
-        row,
-        ProjectTreeRow::Section {
-            section: ProjectTreeSection::Unavailable,
-            item_count: 2,
-            expanded: true,
-            ..
-        }
-    )));
-    let session_keys = tree
-        .iter()
-        .filter_map(ProjectTreeRow::session_key)
-        .collect::<HashSet<_>>();
-    assert_eq!(session_keys.len(), 2);
+    assert!(tree.is_empty());
 }
 
 #[test]

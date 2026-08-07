@@ -1,5 +1,8 @@
 use super::*;
-use crate::domain::{ContextState, Provider, SessionState, SourceMetadata, Usage, UsageSummary};
+use crate::domain::{
+    ContextState, Project, ProjectIdentity, Provider, SessionState, SourceMetadata, Usage,
+    UsageSummary,
+};
 use crate::tasks::OperationTaskState;
 use std::path::PathBuf;
 
@@ -8,7 +11,10 @@ fn session() -> Session {
         provider: Provider::ClaudeCode,
         id: "selected".into(),
         source: SourceMetadata::default(),
-        project: None,
+        project: Some(Project {
+            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/Users/test/code/sessionmesh")),
+            label: "sessionmesh".into(),
+        }),
         worktree: Some(crate::domain::Worktree {
             root: PathBuf::from("/Users/test/code/sessionmesh"),
             branch: Some("main".into()),

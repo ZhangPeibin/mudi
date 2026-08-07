@@ -2677,14 +2677,14 @@ fn exited_session_tree_selection_opens_transcript_lifetime_detail_and_returns() 
 }
 
 #[test]
-fn session_tree_hides_system_temporary_sources_but_keeps_unavailable_sessions() {
+fn project_tree_hides_unresolved_and_system_temporary_sessions() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
     let mut unavailable = fixture_session(
         Provider::ClaudeCode,
         "missing",
         "missing-model",
-        SessionState::Exited,
+        SessionState::Busy,
         20_000,
         NOW - DAY_MS,
         ("/Users/fixture/code/missing", "main"),
@@ -2703,16 +2703,12 @@ fn session_tree_hides_system_temporary_sources_but_keeps_unavailable_sessions() 
         ready: true,
         ..Snapshot::default()
     };
-    let mut ui = Ui::default();
+    let rendered = render(&snapshot, &Ui::default(), 120, 30);
 
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Down);
-    let rendered = render(&snapshot, &ui, 120, 30);
-
-    assert!(rendered.text.contains("Unavailable (1)"));
-    assert!(!rendered.text.contains("N/A (1)"));
-    assert!(rendered.text.contains("missing-model"));
+    assert!(rendered.text.contains("PROJECT 0"));
+    assert!(rendered.text.contains("0 OPEN"));
+    assert!(!rendered.text.contains("Unavailable"));
+    assert!(!rendered.text.contains("missing-model"));
     assert!(!rendered.text.contains("temporary-model"));
 }
 
