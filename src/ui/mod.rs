@@ -9,6 +9,7 @@ mod chrome;
 mod context;
 mod detail;
 mod editor;
+mod field;
 mod guide;
 mod layout;
 mod modals;

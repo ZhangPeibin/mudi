@@ -1,6 +1,6 @@
 //! Compact facts that complement, rather than repeat, the selected Tree row.
 
-use super::{projects, text, Ui};
+use super::{field::FieldLine, projects, Ui};
 use crate::app::{fmt_tokens, Snapshot};
 use crate::domain::Session;
 use crate::tasks::OperationTask;
@@ -9,7 +9,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
-use unicode_width::UnicodeWidthStr;
 
 const COMPACT_USAGE_WIDTH: usize = 45;
 
@@ -50,76 +49,68 @@ fn detail_lines(snap: &Snapshot, ui: &Ui, content_width: usize) -> Vec<Line<'sta
         ))];
     };
 
-    let mut lines = vec![field_line(
-        "Provider",
-        session.provider.label(),
-        content_width,
-        false,
-        theme.muted,
-        theme.foreground,
-    )];
+    let mut lines = vec![FieldLine::new("Provider", session.provider.label())
+        .label_width(10)
+        .render(content_width, theme)];
     if let Some(worktree) = session.worktree.as_ref() {
-        lines.push(field_line(
-            "Worktree",
-            &format!(
-                "{} @ {}",
-                projects::home_relative_path(&worktree.root),
-                worktree.branch.as_deref().unwrap_or("detached HEAD")
-            ),
-            content_width,
-            true,
-            theme.muted,
-            theme.foreground,
-        ));
+        lines.push(
+            FieldLine::new(
+                "Worktree",
+                &format!(
+                    "{} @ {}",
+                    projects::home_relative_path(&worktree.root),
+                    worktree.branch.as_deref().unwrap_or("detached HEAD")
+                ),
+            )
+            .label_width(10)
+            .keep_end()
+            .render(content_width, theme),
+        );
     } else if let Some(cwd) = session.cwd.as_deref() {
-        lines.push(field_line(
-            "Directory",
-            &projects::home_relative_path(std::path::Path::new(cwd)),
-            content_width,
-            true,
-            theme.muted,
-            theme.foreground,
-        ));
+        lines.push(
+            FieldLine::new(
+                "Directory",
+                &projects::home_relative_path(std::path::Path::new(cwd)),
+            )
+            .label_width(10)
+            .keep_end()
+            .render(content_width, theme),
+        );
     }
     if let Some(model) = session.latest_model.as_deref() {
-        lines.push(field_line(
-            "Model",
-            model,
-            content_width,
-            true,
-            theme.muted,
-            theme.foreground,
-        ));
+        lines.push(
+            FieldLine::new("Model", model)
+                .label_width(10)
+                .keep_end()
+                .render(content_width, theme),
+        );
     }
     if let Some(run) = session
         .current_run_usage
         .as_ref()
         .filter(|_| content_width >= COMPACT_USAGE_WIDTH)
     {
-        lines.push(field_line(
-            "Run usage",
-            &format!(
-                "in {} | out {} | read {} | create {}",
-                fmt_tokens(run.usage.input),
-                fmt_tokens(run.usage.output),
-                fmt_tokens(run.usage.cache_read),
-                fmt_tokens(run.usage.cache_write),
-            ),
-            content_width,
-            false,
-            theme.muted,
-            theme.foreground,
-        ));
+        lines.push(
+            FieldLine::new(
+                "Run usage",
+                &format!(
+                    "in {} | out {} | read {} | create {}",
+                    fmt_tokens(run.usage.input),
+                    fmt_tokens(run.usage.output),
+                    fmt_tokens(run.usage.cache_read),
+                    fmt_tokens(run.usage.cache_write),
+                ),
+            )
+            .label_width(10)
+            .render(content_width, theme),
+        );
     }
     if let Some(task) = task_for_session(session, &snap.tasks) {
-        lines.push(field_line(
-            "Task",
-            &format!("Handoff {}", task.state.label()),
-            content_width,
-            false,
-            theme.muted,
-            theme.foreground,
-        ));
+        lines.push(
+            FieldLine::new("Task", &format!("Handoff {}", task.state.label()))
+                .label_width(10)
+                .render(content_width, theme),
+        );
     }
     lines
 }
@@ -142,23 +133,6 @@ fn task_for_session<'a>(
                 .filter(belongs_to_session)
                 .max_by_key(|task| (task.state_changed_at_ms, task.created_at_ms, &task.id))
         })
-}
-
-fn field_line(
-    label: &str,
-    value: &str,
-    content_width: usize,
-    keep_end: bool,
-    label_color: ratatui::style::Color,
-    value_color: ratatui::style::Color,
-) -> Line<'static> {
-    let label = format!("{label:<10} ");
-    let label_width = UnicodeWidthStr::width(label.as_str());
-    let value = text::fit(value, content_width.saturating_sub(label_width), keep_end);
-    Line::from(vec![
-        Span::styled(label, Style::default().fg(label_color)),
-        Span::styled(value, Style::default().fg(value_color)),
-    ])
 }
 
 #[cfg(test)]
