@@ -1,4 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::backend::{Backend, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Size};
@@ -1728,7 +1730,8 @@ fn all_page_keeps_multiple_worktrees_below_the_project_without_context() {
         .find(|line| line.contains("▾ main !2"))
         .expect("All page should render the shared Worktree below its Project");
 
-    assert!(worktree.starts_with("│  "));
+    assert!(worktree.starts_with("  "));
+    assert!(!worktree.starts_with('│'));
     assert!(worktree.contains("main"));
     assert!(!worktree.contains("/Users"));
     assert!(!worktree.contains("Context"));
@@ -1834,8 +1837,9 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
     assert!(lines[1].contains("TASKS"));
     assert!(lines[9].contains("PROJECT TREE"));
     assert!(lines[9].contains("Session Workspace"));
-    assert!(lines[9].starts_with('┌'));
-    assert!(lines[9].ends_with('┐'));
+    assert_ne!(lines[9].chars().next(), Some('┌'));
+    assert_ne!(lines[9].chars().last(), Some('┐'));
+    assert_eq!(lines[9].chars().nth(55), Some('│'));
     for line in &lines[1..9] {
         assert!(
             line.chars().take(40).all(|character| character == ' '),
@@ -1865,6 +1869,239 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
         &rendered,
         include_str!("fixtures/production-renders/all_populated_120x30.txt"),
     );
+}
+
+#[test]
+fn overview_workspace_uses_one_unframed_split_surface() {
+    let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
+    let lines = rendered.text.lines().collect::<Vec<_>>();
+
+    assert!(lines[9].contains("PROJECT TREE"));
+    assert!(lines[9].contains("Session Workspace"));
+    assert_ne!(lines[9].chars().next(), Some('├'));
+    assert_ne!(lines[9].chars().next(), Some('┌'));
+    assert_ne!(lines[9].chars().last(), Some('┤'));
+    assert_ne!(lines[9].chars().last(), Some('┐'));
+    for line in &lines[9..29] {
+        assert_eq!(line.chars().nth(55), Some('│'), "{line:?}");
+    }
+}
+
+#[test]
+fn dragging_the_overview_divider_resizes_the_complete_workspace() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
+
+    ui.handle_event(
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 55,
+            row: 12,
+            modifiers: KeyModifiers::NONE,
+        }),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+    ui.handle_event(
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 70,
+            row: 12,
+            modifiers: KeyModifiers::NONE,
+        }),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+
+    let rendered = render(&snapshot, &ui, 120, 30);
+    for line in rendered.text.lines().collect::<Vec<_>>()[9..29].iter() {
+        assert_eq!(line.chars().nth(70), Some('│'), "{line:?}");
+    }
+    assert_eq!(
+        rendered.buffer[(70, 12)].style().fg,
+        rendered.style_at("PROJECT TREE").fg
+    );
+}
+
+#[test]
+fn divider_clamps_to_both_pane_minima_and_stops_after_release() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
+    let send_mouse = |ui: &mut Ui, kind, column| {
+        ui.handle_event(
+            Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row: 12,
+                modifiers: KeyModifiers::NONE,
+            }),
+            terminal_area,
+            &snapshot,
+        )
+        .unwrap();
+    };
+
+    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 55);
+    send_mouse(&mut ui, MouseEventKind::Drag(MouseButton::Left), 0);
+    send_mouse(&mut ui, MouseEventKind::Up(MouseButton::Left), 0);
+    send_mouse(&mut ui, MouseEventKind::Drag(MouseButton::Left), 70);
+    let left_minimum = render(&snapshot, &ui, 120, 30);
+    assert!(left_minimum
+        .text
+        .lines()
+        .skip(9)
+        .take(20)
+        .all(|line| line.chars().nth(24) == Some('│')));
+
+    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 24);
+    send_mouse(&mut ui, MouseEventKind::Drag(MouseButton::Left), 119);
+    let right_minimum = render(&snapshot, &ui, 120, 30);
+    assert!(right_minimum
+        .text
+        .lines()
+        .skip(9)
+        .take(20)
+        .all(|line| line.chars().nth(71) == Some('│')));
+}
+
+#[test]
+fn mouse_activity_outside_the_visible_workspace_does_not_resize_it() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
+    let send_mouse = |ui: &mut Ui, kind, column| {
+        ui.handle_event(
+            Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row: 12,
+                modifiers: KeyModifiers::NONE,
+            }),
+            terminal_area,
+            &snapshot,
+        )
+        .unwrap();
+    };
+
+    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 54);
+    send_mouse(&mut ui, MouseEventKind::Drag(MouseButton::Left), 70);
+    ui.handle_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 55);
+    send_mouse(&mut ui, MouseEventKind::Drag(MouseButton::Left), 70);
+    ui.handle_event(
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+
+    let rendered = render(&snapshot, &ui, 120, 30);
+    assert!(rendered
+        .text
+        .lines()
+        .skip(9)
+        .take(20)
+        .all(|line| line.chars().nth(55) == Some('│')));
+}
+
+#[test]
+fn alt_arrow_resizes_without_replacing_project_tree_navigation() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
+
+    ui.handle_event(
+        Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT)),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+    let resized = render(&snapshot, &ui, 120, 30);
+    assert!(resized
+        .text
+        .lines()
+        .skip(9)
+        .take(20)
+        .all(|line| line.chars().nth(56) == Some('│')));
+
+    ui.handle_event(
+        Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+    let navigated = render(&snapshot, &ui, 120, 30);
+    assert!(navigated
+        .text
+        .lines()
+        .skip(9)
+        .take(20)
+        .all(|line| line.chars().nth(56) == Some('│')));
+}
+
+#[test]
+fn completed_drag_persists_the_preferred_width_across_terminal_sizes() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-workspace-split-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let snapshot = production_snapshot();
+    let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        ui.handle_event(
+            Event::Mouse(MouseEvent {
+                kind,
+                column: if matches!(kind, MouseEventKind::Down(_)) {
+                    55
+                } else {
+                    65
+                },
+                row: 12,
+                modifiers: KeyModifiers::NONE,
+            }),
+            terminal_area,
+            &snapshot,
+        )
+        .unwrap();
+    }
+
+    let reloaded = Ui::load(&profile_path, None).unwrap();
+    let compact = render(&snapshot, &reloaded, 80, 24);
+    assert!(compact
+        .text
+        .lines()
+        .skip(9)
+        .take(14)
+        .all(|line| line.chars().nth(31) == Some('│')));
+    let wide = render(&snapshot, &reloaded, 120, 30);
+    assert!(wide
+        .text
+        .lines()
+        .skip(9)
+        .take(20)
+        .all(|line| line.chars().nth(65) == Some('│')));
+
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
@@ -2523,7 +2760,7 @@ fn compact_now_uses_every_title_cell_before_operational_evidence() {
         .expect("critical NOW Session should render");
 
     assert!(
-        critical_row.contains("✦ ...bcdefghijklmnop ! ●  90%││"),
+        critical_row.contains("✦ ...fghijklmnop ! ●  90%│"),
         "Session Title should use every cell before operational evidence:\n{critical_row}"
     );
 }
@@ -2596,7 +2833,7 @@ fn wide_now_aligns_all_operational_evidence_for_supported_context_values() {
         assert_eq!(evidence_end(row, value), context_end);
         assert_eq!(evidence_end(row, elapsed), elapsed_end);
         assert!(
-            row.contains(&format!("{elapsed}││")),
+            row.contains(&format!("{elapsed}│")),
             "elapsed evidence should end at the Tree edge:\n{row}"
         );
     }

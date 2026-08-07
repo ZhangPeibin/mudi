@@ -20,6 +20,7 @@ mod provider;
 mod selected_session;
 mod session_browser;
 mod signals;
+mod split_pane;
 mod tasks;
 mod text;
 mod theme;
@@ -32,7 +33,6 @@ use crate::session_labels::SessionLabels;
 use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
 use chrono::Local;
-use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Block;
 use ratatui::Frame;
@@ -292,6 +292,8 @@ pub struct Ui {
     pub selected: usize,
     /// All-page Project Tree owns its stable selection and disclosure state.
     project_tree: project_tree::State,
+    /// Overview workspace split preference and transient drag state.
+    workspace_split: split_pane::State,
     /// 总览页三个区域各自独立的焦点和选中位置。
     all_region: AllRegion,
     signal_selected: usize,
@@ -326,6 +328,8 @@ struct ProfilePreferences {
     help_seen: bool,
     #[serde(default)]
     theme: ThemeName,
+    #[serde(default)]
+    overview_left_width: Option<u16>,
 }
 
 /// 按键处理交给外层事件循环执行的副作用请求。
@@ -377,6 +381,7 @@ impl Default for Ui {
             tab: Tab::All,
             selected: 0,
             project_tree: project_tree::State::default(),
+            workspace_split: split_pane::State::default(),
             all_region: AllRegion::Now,
             signal_selected: 0,
             task_selected: 0,
@@ -428,11 +433,13 @@ impl Ui {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("session-labels.json");
+        let workspace_split = split_pane::State::new(profile.overview_left_width);
         Ok(Self {
             guide_open: !profile.help_seen,
             labels: SessionLabels::load(label_path),
             profile_path: Some(profile_path),
             profile,
+            workspace_split,
             theme,
             ..Self::default()
         })
@@ -460,6 +467,67 @@ impl Ui {
     /// 显示一条四秒后自动失效的状态提示。
     pub fn show_notice(&mut self, message: impl Into<String>) {
         self.status_notice = Some((message.into(), Instant::now() + Duration::from_secs(4)));
+    }
+
+    /// Route one terminal event through the public UI interaction boundary.
+    pub fn handle_event(
+        &mut self,
+        event: crossterm::event::Event,
+        terminal_area: ratatui::layout::Rect,
+        snap: &Snapshot,
+    ) -> std::io::Result<UiAction> {
+        match event {
+            crossterm::event::Event::Key(key)
+                if key.kind == crossterm::event::KeyEventKind::Press =>
+            {
+                if key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
+                    && matches!(
+                        key.code,
+                        crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right
+                    )
+                    && self.overview_split_is_interactive(terminal_area)
+                {
+                    let screen = layout::screen(terminal_area);
+                    let workspace = overview::workspace_area(screen.content);
+                    self.workspace_split
+                        .adjust(workspace, key.code == crossterm::event::KeyCode::Right);
+                    self.save_workspace_split_preference()?;
+                    return Ok(UiAction::None);
+                }
+                self.handle_key(key, snap)
+            }
+            crossterm::event::Event::Mouse(mouse) => {
+                if self.overview_split_is_interactive(terminal_area) {
+                    let screen = layout::screen(terminal_area);
+                    let workspace = overview::workspace_area(screen.content);
+                    if self.workspace_split.handle_mouse(mouse, workspace) {
+                        self.save_workspace_split_preference()?;
+                    }
+                } else {
+                    self.workspace_split.cancel_drag();
+                }
+                Ok(UiAction::None)
+            }
+            _ => Ok(UiAction::None),
+        }
+    }
+
+    fn overview_split_is_interactive(&self, terminal_area: ratatui::layout::Rect) -> bool {
+        terminal_area.width >= MIN_TERMINAL_WIDTH
+            && terminal_area.height >= MIN_TERMINAL_HEIGHT
+            && self.tab == Tab::All
+            && self.detail.is_none()
+            && !self.guide_open
+            && self.edit_title.is_none()
+            && self.handoff_confirmation.is_none()
+            && self.task_cancellation_confirmation.is_none()
+            && self.task_deletion_confirmation.is_none()
+            && self.task_retry_confirmation.is_none()
+    }
+
+    fn save_workspace_split_preference(&mut self) -> std::io::Result<()> {
+        self.profile.overview_left_width = self.workspace_split.preferred_left_width();
+        self.save_profile()
     }
 
     /// 通过 UI 的公共交互入口处理一个按键。
@@ -1380,30 +1448,23 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
         return;
     }
     // 顶层始终保留一行页头和一行页脚，中间区域交给当前页面或详情页。
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // 全局页头
-            Constraint::Min(3),    // 主内容区
-            Constraint::Length(1), // 全局页脚
-        ])
-        .split(f.area());
+    let screen = layout::screen(f.area());
 
-    chrome::draw_header(f, chunks[0], snap, ui);
+    chrome::draw_header(f, screen.header, snap, ui);
 
     // 详情页会完整替换当前页签的主内容，但不会遮住全局页头和页脚。
     if let Some(task) = ui.detail_task(snap) {
-        tasks::draw_detail(f, chunks[1], task, snap, ui);
+        tasks::draw_detail(f, screen.content, task, snap, ui);
     } else if ui.detail.is_some() {
-        detail::draw(f, chunks[1], snap, ui);
+        detail::draw(f, screen.content, snap, ui);
     } else {
         match ui.tab {
-            Tab::All => overview::draw(f, chunks[1], snap, ui),
-            _ => provider::draw(f, chunks[1], snap, ui),
+            Tab::All => overview::draw(f, screen.content, snap, ui),
+            _ => provider::draw(f, screen.content, snap, ui),
         }
     }
 
-    chrome::draw_footer(f, chunks[2], snap, ui);
+    chrome::draw_footer(f, screen.footer, snap, ui);
 
     modals::draw_overlays(f, snap, ui);
 }

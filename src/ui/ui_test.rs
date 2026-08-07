@@ -1307,8 +1307,10 @@ fn now_keeps_multiple_worktrees_below_the_project_without_context() {
     let feature = lines.find(|line| line.contains("▾ feature")).unwrap();
 
     assert!(project.contains("(2)"));
-    assert!(main.starts_with("│  "));
-    assert!(feature.starts_with("│  "));
+    assert!(main.starts_with("  "));
+    assert!(feature.starts_with("  "));
+    assert!(!main.starts_with('│'));
+    assert!(!feature.starts_with('│'));
     assert!(!main.contains("/Users"));
     assert!(!feature.contains("/Users"));
     assert!(!main.contains("Context"));

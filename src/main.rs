@@ -6,7 +6,7 @@
 //! snapshot from shared state each frame.
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -203,10 +203,19 @@ fn run_tui<L: WorkerLauncher>(
     terminal_launcher: &mut dyn TerminalLauncher,
 ) -> Result<()> {
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    enter_tui_screen(&mut stdout)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            let _ = disable_raw_mode();
+            return Err(error.into());
+        }
+    };
+    if let Err(error) = enter_tui_screen(terminal.backend_mut()) {
+        let _ = leave_tui_screen(terminal.backend_mut());
+        let _ = disable_raw_mode();
+        return Err(error.into());
+    }
 
     let mut clipboard = MacosClipboard;
     let res = event_loop(
@@ -219,18 +228,22 @@ fn run_tui<L: WorkerLauncher>(
         terminal_launcher,
     );
 
-    disable_raw_mode()?;
-    leave_tui_screen(terminal.backend_mut())?;
-    terminal.show_cursor()?;
-    res
+    let leave_result = leave_tui_screen(terminal.backend_mut());
+    let raw_mode_result = disable_raw_mode();
+    let cursor_result = terminal.show_cursor();
+    res?;
+    leave_result?;
+    raw_mode_result?;
+    cursor_result?;
+    Ok(())
 }
 
 fn enter_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
-    execute!(writer, EnterAlternateScreen)
+    execute!(writer, EnterAlternateScreen, EnableMouseCapture)
 }
 
 fn leave_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
-    execute!(writer, LeaveAlternateScreen)
+    execute!(writer, DisableMouseCapture, LeaveAlternateScreen)
 }
 
 fn event_loop<B: ratatui::backend::Backend, L: WorkerLauncher>(
@@ -253,14 +266,12 @@ fn event_loop<B: ratatui::backend::Backend, L: WorkerLauncher>(
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
+        let input = event::read()?;
+        let terminal_size = terminal.size()?;
+        let terminal_area =
+            ratatui::layout::Rect::new(0, 0, terminal_size.width, terminal_size.height);
 
-        match ui.handle_key(key, &snap)? {
+        match ui.handle_event(input, terminal_area, &snap)? {
             UiAction::None => {}
             UiAction::Rescan => {
                 let _ = rescan_tx.send(());
@@ -405,19 +416,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tui_terminal_commands_preserve_native_mouse_text_selection() {
+    fn tui_terminal_commands_pair_mouse_capture_with_the_alternate_screen() {
         let mut enter = Vec::new();
         enter_tui_screen(&mut enter).unwrap();
         let enter = String::from_utf8(enter).unwrap();
         assert!(enter.contains("\x1b[?1049h"));
-        assert!(!enter.contains("\x1b[?1000h"));
-        assert!(!enter.contains("\x1b[?1006h"));
+        assert!(enter.contains("\x1b[?1000h"));
+        assert!(enter.contains("\x1b[?1006h"));
 
         let mut leave = Vec::new();
         leave_tui_screen(&mut leave).unwrap();
         let leave = String::from_utf8(leave).unwrap();
-        assert!(!leave.contains("\x1b[?1006l"));
-        assert!(!leave.contains("\x1b[?1000l"));
+        assert!(leave.contains("\x1b[?1006l"));
+        assert!(leave.contains("\x1b[?1000l"));
         assert!(leave.contains("\x1b[?1049l"));
     }
 }

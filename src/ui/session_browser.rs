@@ -5,25 +5,29 @@ use crate::app::Snapshot;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 const MIN_TREE_HEIGHT: u16 = 4;
 
-/// Draw one framed browser with the Project Tree above a selected-session divider.
+/// Draw the Project Tree above Selected Session Details in one unframed pane.
 pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     let (project_count, open_session_count) = project_tree::counts(snap);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(
-            Style::default().fg(if ui.all_region == super::AllRegion::Now {
-                theme.accent
-            } else {
-                theme.border
-            }),
-        )
-        .title(Line::from(vec![
+    let pane = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    let open_label = format!(" {open_session_count} OPEN ");
+    let header = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(open_label.chars().count() as u16),
+        ])
+        .split(pane[0]);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
             Span::styled(
                 " PROJECT TREE ",
                 Style::default()
@@ -36,22 +40,22 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
             ),
-        ]))
-        .title(
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    open_session_count.to_string(),
-                    Style::default()
-                        .fg(theme.foreground)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" OPEN ", Style::default().fg(theme.muted)),
-            ])
-            .right_aligned(),
-        );
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+        ])),
+        header[0],
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                open_session_count.to_string(),
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" OPEN ", Style::default().fg(theme.muted)),
+        ])),
+        header[1],
+    );
+    let inner = pane[1];
 
     let details_height = selected_session::preferred_height(snap, ui, inner.width)
         .min(inner.height.saturating_sub(MIN_TREE_HEIGHT));

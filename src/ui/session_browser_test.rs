@@ -3,7 +3,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 #[test]
-fn browser_uses_one_outer_frame_and_an_internal_details_divider() {
+fn browser_uses_compact_headers_and_an_internal_details_divider() {
     let backend = TestBackend::new(48, 14);
     let mut terminal = Terminal::new(backend).unwrap();
     let snapshot = Snapshot {
