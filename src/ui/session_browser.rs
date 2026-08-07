@@ -11,6 +11,40 @@ use ratatui::Frame;
 const MIN_TREE_HEIGHT: u16 = 4;
 
 #[derive(Clone, Copy)]
+struct Areas {
+    header: Rect,
+    project_rows: Rect,
+    details: Rect,
+}
+
+fn areas(area: Rect, snap: &Snapshot, ui: &Ui) -> Areas {
+    let pane = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    let inner = pane[1];
+    let details_height = selected_session::preferred_height(snap, ui, inner.width)
+        .min(inner.height.saturating_sub(MIN_TREE_HEIGHT));
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(MIN_TREE_HEIGHT),
+            Constraint::Length(details_height),
+        ])
+        .split(inner);
+
+    Areas {
+        header: pane[0],
+        project_rows: sections[0],
+        details: sections[1],
+    }
+}
+
+pub(super) fn project_rows_area(area: Rect, snap: &Snapshot, ui: &Ui) -> Rect {
+    areas(area, snap, ui).project_rows
+}
+
+#[derive(Clone, Copy)]
 struct HeaderFormat {
     project_heading: &'static str,
     project_count_prefix: &'static str,
@@ -73,10 +107,7 @@ fn compact_count(count: usize) -> String {
 pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     let (project_count, open_session_count) = project_tree::counts(snap);
-    let pane = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(area);
+    let areas = areas(area, snap, ui);
     let full_project_count = project_count.to_string();
     let full_open_session_count = open_session_count.to_string();
     let (header_format, project_count, open_session_count) = if DECORATED_HEADER
@@ -128,30 +159,19 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 ])
                 .right_aligned(),
             ),
-        pane[0],
+        areas.header,
     );
-    let inner = pane[1];
-
-    let details_height = selected_session::preferred_height(snap, ui, inner.width)
-        .min(inner.height.saturating_sub(MIN_TREE_HEIGHT));
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(MIN_TREE_HEIGHT),
-            Constraint::Length(details_height),
-        ])
-        .split(inner);
 
     project_tree::draw(
         f,
-        sections[0],
+        areas.project_rows,
         snap,
         &ui.project_tree,
         &ui.labels,
         ui.all_region == super::AllRegion::Now,
         theme,
     );
-    selected_session::draw(f, sections[1], snap, ui);
+    selected_session::draw(f, areas.details, snap, ui);
 }
 
 #[cfg(test)]

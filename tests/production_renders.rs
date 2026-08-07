@@ -1908,6 +1908,49 @@ fn workspace_and_details_headings_keep_horizontal_section_rules() {
 }
 
 #[test]
+fn mouse_wheel_navigates_only_when_pointer_is_over_project_rows() {
+    let snapshot = production_snapshot();
+    let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
+    let mut ui = Ui::default();
+    let send_wheel = |ui: &mut Ui, kind, column, row| {
+        ui.handle_event(
+            Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }),
+            terminal_area,
+            &snapshot,
+        )
+        .unwrap();
+    };
+    let assert_selected = |ui: &Ui, label: &str| {
+        let rendered = render(&snapshot, ui, 120, 30);
+        let row = rendered
+            .text
+            .lines()
+            .find(|row| {
+                row.split_once('│')
+                    .is_some_and(|(project, _)| project.contains(label))
+            })
+            .unwrap();
+        assert!(row.contains("> "), "{row:?}");
+    };
+
+    assert_selected(&ui, "critical");
+    send_wheel(&mut ui, MouseEventKind::ScrollDown, 10, 12);
+    assert_selected(&ui, "x-shared");
+
+    send_wheel(&mut ui, MouseEventKind::ScrollDown, 70, 12);
+    send_wheel(&mut ui, MouseEventKind::ScrollDown, 10, 26);
+    assert_selected(&ui, "x-shared");
+
+    send_wheel(&mut ui, MouseEventKind::ScrollUp, 10, 12);
+    assert_selected(&ui, "critical");
+}
+
+#[test]
 fn minimum_width_header_keeps_four_digit_project_and_open_counts_distinct() {
     let sessions = (0..1000)
         .map(|index| {

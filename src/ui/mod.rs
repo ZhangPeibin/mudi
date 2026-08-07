@@ -504,10 +504,29 @@ impl Ui {
                 if self.overview_split_is_interactive(terminal_area) {
                     let screen = layout::screen(terminal_area);
                     let workspace = overview::workspace_area(screen.content);
+                    let project_scroll = match mouse.kind {
+                        crossterm::event::MouseEventKind::ScrollUp => {
+                            Some(project_tree::VerticalDirection::Up)
+                        }
+                        crossterm::event::MouseEventKind::ScrollDown => {
+                            Some(project_tree::VerticalDirection::Down)
+                        }
+                        _ => None,
+                    };
+                    let pointer = ratatui::layout::Position::new(mouse.column, mouse.row);
                     if self.workspace_split.handle_mouse(mouse, workspace)
                         == split_pane::MouseOutcome::Committed
                     {
                         self.save_workspace_split_preference()?;
+                    }
+                    if let Some(direction) = project_scroll {
+                        let left_pane = self.workspace_split.layout(workspace).left;
+                        let project_rows =
+                            session_browser::project_rows_area(left_pane, snap, self);
+                        if !self.workspace_split.is_dragging() && project_rows.contains(pointer) {
+                            self.all_region = AllRegion::Now;
+                            self.project_tree.move_vertical(snap, direction);
+                        }
                     }
                 } else {
                     self.workspace_split.cancel_drag();
