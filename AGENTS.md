@@ -14,3 +14,10 @@ See `docs/agents/triage-labels.md`.
 
 This is a single-context repository. Read root `CONTEXT.md` and relevant
 ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+
+### Feature docs
+
+Versioned feature scope records live under `feature/vX.Y.Z/README.md`. Add each
+future feature in a new version directory and update the version index in
+`feature/README.md`. Feature records define an agreed scope baseline; they do not
+replace GitHub Issue PRDs or architectural decisions under `docs/adr/`.
