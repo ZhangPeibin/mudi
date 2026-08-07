@@ -1,10 +1,11 @@
 # CONTEXT.md — SessionMesh domain model
 
 SessionMesh is a fully local macOS TUI for observing **Claude Code** and **Codex CLI**
-coding sessions and performing explicitly authorized local operations on them. Passive
-observation is the default; an alert or threshold never authorizes an operation. It is
-not a provider billing dashboard. Source JSONL logs are the source of truth for observed
-session state; everything derived from them is disposable and rebuildable.
+coding Sessions and starting or managing explicitly authorized local Sessions and
+operations. Passive observation is the default; discovery, an alert, or a threshold never
+authorizes control. It is not a provider billing dashboard. Source JSONL logs are the
+source of truth for observed Session state; everything derived from them is disposable
+and rebuildable.
 
 This file is the shared vocabulary. Provider-specific field names live inside adapters;
 the rest of the codebase speaks only in the terms below.
@@ -27,6 +28,15 @@ It is independent of the organization that publishes the Session's current model
 
 _Avoid:_ Model Provider, API vendor.
 
+## Managed Session
+
+A provider-native Session that SessionMesh can precisely resume through an explicitly
+authorized, SessionMesh-owned control channel because it retains conclusive launch and
+identity evidence. Its native Session ID remains its identity; being Managed never turns
+an externally started Current Run into a controlled one.
+
+_Avoid:_ tmux Session, SessionMesh Session, owned conversation.
+
 ## Session Label
 
 A stable user-facing name presented as `Title` for recognizing one Session, not its current
@@ -42,12 +52,20 @@ _Avoid:_ Summary, Intent, Current Task, when referring to Session display identi
 
 ## Session Alias
 
-A SessionMesh-owned Session Label explicitly assigned by the user to one Session. It is a
-local nickname and never renames or modifies the provider-native Session. It remains
-associated across Current Runs, SessionMesh restarts, and temporary source-log absence
-until the user explicitly clears it.
+A SessionMesh-owned Session Label explicitly assigned by the user to one Session, including
+as the Title supplied when creating a Managed Session. It is a local nickname and never
+renames or modifies the provider-native Session. It remains associated across Current Runs,
+SessionMesh restarts, and temporary source-log absence until the user explicitly clears it.
 
 _Avoid:_ Provider title, Project label, Current Task.
+
+## Session Description
+
+Stable, user-authored metadata explaining why a Managed Session was created. It remains
+associated with that Session across Current Runs, is not live status, and is not inherited
+by a distinct Successor Session.
+
+_Avoid:_ Current Task, latest prompt, generated summary.
 
 ## Generated Session Label
 
@@ -76,6 +94,11 @@ standalone Project.
 The display label uses the working directory or repository basename and adds parent-path
 context when visible labels collide.
 
+Project recency is the newest last activity among its Sessions, not the filesystem
+modification time of its directory. A Project with an Open Session remains current;
+otherwise it is Older when its newest Session activity predates the rolling seven-day
+window.
+
 _Avoid:_ Remote repository, project label, when referring to Project identity.
 
 ## Worktree
@@ -91,6 +114,22 @@ The currently active provider CLI invocation attached to a Session. Resuming the
 native Session in a new process creates a new Run without creating a new Session.
 
 _Avoid:_ Current Session, when referring only to usage since the latest invocation began.
+
+## Managed Current Run
+
+A Current Run launched by SessionMesh for a Managed Session through a SessionMesh-owned
+control channel under explicit authorization. It is conclusively bound to both the native
+Session ID and the live provider process.
+
+_Avoid:_ Managed Session, tmux Session.
+
+## Externally Started Current Run
+
+A Current Run launched outside a SessionMesh-owned control channel. SessionMesh may observe
+or explicitly associate it, but observation and association never imply authority to
+control its live process.
+
+_Avoid:_ Unmanaged Session, imported Session.
 
 ## Open Session
 
