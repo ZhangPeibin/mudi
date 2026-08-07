@@ -1,6 +1,6 @@
 //! Compact facts that complement, rather than repeat, the selected Tree row.
 
-use super::{field::FieldLine, projects, Ui};
+use super::{field::FieldLine, path_display, Ui};
 use crate::app::{fmt_tokens, Snapshot};
 use crate::domain::Session;
 use crate::tasks::OperationTask;
@@ -58,7 +58,7 @@ fn detail_lines(snap: &Snapshot, ui: &Ui, content_width: usize) -> Vec<Line<'sta
                 "Worktree",
                 &format!(
                     "{} @ {}",
-                    projects::home_relative_path(&worktree.root),
+                    path_display::home_relative(&worktree.root),
                     worktree.branch.as_deref().unwrap_or("detached HEAD")
                 ),
             )
@@ -70,7 +70,7 @@ fn detail_lines(snap: &Snapshot, ui: &Ui, content_width: usize) -> Vec<Line<'sta
         lines.push(
             FieldLine::new(
                 "Directory",
-                &projects::home_relative_path(std::path::Path::new(cwd)),
+                &path_display::home_relative(std::path::Path::new(cwd)),
             )
             .label_width(10)
             .keep_end()

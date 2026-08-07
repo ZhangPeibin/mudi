@@ -853,19 +853,10 @@ fn now_groups_open_sessions_across_providers_and_omits_exited_sessions() {
             .count(),
         1
     );
-    let session_ids = projects::rows(
-        &snapshot.sessions,
-        current_attention(&snapshot).as_ref(),
-        snapshot_now_ms(&snapshot),
-        &HashSet::new(),
-        &HashSet::new(),
-    )
-    .iter()
-    .filter_map(|row| match row {
-        projects::ProjectTreeRow::Session { session, .. } => Some(session.id.as_str()),
-        _ => None,
-    })
-    .collect::<Vec<_>>();
+    let session_ids = project_tree::open_sessions(&snapshot)
+        .into_iter()
+        .map(|session| session.id.as_str())
+        .collect::<Vec<_>>();
     assert_eq!(session_ids, ["demo-session", "codex-open"]);
     assert!(!page.contains("exited-model"));
 }
@@ -911,19 +902,9 @@ fn now_sorts_projects_by_activity_and_their_sessions_by_attention() {
     };
     snapshot.attention = Some(AttentionEngine::default().update(&snapshot.sessions, 2_000));
 
-    let rows = projects::rows(
-        &snapshot.sessions,
-        snapshot.attention.as_ref().unwrap(),
-        snapshot_now_ms(&snapshot),
-        &HashSet::new(),
-        &HashSet::new(),
-    );
-    let session_ids = rows
-        .iter()
-        .filter_map(|row| match row {
-            projects::ProjectTreeRow::Session { session, .. } => Some(session.id.as_str()),
-            _ => None,
-        })
+    let session_ids = project_tree::open_sessions(&snapshot)
+        .into_iter()
+        .map(|session| session.id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(session_ids, ["healthy", "critical", "shared", "warning"]);
 
@@ -1157,13 +1138,11 @@ fn all_page_session_selection_survives_attention_reordering_by_provider_and_nati
     codex.context.tokens = 150_000;
     snapshot.sessions.push(codex);
     snapshot.attention = Some(AttentionEngine::default().update(&snapshot.sessions, 1_000));
-    let mut ui = Ui {
-        project_tree_selection: Some(ProjectTreeKey::Session(SessionIdentity {
-            provider: Provider::ClaudeCode,
-            native_id: "stable-claude".into(),
-        })),
-        ..Ui::default()
-    };
+    let mut ui = Ui::default();
+    ui.project_tree.select_session(SessionIdentity {
+        provider: Provider::ClaudeCode,
+        native_id: "stable-claude".into(),
+    });
 
     snapshot.sessions[0].context.tokens = 180_000;
     snapshot.sessions[1].context.tokens = 20_000;
@@ -1206,13 +1185,11 @@ fn all_page_selection_does_not_merge_matching_native_ids_across_providers() {
     codex.provider = Provider::CodexCli;
     codex.latest_model = Some("codex-collision-model".into());
     snapshot.sessions.push(codex);
-    let mut ui = Ui {
-        project_tree_selection: Some(ProjectTreeKey::Session(SessionIdentity {
-            provider: Provider::CodexCli,
-            native_id: "shared-native-id".into(),
-        })),
-        ..Ui::default()
-    };
+    let mut ui = Ui::default();
+    ui.project_tree.select_session(SessionIdentity {
+        provider: Provider::CodexCli,
+        native_id: "shared-native-id".into(),
+    });
 
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
@@ -1230,13 +1207,11 @@ fn disappearing_tree_selection_falls_back_to_first_attention_session() {
     disappearing.provider = Provider::CodexCli;
     disappearing.id = "disappearing-session".into();
     snapshot.sessions.push(disappearing);
-    let mut ui = Ui {
-        project_tree_selection: Some(ProjectTreeKey::Session(SessionIdentity {
-            provider: Provider::CodexCli,
-            native_id: "disappearing-session".into(),
-        })),
-        ..Ui::default()
-    };
+    let mut ui = Ui::default();
+    ui.project_tree.select_session(SessionIdentity {
+        provider: Provider::CodexCli,
+        native_id: "disappearing-session".into(),
+    });
 
     snapshot
         .sessions

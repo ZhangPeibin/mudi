@@ -1,9 +1,18 @@
-use super::*;
-use crate::attention::AttentionEngine;
-use crate::domain::{ContextState, SourceMetadata, Usage};
+use super::model::{rows, ProjectTreeKey, ProjectTreeRow, ProjectTreeSection};
+use super::view::{draw, group_prefix, open_session_line, worktree_line, SessionTreePosition};
+use super::State;
+use crate::app::Snapshot;
+use crate::attention::{AttentionEngine, AttentionSnapshot};
+use crate::domain::{
+    ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceMetadata, Usage,
+    Worktree,
+};
+use crate::session_labels::SessionLabels;
 use crate::ui::ThemeName;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 fn unresolved_open_session(provider: Provider, id: &str) -> Session {
     Session {
@@ -48,10 +57,12 @@ fn empty_tree_content_explains_that_no_open_sessions_exist() {
         ready: true,
         ..Snapshot::default()
     };
-    let ui = Ui::default();
+    let state = State::default();
+    let labels = SessionLabels::default();
+    let theme = ThemeName::SessionMesh.palette();
 
     terminal
-        .draw(|frame| draw(frame, frame.area(), &snapshot, &ui))
+        .draw(|frame| draw(frame, frame.area(), &snapshot, &state, &labels, true, theme))
         .unwrap();
     let rendered = terminal
         .backend()

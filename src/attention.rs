@@ -1,25 +1,11 @@
 //! Derive and order current Attention Conditions from a Session snapshot.
 
 use crate::config::{CRIT_PCT, WARN_PCT};
+pub use crate::domain::SessionIdentity;
 use crate::domain::{Provider, Session, SessionState};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SessionIdentity {
-    pub provider: Provider,
-    pub native_id: String,
-}
-
-impl From<&Session> for SessionIdentity {
-    fn from(session: &Session) -> Self {
-        Self {
-            provider: session.provider,
-            native_id: session.id.clone(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AttentionRank {

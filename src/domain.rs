@@ -222,6 +222,22 @@ pub struct Session {
     pub cost: Option<f64>,
 }
 
+/// Stable Provider-scoped identity for one Session.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SessionIdentity {
+    pub provider: Provider,
+    pub native_id: String,
+}
+
+impl From<&Session> for SessionIdentity {
+    fn from(session: &Session) -> Self {
+        Self {
+            provider: session.provider,
+            native_id: session.id.clone(),
+        }
+    }
+}
+
 impl Session {
     pub fn project_label(&self) -> &str {
         self.project

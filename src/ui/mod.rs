@@ -14,7 +14,8 @@ mod guide;
 mod layout;
 mod modals;
 mod overview;
-mod projects;
+mod path_display;
+mod project_tree;
 mod provider;
 mod selected_session;
 mod session_browser;
@@ -26,7 +27,7 @@ mod theme;
 use crate::app::{Snapshot, Tab};
 use crate::attention::{AttentionEngine, AttentionSnapshot};
 use crate::clipboard::Clipboard;
-use crate::domain::{Project, ProjectIdentity, Provider, Session, SessionState};
+use crate::domain::{Project, ProjectIdentity, Provider, Session, SessionIdentity, SessionState};
 use crate::session_labels::SessionLabels;
 use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
@@ -57,54 +58,6 @@ fn selected_style(theme: Theme) -> Style {
         .fg(theme.selected_foreground)
         .bg(theme.selected_background)
         .add_modifier(Modifier::BOLD)
-}
-
-/// 用“提供方 + 原生会话 ID”稳定标识一个会话。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SessionIdentity {
-    provider: Provider,
-    native_id: String,
-}
-
-/// Session Tree 中 Exited Session 的滚动时间分组。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum SessionAgeBand {
-    Recent,
-    Older,
-}
-
-/// Project Tree 顶层的非 Project 分组。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum ProjectTreeSection {
-    OlderProjects,
-    Unavailable,
-}
-
-/// All 页面 Session Tree 中一个可见节点的稳定身份。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ProjectTreeKey {
-    Section(ProjectTreeSection),
-    Project(ProjectIdentity),
-    Worktree {
-        project: ProjectIdentity,
-        root: PathBuf,
-    },
-    Disclosure {
-        project: Option<ProjectIdentity>,
-        worktree_root: Option<PathBuf>,
-        band: SessionAgeBand,
-    },
-    Session(SessionIdentity),
-}
-
-impl ProjectTreeKey {
-    /// 历史分组默认收起；Project、Worktree 与 Unavailable 默认展开。
-    fn uses_disclosure_state(&self) -> bool {
-        matches!(
-            self,
-            Self::Disclosure { .. } | Self::Section(ProjectTreeSection::OlderProjects)
-        )
-    }
 }
 
 /// 创建 Handoff 前的确认弹窗状态。
@@ -337,10 +290,8 @@ pub struct Ui {
     /// 当前顶层页签与 Provider 页面选中位置。
     pub tab: Tab,
     pub selected: usize,
-    /// All 页面 Session Tree 使用稳定节点身份，不依赖 Attention 排序位置。
-    project_tree_selection: Option<ProjectTreeKey>,
-    collapsed_project_tree_nodes: HashSet<ProjectTreeKey>,
-    expanded_project_tree_disclosures: HashSet<ProjectTreeKey>,
+    /// All-page Project Tree owns its stable selection and disclosure state.
+    project_tree: project_tree::State,
     /// 总览页三个区域各自独立的焦点和选中位置。
     all_region: AllRegion,
     signal_selected: usize,
@@ -425,9 +376,7 @@ impl Default for Ui {
         Ui {
             tab: Tab::All,
             selected: 0,
-            project_tree_selection: None,
-            collapsed_project_tree_nodes: HashSet::new(),
-            expanded_project_tree_disclosures: HashSet::new(),
+            project_tree: project_tree::State::default(),
             all_region: AllRegion::Now,
             signal_selected: 0,
             task_selected: 0,
@@ -821,28 +770,32 @@ impl Ui {
                     && self.tab == Tab::All
                     && self.all_region == AllRegion::Now =>
             {
-                self.move_project_tree_horizontally(snap, true);
+                self.project_tree
+                    .move_horizontal(snap, project_tree::HorizontalDirection::Right);
             }
             crossterm::event::KeyCode::Left
                 if self.detail.is_none()
                     && self.tab == Tab::All
                     && self.all_region == AllRegion::Now =>
             {
-                self.move_project_tree_horizontally(snap, false);
+                self.project_tree
+                    .move_horizontal(snap, project_tree::HorizontalDirection::Left);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
                 if self.detail.is_none()
                     && self.tab == Tab::All
                     && self.all_region == AllRegion::Now =>
             {
-                self.move_project_tree_selection(snap, true);
+                self.project_tree
+                    .move_vertical(snap, project_tree::VerticalDirection::Down);
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
                 if self.detail.is_none()
                     && self.tab == Tab::All
                     && self.all_region == AllRegion::Now =>
             {
-                self.move_project_tree_selection(snap, false);
+                self.project_tree
+                    .move_vertical(snap, project_tree::VerticalDirection::Up);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
                 if self.detail.is_none() =>
@@ -974,7 +927,7 @@ impl Ui {
     fn set_tab(&mut self, tab: Tab) {
         self.tab = tab;
         self.selected = 0;
-        self.project_tree_selection = None;
+        self.project_tree.reset_selection();
         self.all_region = AllRegion::Now;
         self.signal_selected = 0;
         self.task_selected = 0;
@@ -1064,7 +1017,7 @@ impl Ui {
         }
         let identity = detail.session;
         if self.tab.provider().is_none() {
-            self.project_tree_selection = Some(ProjectTreeKey::Session(identity));
+            self.project_tree.select_session(identity);
         } else if let Some(index) = self.provider_targets(snap).iter().position(|target| {
             matches!(target, ProviderTarget::Session(session)
                     if session.provider == identity.provider && session.id == identity.native_id)
@@ -1086,114 +1039,6 @@ impl Ui {
         fs::write(path, contents)
     }
 
-    /// 根据当前展开状态建立 All 页面实际可见的 Session Tree 行。
-    fn project_tree_rows<'a>(&self, snap: &'a Snapshot) -> Vec<projects::ProjectTreeRow<'a>> {
-        let attention = current_attention(snap);
-        projects::rows(
-            &snap.sessions,
-            attention.as_ref(),
-            snapshot_now_ms(snap),
-            &self.collapsed_project_tree_nodes,
-            &self.expanded_project_tree_disclosures,
-        )
-    }
-
-    /// 解析当前稳定选择；首次进入或目标消失时按 Attention 顺序回退到 Session。
-    fn effective_project_tree_selection(&self, snap: &Snapshot) -> Option<ProjectTreeKey> {
-        let rows = self.project_tree_rows(snap);
-        if let Some(selection) = self
-            .project_tree_selection
-            .as_ref()
-            .filter(|selection| rows.iter().any(|row| row.key() == *selection))
-        {
-            return Some(selection.clone());
-        }
-        rows.iter()
-            .filter_map(projects::ProjectTreeRow::session_key)
-            .nth(self.selected)
-            .or_else(|| rows.iter().find_map(projects::ProjectTreeRow::session_key))
-            .or_else(|| rows.first().map(|row| row.key().clone()))
-    }
-
-    /// 将已消失或被隐藏的节点选择收敛到确定性的可见回退目标。
-    fn reconcile_project_tree_selection(&mut self, snap: &Snapshot) {
-        self.project_tree_selection = self.effective_project_tree_selection(snap);
-    }
-
-    /// 在 Session Tree 的可见节点之间移动，不会落到已折叠的 Session。
-    fn move_project_tree_selection(&mut self, snap: &Snapshot, forward: bool) {
-        let rows = self.project_tree_rows(snap);
-        let Some(selection) = self.effective_project_tree_selection(snap) else {
-            return;
-        };
-        let Some(index) = rows.iter().position(|row| row.key() == &selection) else {
-            return;
-        };
-        let next = if forward {
-            (index + 1).min(rows.len().saturating_sub(1))
-        } else {
-            index.saturating_sub(1)
-        };
-        self.project_tree_selection = rows.get(next).map(|row| row.key().clone());
-    }
-
-    /// 实现常规 Tree 的 Left/Right：折叠、展开、回到父节点或进入首个子节点。
-    fn move_project_tree_horizontally(&mut self, snap: &Snapshot, right: bool) {
-        let rows = self.project_tree_rows(snap);
-        let Some(selection) = self.effective_project_tree_selection(snap) else {
-            return;
-        };
-        let Some(index) = rows.iter().position(|row| row.key() == &selection) else {
-            return;
-        };
-        let row = &rows[index];
-        if right {
-            if row.is_group() && !row.is_expanded() {
-                self.expand_project_tree_node(row.key());
-                self.project_tree_selection = Some(selection);
-            } else if row.is_group()
-                && rows
-                    .get(index + 1)
-                    .is_some_and(|child| child.depth() > row.depth())
-            {
-                self.project_tree_selection = rows.get(index + 1).map(|child| child.key().clone());
-            }
-        } else if row.is_group() && row.is_expanded() {
-            self.collapse_project_tree_node(&selection);
-            self.project_tree_selection = Some(selection);
-        } else if let Some(parent) = row.parent_key() {
-            self.project_tree_selection = Some(parent.clone());
-        }
-    }
-
-    fn expand_project_tree_node(&mut self, key: &ProjectTreeKey) {
-        if key.uses_disclosure_state() {
-            self.expanded_project_tree_disclosures.insert(key.clone());
-        } else {
-            self.collapsed_project_tree_nodes.remove(key);
-        }
-    }
-
-    fn collapse_project_tree_node(&mut self, key: &ProjectTreeKey) {
-        if key.uses_disclosure_state() {
-            self.expanded_project_tree_disclosures.remove(key);
-        } else {
-            self.collapsed_project_tree_nodes.insert(key.clone());
-        }
-    }
-
-    /// 切换当前顶层分组、Project、Worktree 或 Session disclosure 的展开状态。
-    fn toggle_project_tree_group(&mut self, key: ProjectTreeKey) {
-        if key.uses_disclosure_state() {
-            if !self.expanded_project_tree_disclosures.remove(&key) {
-                self.expanded_project_tree_disclosures.insert(key.clone());
-            }
-        } else if !self.collapsed_project_tree_nodes.remove(&key) {
-            self.collapsed_project_tree_nodes.insert(key.clone());
-        }
-        self.project_tree_selection = Some(key);
-    }
-
     /// 按实际渲染顺序返回当前页可选择的 Session。
     pub fn visible(&self, snap: &Snapshot) -> Vec<Session> {
         match self.tab.provider() {
@@ -1205,7 +1050,10 @@ impl Ui {
                     ProviderTarget::Disclosure(_) => None,
                 })
                 .collect(),
-            None => projects::sessions(snap).into_iter().cloned().collect(),
+            None => project_tree::open_sessions(snap)
+                .into_iter()
+                .cloned()
+                .collect(),
         }
     }
 
@@ -1214,7 +1062,7 @@ impl Ui {
         if self.tab.provider().is_some() {
             self.provider_targets(snap).len()
         } else {
-            self.project_tree_rows(snap).len()
+            self.project_tree.len(snap)
         }
     }
 
@@ -1230,7 +1078,7 @@ impl Ui {
     /// 根据最新快照校正所有区域的独立选中位置。
     pub fn clamp_selections(&mut self, snap: &Snapshot) {
         if self.tab == Tab::All {
-            self.reconcile_project_tree_selection(snap);
+            self.project_tree.reconcile(snap);
         } else {
             self.clamp_selection(self.selectable_len(snap));
         }
@@ -1286,12 +1134,7 @@ impl Ui {
         if self.tab != Tab::All || self.detail.is_some() {
             return None;
         }
-        let ProjectTreeKey::Session(identity) = self.effective_project_tree_selection(snap)? else {
-            return None;
-        };
-        snap.sessions.iter().find(|session| {
-            session.provider == identity.provider && session.id == identity.native_id
-        })
+        self.project_tree.selected_session(snap)
     }
 
     /// 为当前 Session 打开标题编辑器，并预填已有 Alias。
@@ -1444,25 +1287,17 @@ impl Ui {
         }
 
         if self.all_region == AllRegion::Now {
-            let Some(selection) = self.effective_project_tree_selection(snap) else {
-                return;
-            };
-            match selection {
-                ProjectTreeKey::Session(identity) => {
-                    self.detail = Some(DetailView {
-                        session: identity,
-                        task_id: None,
-                        scroll: 0,
-                        origin_signal: None,
-                        copy_menu_selected: None,
-                    });
-                }
-                group @ (ProjectTreeKey::Section(_)
-                | ProjectTreeKey::Project(_)
-                | ProjectTreeKey::Worktree { .. }
-                | ProjectTreeKey::Disclosure { .. }) => {
-                    self.toggle_project_tree_group(group);
-                }
+            if let Some(session) = self.project_tree.activate(snap) {
+                self.detail = Some(DetailView {
+                    session: SessionIdentity {
+                        provider: session.provider,
+                        native_id: session.id.clone(),
+                    },
+                    task_id: None,
+                    scroll: 0,
+                    origin_signal: None,
+                    copy_menu_selected: None,
+                });
             }
             return;
         }
@@ -1495,19 +1330,20 @@ impl Ui {
                     }
                 }
                 RecentSignal::Worktree { worktree_root, .. } => {
-                    if let Some(session) = projects::sessions(snap).into_iter().find(|session| {
-                        session
-                            .worktree
-                            .as_ref()
-                            .is_some_and(|worktree| worktree.root == *worktree_root)
-                    }) {
+                    if let Some(session) =
+                        project_tree::open_sessions(snap)
+                            .into_iter()
+                            .find(|session| {
+                                session
+                                    .worktree
+                                    .as_ref()
+                                    .is_some_and(|worktree| worktree.root == *worktree_root)
+                            })
+                    {
                         self.tab = Tab::All;
                         self.all_region = AllRegion::Now;
-                        self.project_tree_selection =
-                            Some(ProjectTreeKey::Session(SessionIdentity {
-                                provider: session.provider,
-                                native_id: session.id.clone(),
-                            }));
+                        self.project_tree
+                            .select_session(SessionIdentity::from(session));
                         self.detail = None;
                         self.status_notice = None;
                     } else {

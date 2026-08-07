@@ -1,0 +1,171 @@
+//! Project Tree interaction state and navigation.
+
+use super::model::{ProjectTreeKey, ProjectTreeRow};
+use crate::app::Snapshot;
+use crate::domain::{Session, SessionIdentity};
+use std::collections::HashSet;
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::ui) enum VerticalDirection {
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::ui) enum HorizontalDirection {
+    Left,
+    Right,
+}
+
+/// Complete interaction state for one Project Tree instance.
+#[derive(Default)]
+pub(in crate::ui) struct State {
+    selection: Option<ProjectTreeKey>,
+    collapsed_nodes: HashSet<ProjectTreeKey>,
+    expanded_disclosures: HashSet<ProjectTreeKey>,
+}
+
+impl State {
+    pub(super) fn rows<'a>(&self, snap: &'a Snapshot) -> Vec<ProjectTreeRow<'a>> {
+        super::rows(snap, &self.collapsed_nodes, &self.expanded_disclosures)
+    }
+
+    /// Resolve the stable selection, falling back deterministically when its node vanished.
+    pub(super) fn effective_selection(&self, snap: &Snapshot) -> Option<ProjectTreeKey> {
+        let rows = self.rows(snap);
+        if let Some(selection) = self
+            .selection
+            .as_ref()
+            .filter(|selection| rows.iter().any(|row| row.key() == *selection))
+        {
+            return Some(selection.clone());
+        }
+        rows.iter()
+            .find_map(ProjectTreeRow::session_key)
+            .or_else(|| rows.first().map(|row| row.key().clone()))
+    }
+
+    /// Reconcile stale or hidden selection against the latest visible rows.
+    pub(in crate::ui) fn reconcile(&mut self, snap: &Snapshot) {
+        self.selection = self.effective_selection(snap);
+    }
+
+    pub(in crate::ui) fn reset_selection(&mut self) {
+        self.selection = None;
+    }
+
+    pub(in crate::ui) fn move_vertical(&mut self, snap: &Snapshot, direction: VerticalDirection) {
+        let rows = self.rows(snap);
+        let Some(selection) = self.effective_selection(snap) else {
+            return;
+        };
+        let Some(index) = rows.iter().position(|row| row.key() == &selection) else {
+            return;
+        };
+        let next = match direction {
+            VerticalDirection::Down => (index + 1).min(rows.len().saturating_sub(1)),
+            VerticalDirection::Up => index.saturating_sub(1),
+        };
+        self.selection = rows.get(next).map(|row| row.key().clone());
+    }
+
+    /// Apply conventional Tree Left/Right behavior without exposing node relationships.
+    pub(in crate::ui) fn move_horizontal(
+        &mut self,
+        snap: &Snapshot,
+        direction: HorizontalDirection,
+    ) {
+        let rows = self.rows(snap);
+        let Some(selection) = self.effective_selection(snap) else {
+            return;
+        };
+        let Some(index) = rows.iter().position(|row| row.key() == &selection) else {
+            return;
+        };
+        let row = &rows[index];
+        match direction {
+            HorizontalDirection::Right if row.is_group() && !row.is_expanded() => {
+                self.expand(row.key());
+                self.selection = Some(selection);
+            }
+            HorizontalDirection::Right
+                if row.is_group()
+                    && rows
+                        .get(index + 1)
+                        .is_some_and(|child| child.depth() > row.depth()) =>
+            {
+                self.selection = rows.get(index + 1).map(|child| child.key().clone());
+            }
+            HorizontalDirection::Left if row.is_group() && row.is_expanded() => {
+                self.collapse(&selection);
+                self.selection = Some(selection);
+            }
+            HorizontalDirection::Left => {
+                if let Some(parent) = row.parent_key() {
+                    self.selection = Some(parent.clone());
+                }
+            }
+            HorizontalDirection::Right => {}
+        }
+    }
+
+    /// Toggle a group or return the Session selected for opening.
+    pub(in crate::ui) fn activate<'a>(&mut self, snap: &'a Snapshot) -> Option<&'a Session> {
+        let selection = self.effective_selection(snap)?;
+        match selection {
+            ProjectTreeKey::Session(identity) => find_session(snap, &identity),
+            group => {
+                self.toggle_group(group);
+                None
+            }
+        }
+    }
+
+    pub(in crate::ui) fn selected_session<'a>(&self, snap: &'a Snapshot) -> Option<&'a Session> {
+        let ProjectTreeKey::Session(identity) = self.effective_selection(snap)? else {
+            return None;
+        };
+        find_session(snap, &identity)
+    }
+
+    pub(in crate::ui) fn select_session(&mut self, identity: SessionIdentity) {
+        self.selection = Some(ProjectTreeKey::Session(identity));
+    }
+
+    pub(in crate::ui) fn len(&self, snap: &Snapshot) -> usize {
+        self.rows(snap).len()
+    }
+
+    fn expand(&mut self, key: &ProjectTreeKey) {
+        if key.uses_disclosure_state() {
+            self.expanded_disclosures.insert(key.clone());
+        } else {
+            self.collapsed_nodes.remove(key);
+        }
+    }
+
+    fn collapse(&mut self, key: &ProjectTreeKey) {
+        if key.uses_disclosure_state() {
+            self.expanded_disclosures.remove(key);
+        } else {
+            self.collapsed_nodes.insert(key.clone());
+        }
+    }
+
+    fn toggle_group(&mut self, key: ProjectTreeKey) {
+        if key.uses_disclosure_state() {
+            if !self.expanded_disclosures.remove(&key) {
+                self.expanded_disclosures.insert(key.clone());
+            }
+        } else if !self.collapsed_nodes.remove(&key) {
+            self.collapsed_nodes.insert(key.clone());
+        }
+        self.selection = Some(key);
+    }
+}
+
+fn find_session<'a>(snap: &'a Snapshot, identity: &SessionIdentity) -> Option<&'a Session> {
+    snap.sessions
+        .iter()
+        .find(|session| session.provider == identity.provider && session.id == identity.native_id)
+}

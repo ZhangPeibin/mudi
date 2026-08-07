@@ -1,6 +1,6 @@
 //! All-page left pane composition for navigation and selected-session facts.
 
-use super::{projects, selected_session, Ui};
+use super::{project_tree, selected_session, Ui};
 use crate::app::Snapshot;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -13,7 +13,7 @@ const MIN_TREE_HEIGHT: u16 = 4;
 /// Draw one framed browser with the Project Tree above a selected-session divider.
 pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
-    let (project_count, open_session_count) = projects::tree_counts(snap);
+    let (project_count, open_session_count) = project_tree::counts(snap);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(
@@ -63,7 +63,15 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         ])
         .split(inner);
 
-    projects::draw(f, sections[0], snap, ui);
+    project_tree::draw(
+        f,
+        sections[0],
+        snap,
+        &ui.project_tree,
+        &ui.labels,
+        ui.all_region == super::AllRegion::Now,
+        theme,
+    );
     selected_session::draw(f, sections[1], snap, ui);
 }
 
