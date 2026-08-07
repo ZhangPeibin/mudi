@@ -1,5 +1,7 @@
 use super::*;
+use crate::attention::AttentionEngine;
 use crate::domain::{ContextState, SourceMetadata, Usage};
+use crate::ui::ThemeName;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
@@ -23,8 +25,23 @@ fn unresolved_open_session(provider: Provider, id: &str) -> Session {
     }
 }
 
+fn open_session_in_worktree(id: &str, root: &str, branch: &str) -> Session {
+    let mut session = unresolved_open_session(Provider::ClaudeCode, id);
+    session.project = Some(Project {
+        identity: ProjectIdentity::GitCommonDir(PathBuf::from("/repo/.git")),
+        label: "repo".into(),
+    });
+    session.worktree = Some(Worktree {
+        root: PathBuf::from(root),
+        branch: Some(branch.into()),
+        writable: true,
+    });
+    session.cwd = Some(root.into());
+    session
+}
+
 #[test]
-fn empty_projects_panel_explains_that_no_open_sessions_exist() {
+fn empty_tree_content_explains_that_no_open_sessions_exist() {
     let backend = TestBackend::new(80, 14);
     let mut terminal = Terminal::new(backend).unwrap();
     let snapshot = Snapshot {
@@ -44,21 +61,138 @@ fn empty_projects_panel_explains_that_no_open_sessions_exist() {
         .map(|cell| cell.symbol())
         .collect::<String>();
 
-    assert!(rendered.contains("SESSION TREE 0"));
     assert!(rendered.contains("No Open Sessions."));
 }
 
 #[test]
-fn compact_column_widths_preserve_title_context_and_model_evidence() {
-    let widths = column_widths(80, 78);
+fn single_worktree_is_flattened_beneath_its_project() {
+    let sessions = vec![open_session_in_worktree("one", "/repo", "main")];
+    let tree = rows(
+        &sessions,
+        &AttentionSnapshot::default(),
+        1_000,
+        &HashSet::new(),
+        &HashSet::new(),
+    );
 
-    assert_eq!(widths.title, MIN_TITLE_WIDTH);
-    assert_eq!(widths.context_bar, MIN_CONTEXT_BAR_WIDTH);
-    assert_eq!(widths.model, MIN_MODEL_WIDTH);
+    assert!(!tree
+        .iter()
+        .any(|row| matches!(row, ProjectTreeRow::Worktree { .. })));
+    let session = tree
+        .iter()
+        .find(|row| matches!(row, ProjectTreeRow::Session { .. }))
+        .unwrap();
+    assert_eq!(session.depth(), 1);
+    assert!(matches!(
+        session.parent_key(),
+        Some(ProjectTreeKey::Project(_))
+    ));
 }
 
 #[test]
-fn unresolved_sessions_share_one_project_node_but_keep_provider_scoped_identities() {
+fn multiple_worktrees_keep_short_branch_groups() {
+    let sessions = vec![
+        open_session_in_worktree("main", "/repo", "main"),
+        open_session_in_worktree("feature", "/repo-feature", "feature"),
+    ];
+    let tree = rows(
+        &sessions,
+        &AttentionSnapshot::default(),
+        1_000,
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert_eq!(
+        tree.iter()
+            .filter(|row| matches!(row, ProjectTreeRow::Worktree { .. }))
+            .count(),
+        2
+    );
+    let line = worktree_line(
+        sessions[0].worktree.as_ref().unwrap(),
+        &AttentionSnapshot::default(),
+        1,
+        true,
+        false,
+        40,
+        ThemeName::SessionMesh.palette(),
+    )
+    .to_string();
+    assert!(line.contains("main"));
+    assert!(!line.contains("/repo"));
+}
+
+#[test]
+fn tree_rows_use_disclosure_triangles_and_provider_icons() {
+    assert_eq!(group_prefix(0, false, true), " ▾ ");
+    assert_eq!(group_prefix(0, false, false), " ▸ ");
+
+    let session = unresolved_open_session(Provider::ClaudeCode, "one");
+    let line = open_session_line(
+        &session,
+        "one",
+        &AttentionSnapshot::default(),
+        1_000,
+        40,
+        SessionTreePosition {
+            depth: 1,
+            selected: true,
+        },
+        ThemeName::SessionMesh.palette(),
+    )
+    .to_string();
+
+    assert!(line.contains("✦"));
+    assert!(line.contains("●"));
+    assert!(!line.contains("Claude"));
+}
+
+#[test]
+fn open_session_operational_evidence_uses_stable_columns() {
+    const NOW: i64 = 1_700_000_000_000;
+    let mut warning = unresolved_open_session(Provider::ClaudeCode, "warning");
+    warning.context = ContextState {
+        tokens: 150_000,
+        window: Some(200_000),
+    };
+    warning.last_activity_ms = NOW - 30_000;
+    let mut critical = warning.clone();
+    critical.id = "critical".into();
+    critical.context.tokens = 200_000;
+    critical.last_activity_ms = NOW - 8 * 86_400_000;
+    let sessions = [warning.clone(), critical.clone()];
+    let attention = AttentionEngine::default().update(&sessions, NOW);
+    let position = SessionTreePosition {
+        depth: 1,
+        selected: false,
+    };
+    let theme = ThemeName::SessionMesh.palette();
+    let warning =
+        open_session_line(&warning, "short", &attention, NOW, 50, position, theme).to_string();
+    let critical = open_session_line(
+        &critical,
+        "a much longer title",
+        &attention,
+        NOW,
+        50,
+        position,
+        theme,
+    )
+    .to_string();
+    let column = |line: &str, marker: char| {
+        line[..line.find(marker).expect("marker should render")]
+            .chars()
+            .count()
+    };
+
+    for marker in ['!', '●', '%'] {
+        assert_eq!(column(&warning, marker), column(&critical, marker));
+    }
+}
+
+#[test]
+fn unresolved_sessions_use_one_unavailable_section_and_keep_provider_scoped_identities() {
     let sessions = vec![
         unresolved_open_session(Provider::ClaudeCode, "same-native-id"),
         unresolved_open_session(Provider::CodexCli, "same-native-id"),
@@ -71,15 +205,135 @@ fn unresolved_sessions_share_one_project_node_but_keep_provider_scoped_identitie
         &HashSet::new(),
     );
 
-    assert_eq!(
-        tree.iter()
-            .filter(|row| matches!(row, ProjectTreeRow::Project { .. }))
-            .count(),
-        1
-    );
+    assert!(!tree
+        .iter()
+        .any(|row| matches!(row, ProjectTreeRow::Project { .. })));
+    assert!(tree.iter().any(|row| matches!(
+        row,
+        ProjectTreeRow::Section {
+            section: ProjectTreeSection::Unavailable,
+            item_count: 2,
+            expanded: true,
+            ..
+        }
+    )));
     let session_keys = tree
         .iter()
         .filter_map(ProjectTreeRow::session_key)
         .collect::<HashSet<_>>();
     assert_eq!(session_keys.len(), 2);
+}
+
+#[test]
+fn projects_are_sorted_by_their_newest_session_activity() {
+    let mut older = open_session_in_worktree("older", "/older", "main");
+    older.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/older")),
+        label: "older".into(),
+    });
+    older.last_activity_ms = 100;
+    let mut newer = open_session_in_worktree("newer", "/newer", "main");
+    newer.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/newer")),
+        label: "newer".into(),
+    });
+    newer.last_activity_ms = 200;
+
+    let sessions = [older, newer];
+    let tree = rows(
+        &sessions,
+        &AttentionSnapshot::default(),
+        300,
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    let projects = tree
+        .iter()
+        .filter_map(|row| match row {
+            ProjectTreeRow::Project { project, .. } => Some(project.label.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(projects, ["newer", "older"]);
+}
+
+#[test]
+fn inactive_projects_older_than_seven_days_are_collapsed_together() {
+    const DAY_MS: i64 = 86_400_000;
+    const NOW: i64 = 1_700_000_000_000;
+    let mut old = open_session_in_worktree("old", "/old", "main");
+    old.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/old")),
+        label: "old".into(),
+    });
+    old.state = SessionState::Exited;
+    old.last_activity_ms = NOW - 8 * DAY_MS;
+
+    let sessions = [old];
+    let collapsed = rows(
+        &sessions,
+        &AttentionSnapshot::default(),
+        NOW,
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    assert!(collapsed.iter().any(|row| matches!(
+        row,
+        ProjectTreeRow::Section {
+            section: ProjectTreeSection::OlderProjects,
+            item_count: 1,
+            expanded: false,
+            ..
+        }
+    )));
+    assert!(!collapsed
+        .iter()
+        .any(|row| matches!(row, ProjectTreeRow::Project { .. })));
+
+    let expanded_key = ProjectTreeKey::Section(ProjectTreeSection::OlderProjects);
+    let expanded = rows(
+        &sessions,
+        &AttentionSnapshot::default(),
+        NOW,
+        &HashSet::new(),
+        &HashSet::from([expanded_key]),
+    );
+    assert!(expanded.iter().any(|row| matches!(
+        row,
+        ProjectTreeRow::Project { project, depth: 1, .. } if project.label == "old"
+    )));
+}
+
+#[test]
+fn an_open_project_remains_current_even_when_its_last_activity_is_old() {
+    const DAY_MS: i64 = 86_400_000;
+    const NOW: i64 = 1_700_000_000_000;
+    let mut open = open_session_in_worktree("open", "/open", "main");
+    open.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/open")),
+        label: "open".into(),
+    });
+    open.last_activity_ms = NOW - 8 * DAY_MS;
+
+    let sessions = [open];
+    let tree = rows(
+        &sessions,
+        &AttentionSnapshot::default(),
+        NOW,
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(tree.iter().any(|row| matches!(
+        row,
+        ProjectTreeRow::Project { project, depth: 0, .. } if project.label == "open"
+    )));
+    assert!(!tree.iter().any(|row| matches!(
+        row,
+        ProjectTreeRow::Section {
+            section: ProjectTreeSection::OlderProjects,
+            ..
+        }
+    )));
 }

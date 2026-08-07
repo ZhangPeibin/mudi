@@ -1,0 +1,166 @@
+//! Compact facts that complement, rather than repeat, the selected Tree row.
+
+use super::{projects, text, Ui};
+use crate::app::{fmt_tokens, Snapshot};
+use crate::domain::Session;
+use crate::tasks::OperationTask;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
+
+const COMPACT_USAGE_WIDTH: usize = 45;
+
+pub(super) fn preferred_height(snap: &Snapshot, ui: &Ui, width: u16) -> u16 {
+    detail_lines(snap, ui, width.saturating_sub(1) as usize)
+        .len()
+        .saturating_add(1) as u16
+}
+
+pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
+    if area.height == 0 {
+        return;
+    }
+    let theme = ui.theme.palette();
+    let lines = detail_lines(snap, ui, area.width as usize);
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(theme.border))
+                .title(Span::styled(
+                    " DETAILS ",
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        ),
+        area,
+    );
+}
+
+fn detail_lines(snap: &Snapshot, ui: &Ui, content_width: usize) -> Vec<Line<'static>> {
+    let theme = ui.theme.palette();
+    let Some(session) = ui.editor_session(snap) else {
+        return vec![Line::from(Span::styled(
+            "No Open Session selected.",
+            Style::default().fg(theme.muted),
+        ))];
+    };
+
+    let mut lines = vec![field_line(
+        "Provider",
+        session.provider.label(),
+        content_width,
+        false,
+        theme.muted,
+        theme.foreground,
+    )];
+    if let Some(worktree) = session.worktree.as_ref() {
+        lines.push(field_line(
+            "Worktree",
+            &format!(
+                "{} @ {}",
+                projects::home_relative_path(&worktree.root),
+                worktree.branch.as_deref().unwrap_or("detached HEAD")
+            ),
+            content_width,
+            true,
+            theme.muted,
+            theme.foreground,
+        ));
+    } else if let Some(cwd) = session.cwd.as_deref() {
+        lines.push(field_line(
+            "Directory",
+            &projects::home_relative_path(std::path::Path::new(cwd)),
+            content_width,
+            true,
+            theme.muted,
+            theme.foreground,
+        ));
+    }
+    if let Some(model) = session.latest_model.as_deref() {
+        lines.push(field_line(
+            "Model",
+            model,
+            content_width,
+            true,
+            theme.muted,
+            theme.foreground,
+        ));
+    }
+    if let Some(run) = session
+        .current_run_usage
+        .as_ref()
+        .filter(|_| content_width >= COMPACT_USAGE_WIDTH)
+    {
+        lines.push(field_line(
+            "Run usage",
+            &format!(
+                "in {} | out {} | read {} | create {}",
+                fmt_tokens(run.usage.input),
+                fmt_tokens(run.usage.output),
+                fmt_tokens(run.usage.cache_read),
+                fmt_tokens(run.usage.cache_write),
+            ),
+            content_width,
+            false,
+            theme.muted,
+            theme.foreground,
+        ));
+    }
+    if let Some(task) = task_for_session(session, &snap.tasks) {
+        lines.push(field_line(
+            "Task",
+            &format!("Handoff {}", task.state.label()),
+            content_width,
+            false,
+            theme.muted,
+            theme.foreground,
+        ));
+    }
+    lines
+}
+
+fn task_for_session<'a>(
+    session: &Session,
+    tasks: &'a [OperationTask],
+) -> Option<&'a OperationTask> {
+    let belongs_to_session = |task: &&OperationTask| {
+        task.source_provider == session.provider && task.source_session_id == session.id
+    };
+    tasks
+        .iter()
+        .filter(belongs_to_session)
+        .filter(|task| !task.state.is_terminal())
+        .max_by_key(|task| (task.state_changed_at_ms, task.created_at_ms, &task.id))
+        .or_else(|| {
+            tasks
+                .iter()
+                .filter(belongs_to_session)
+                .max_by_key(|task| (task.state_changed_at_ms, task.created_at_ms, &task.id))
+        })
+}
+
+fn field_line(
+    label: &str,
+    value: &str,
+    content_width: usize,
+    keep_end: bool,
+    label_color: ratatui::style::Color,
+    value_color: ratatui::style::Color,
+) -> Line<'static> {
+    let label = format!("{label:<10} ");
+    let label_width = UnicodeWidthStr::width(label.as_str());
+    let value = text::fit(value, content_width.saturating_sub(label_width), keep_end);
+    Line::from(vec![
+        Span::styled(label, Style::default().fg(label_color)),
+        Span::styled(value, Style::default().fg(value_color)),
+    ])
+}
+
+#[cfg(test)]
+#[path = "selected_session_test.rs"]
+mod tests;

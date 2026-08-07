@@ -15,6 +15,8 @@ mod modals;
 mod overview;
 mod projects;
 mod provider;
+mod selected_session;
+mod session_browser;
 mod signals;
 mod tasks;
 mod text;
@@ -70,12 +72,20 @@ enum SessionAgeBand {
     Older,
 }
 
+/// Project Tree 顶层的非 Project 分组。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ProjectTreeSection {
+    OlderProjects,
+    Unavailable,
+}
+
 /// All 页面 Session Tree 中一个可见节点的稳定身份。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ProjectTreeKey {
-    Project(Option<ProjectIdentity>),
+    Section(ProjectTreeSection),
+    Project(ProjectIdentity),
     Worktree {
-        project: Option<ProjectIdentity>,
+        project: ProjectIdentity,
         root: PathBuf,
     },
     Disclosure {
@@ -84,6 +94,16 @@ enum ProjectTreeKey {
         band: SessionAgeBand,
     },
     Session(SessionIdentity),
+}
+
+impl ProjectTreeKey {
+    /// 历史分组默认收起；Project、Worktree 与 Unavailable 默认展开。
+    fn uses_disclosure_state(&self) -> bool {
+        matches!(
+            self,
+            Self::Disclosure { .. } | Self::Section(ProjectTreeSection::OlderProjects)
+        )
+    }
 }
 
 /// 创建 Handoff 前的确认弹窗状态。
@@ -1146,7 +1166,7 @@ impl Ui {
     }
 
     fn expand_project_tree_node(&mut self, key: &ProjectTreeKey) {
-        if matches!(key, ProjectTreeKey::Disclosure { .. }) {
+        if key.uses_disclosure_state() {
             self.expanded_project_tree_disclosures.insert(key.clone());
         } else {
             self.collapsed_project_tree_nodes.remove(key);
@@ -1154,16 +1174,16 @@ impl Ui {
     }
 
     fn collapse_project_tree_node(&mut self, key: &ProjectTreeKey) {
-        if matches!(key, ProjectTreeKey::Disclosure { .. }) {
+        if key.uses_disclosure_state() {
             self.expanded_project_tree_disclosures.remove(key);
         } else {
             self.collapsed_project_tree_nodes.insert(key.clone());
         }
     }
 
-    /// 切换当前 Project、Worktree 或历史 Session disclosure 的展开状态。
+    /// 切换当前顶层分组、Project、Worktree 或 Session disclosure 的展开状态。
     fn toggle_project_tree_group(&mut self, key: ProjectTreeKey) {
-        if matches!(key, ProjectTreeKey::Disclosure { .. }) {
+        if key.uses_disclosure_state() {
             if !self.expanded_project_tree_disclosures.remove(&key) {
                 self.expanded_project_tree_disclosures.insert(key.clone());
             }
@@ -1436,7 +1456,8 @@ impl Ui {
                         copy_menu_selected: None,
                     });
                 }
-                group @ (ProjectTreeKey::Project(_)
+                group @ (ProjectTreeKey::Section(_)
+                | ProjectTreeKey::Project(_)
                 | ProjectTreeKey::Worktree { .. }
                 | ProjectTreeKey::Disclosure { .. }) => {
                     self.toggle_project_tree_group(group);

@@ -10,6 +10,16 @@ fn fit_preserves_terminal_width_for_ascii_and_wide_unicode() {
 }
 
 #[test]
+fn fit_right_pads_short_values_and_keeps_a_fixed_terminal_width() {
+    assert_eq!(fit_right("5%", 4, true), "  5%");
+    assert_eq!(fit_right("100%", 4, true), "100%");
+    assert_eq!(
+        UnicodeWidthStr::width(fit_right("你好世界", 5, true).as_str()),
+        5
+    );
+}
+
+#[test]
 fn visible_input_tail_keeps_the_latest_complete_characters() {
     assert_eq!(visible_input_tail("ab你好", 5), "b你好");
     assert_eq!(visible_input_tail("ab你好", 4), "你好");

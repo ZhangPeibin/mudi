@@ -76,6 +76,15 @@ pub(super) fn fit(value: &str, width: usize, keep_end: bool) -> String {
     format!("{fitted}{}", " ".repeat(width.saturating_sub(fitted_width)))
 }
 
+/// 把值右对齐到固定显示宽度；超长时复用 Unicode 安全的截断规则。
+pub(super) fn fit_right(value: &str, width: usize, keep_end: bool) -> String {
+    let value_width = UnicodeWidthStr::width(value);
+    if value_width <= width {
+        return format!("{}{value}", " ".repeat(width - value_width));
+    }
+    fit(value, width, keep_end)
+}
+
 /// 返回输入框能容纳的 Unicode 尾部，供编辑长标题时跟随光标。
 pub(super) fn visible_input_tail(value: &str, width: usize) -> String {
     let mut visible = Vec::new();

@@ -2,15 +2,15 @@
 
 use super::{
     context, current_attention, is_system_temporary_cwd, snapshot_now_ms, text, theme::Theme,
-    AllRegion, ProjectTreeKey, SessionAgeBand, SessionIdentity, Ui,
+    AllRegion, ProjectTreeKey, ProjectTreeSection, SessionAgeBand, SessionIdentity, Ui,
 };
 use crate::app::{fmt_relative, Snapshot};
-use crate::attention::{AttentionCondition, AttentionRank, AttentionSnapshot};
+use crate::attention::{AttentionRank, AttentionSnapshot};
 use crate::domain::{Project, ProjectIdentity, Provider, Session, SessionState, Worktree};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -19,17 +19,26 @@ use unicode_width::UnicodeWidthStr;
 
 /// All 页面实际可见的一行；纯展示信息之外还保留稳定身份和父子关系。
 pub(super) enum ProjectTreeRow<'a> {
+    Section {
+        key: ProjectTreeKey,
+        section: ProjectTreeSection,
+        item_count: usize,
+        expanded: bool,
+    },
     Project {
         key: ProjectTreeKey,
-        project: Option<&'a Project>,
+        parent: Option<ProjectTreeKey>,
+        project: &'a Project,
         session_count: usize,
         expanded: bool,
+        depth: usize,
     },
     Worktree {
         key: ProjectTreeKey,
         parent: ProjectTreeKey,
         worktree: &'a Worktree,
         expanded: bool,
+        depth: usize,
     },
     Disclosure {
         key: ProjectTreeKey,
@@ -50,7 +59,8 @@ pub(super) enum ProjectTreeRow<'a> {
 impl ProjectTreeRow<'_> {
     pub(super) fn key(&self) -> &ProjectTreeKey {
         match self {
-            Self::Project { key, .. }
+            Self::Section { key, .. }
+            | Self::Project { key, .. }
             | Self::Worktree { key, .. }
             | Self::Disclosure { key, .. }
             | Self::Session { key, .. } => key,
@@ -63,7 +73,8 @@ impl ProjectTreeRow<'_> {
 
     pub(super) fn parent_key(&self) -> Option<&ProjectTreeKey> {
         match self {
-            Self::Project { .. } => None,
+            Self::Section { .. } => None,
+            Self::Project { parent, .. } => parent.as_ref(),
             Self::Worktree { parent, .. }
             | Self::Disclosure { parent, .. }
             | Self::Session { parent, .. } => Some(parent),
@@ -72,8 +83,8 @@ impl ProjectTreeRow<'_> {
 
     pub(super) fn depth(&self) -> usize {
         match self {
-            Self::Project { .. } => 0,
-            Self::Worktree { .. } => 1,
+            Self::Section { .. } => 0,
+            Self::Project { depth, .. } | Self::Worktree { depth, .. } => *depth,
             Self::Disclosure { depth, .. } | Self::Session { depth, .. } => *depth,
         }
     }
@@ -84,7 +95,8 @@ impl ProjectTreeRow<'_> {
 
     pub(super) fn is_expanded(&self) -> bool {
         match self {
-            Self::Project { expanded, .. }
+            Self::Section { expanded, .. }
+            | Self::Project { expanded, .. }
             | Self::Worktree { expanded, .. }
             | Self::Disclosure { expanded, .. } => *expanded,
             Self::Session { .. } => false,
@@ -101,7 +113,10 @@ struct HistoricalDisclosure<'bucket, 'session> {
     depth: usize,
 }
 
-/// 按 Attention 顺序建立应用折叠状态后的 Project -> Worktree -> Session 行。
+/// 按 Project 最近活动时间和 Session Attention 建立应用折叠状态后的 Tree 行。
+///
+/// 只有一个 Worktree 且没有 Project 直属 Session 时省略 Worktree 层；多个
+/// Worktree 仍保留分组，避免不同工作副本的 Session 混在一起。
 pub(super) fn rows<'a>(
     sessions: &'a [Session],
     attention: &AttentionSnapshot,
@@ -110,27 +125,109 @@ pub(super) fn rows<'a>(
     expanded_disclosures: &HashSet<ProjectTreeKey>,
 ) -> Vec<ProjectTreeRow<'a>> {
     let mut rows = Vec::new();
-    for project in grouped_sessions(sessions, attention, now_ms) {
-        let project_identity = project.project.map(|project| project.identity.clone());
-        let project_key = ProjectTreeKey::Project(project_identity.clone());
-        let project_expanded = !collapsed.contains(&project_key);
-        let session_count = project.direct_sessions.len()
-            + project
-                .worktrees
-                .iter()
-                .map(|worktree| worktree.sessions.len())
-                .sum::<usize>();
-        rows.push(ProjectTreeRow::Project {
-            key: project_key.clone(),
-            project: project.project,
-            session_count,
-            expanded: project_expanded,
-        });
-        if !project_expanded {
-            continue;
-        }
+    let inventory = grouped_sessions(sessions, attention, now_ms);
+    for project in inventory.current_projects {
+        append_project(&mut rows, project, None, 0, collapsed, expanded_disclosures);
+    }
 
-        for worktree in project.worktrees {
+    if !inventory.older_projects.is_empty() {
+        let key = ProjectTreeKey::Section(ProjectTreeSection::OlderProjects);
+        let expanded = expanded_disclosures.contains(&key);
+        rows.push(ProjectTreeRow::Section {
+            key: key.clone(),
+            section: ProjectTreeSection::OlderProjects,
+            item_count: inventory.older_projects.len(),
+            expanded,
+        });
+        if expanded {
+            for project in inventory.older_projects {
+                append_project(
+                    &mut rows,
+                    project,
+                    Some(key.clone()),
+                    1,
+                    collapsed,
+                    expanded_disclosures,
+                );
+            }
+        }
+    }
+
+    if !inventory.unavailable.is_empty() {
+        let key = ProjectTreeKey::Section(ProjectTreeSection::Unavailable);
+        let expanded = !collapsed.contains(&key);
+        rows.push(ProjectTreeRow::Section {
+            key: key.clone(),
+            section: ProjectTreeSection::Unavailable,
+            item_count: inventory.unavailable.len(),
+            expanded,
+        });
+        if expanded {
+            append_session_buckets(
+                &mut rows,
+                inventory.unavailable,
+                None,
+                None,
+                key,
+                1,
+                expanded_disclosures,
+            );
+        }
+    }
+    rows
+}
+
+fn append_project<'session>(
+    rows: &mut Vec<ProjectTreeRow<'session>>,
+    project: ProjectGroup<'session>,
+    parent: Option<ProjectTreeKey>,
+    depth: usize,
+    collapsed: &HashSet<ProjectTreeKey>,
+    expanded_disclosures: &HashSet<ProjectTreeKey>,
+) {
+    let ProjectGroup {
+        project,
+        worktrees,
+        direct_sessions,
+        ..
+    } = project;
+    let project_identity = project.identity.clone();
+    let project_key = ProjectTreeKey::Project(project_identity.clone());
+    let project_expanded = !collapsed.contains(&project_key);
+    let session_count = direct_sessions.len()
+        + worktrees
+            .iter()
+            .map(|worktree| worktree.sessions.len())
+            .sum::<usize>();
+    rows.push(ProjectTreeRow::Project {
+        key: project_key.clone(),
+        parent,
+        project,
+        session_count,
+        expanded: project_expanded,
+        depth,
+    });
+    if !project_expanded {
+        return;
+    }
+
+    let flatten_single_worktree = worktrees.len() == 1 && direct_sessions.is_empty();
+    if flatten_single_worktree {
+        let worktree = worktrees
+            .into_iter()
+            .next()
+            .expect("one Worktree was counted");
+        append_session_buckets(
+            rows,
+            worktree.sessions,
+            Some(project_identity.clone()),
+            Some(worktree.worktree.root.clone()),
+            project_key.clone(),
+            depth + 1,
+            expanded_disclosures,
+        );
+    } else {
+        for worktree in worktrees {
             let worktree_key = ProjectTreeKey::Worktree {
                 project: project_identity.clone(),
                 root: worktree.worktree.root.clone(),
@@ -141,76 +238,77 @@ pub(super) fn rows<'a>(
                 parent: project_key.clone(),
                 worktree: worktree.worktree,
                 expanded: worktree_expanded,
+                depth: depth + 1,
             });
             if worktree_expanded {
-                rows.extend(worktree.sessions.open.into_iter().map(|session| {
-                    ProjectTreeRow::Session {
-                        key: session_tree_key(session),
-                        parent: worktree_key.clone(),
-                        session,
-                        depth: 2,
-                    }
-                }));
-                append_disclosure(
-                    &mut rows,
-                    HistoricalDisclosure {
-                        project: project_identity.clone(),
-                        worktree_root: Some(worktree.worktree.root.clone()),
-                        band: SessionAgeBand::Recent,
-                        parent: worktree_key.clone(),
-                        sessions: &worktree.sessions.recent,
-                        depth: 2,
-                    },
-                    expanded_disclosures,
-                );
-                append_disclosure(
-                    &mut rows,
-                    HistoricalDisclosure {
-                        project: project_identity.clone(),
-                        worktree_root: Some(worktree.worktree.root.clone()),
-                        band: SessionAgeBand::Older,
-                        parent: worktree_key.clone(),
-                        sessions: &worktree.sessions.older,
-                        depth: 2,
-                    },
+                append_session_buckets(
+                    rows,
+                    worktree.sessions,
+                    Some(project_identity.clone()),
+                    Some(worktree.worktree.root.clone()),
+                    worktree_key,
+                    depth + 2,
                     expanded_disclosures,
                 );
             }
         }
-        rows.extend(project.direct_sessions.open.into_iter().map(|session| {
-            ProjectTreeRow::Session {
-                key: session_tree_key(session),
-                parent: project_key.clone(),
-                session,
-                depth: 1,
-            }
-        }));
-        append_disclosure(
-            &mut rows,
-            HistoricalDisclosure {
-                project: project_identity.clone(),
-                worktree_root: None,
-                band: SessionAgeBand::Recent,
-                parent: project_key.clone(),
-                sessions: &project.direct_sessions.recent,
-                depth: 1,
-            },
-            expanded_disclosures,
-        );
-        append_disclosure(
-            &mut rows,
-            HistoricalDisclosure {
-                project: project_identity,
-                worktree_root: None,
-                band: SessionAgeBand::Older,
-                parent: project_key.clone(),
-                sessions: &project.direct_sessions.older,
-                depth: 1,
-            },
-            expanded_disclosures,
-        );
     }
-    rows
+
+    append_session_buckets(
+        rows,
+        direct_sessions,
+        Some(project_identity),
+        None,
+        project_key,
+        depth + 1,
+        expanded_disclosures,
+    );
+}
+
+fn append_session_buckets<'session>(
+    rows: &mut Vec<ProjectTreeRow<'session>>,
+    buckets: SessionBuckets<'session>,
+    project: Option<ProjectIdentity>,
+    worktree_root: Option<PathBuf>,
+    parent: ProjectTreeKey,
+    depth: usize,
+    expanded_disclosures: &HashSet<ProjectTreeKey>,
+) {
+    rows.extend(
+        buckets
+            .open
+            .into_iter()
+            .map(|session| ProjectTreeRow::Session {
+                key: session_tree_key(session),
+                parent: parent.clone(),
+                session,
+                depth,
+            }),
+    );
+    append_disclosure(
+        rows,
+        HistoricalDisclosure {
+            project: project.clone(),
+            worktree_root: worktree_root.clone(),
+            band: SessionAgeBand::Recent,
+            parent: parent.clone(),
+            sessions: &buckets.recent,
+            depth,
+        },
+        expanded_disclosures,
+    );
+    append_disclosure(
+        rows,
+        HistoricalDisclosure {
+            project,
+            worktree_root,
+            band: SessionAgeBand::Older,
+            parent,
+            sessions: &buckets.older,
+            depth,
+        },
+        expanded_disclosures,
+    );
 }
 
 fn append_disclosure<'session>(
@@ -289,22 +387,8 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .map(|session| (session.provider, session.id.as_str()))
         .collect::<Vec<_>>();
     let mut titles = ui.labels.titles_for(&visible_identities).into_iter();
-    let open_project_count = snap
-        .sessions
-        .iter()
-        .filter(|session| session.state.is_open())
-        .filter_map(|session| session.project.as_ref())
-        .map(|project| &project.identity)
-        .collect::<HashSet<_>>()
-        .len();
-    let open_session_count = snap
-        .sessions
-        .iter()
-        .filter(|session| session.state.is_open())
-        .count();
-    let content_width = area.width.saturating_sub(2) as usize;
-    let compact = content_width < COMPACT_TREE_MIN_WIDTH;
-    let column_widths = column_widths(area.width, content_width);
+    let (_, open_session_count) = tree_counts(snap);
+    let content_width = area.width as usize;
     let mut lines = Vec::new();
     let selected = (ui.all_region == AllRegion::Now)
         .then(|| ui.effective_project_tree_selection(snap))
@@ -321,7 +405,7 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         )));
     }
 
-    let visible_rows = area.height.saturating_sub(2) as usize;
+    let visible_rows = area.height as usize;
     let selected_index = selected
         .as_ref()
         .and_then(|selected| tree_rows.iter().position(|row| row.key() == selected));
@@ -332,24 +416,43 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     for row in tree_rows {
         let is_selected = selected.as_ref().is_some_and(|key| key == row.key());
         match row {
+            ProjectTreeRow::Section {
+                section,
+                item_count,
+                expanded,
+                ..
+            } => lines.push(section_line(
+                section,
+                item_count,
+                expanded,
+                is_selected,
+                content_width,
+                theme,
+            )),
             ProjectTreeRow::Project {
                 project,
                 session_count,
                 expanded,
+                depth,
                 ..
             } => lines.push(project_line(
                 project,
                 session_count,
+                depth,
                 expanded,
                 is_selected,
                 content_width,
                 theme,
             )),
             ProjectTreeRow::Worktree {
-                worktree, expanded, ..
+                worktree,
+                expanded,
+                depth,
+                ..
             } => lines.push(worktree_line(
                 worktree,
                 &attention,
+                depth,
                 expanded,
                 is_selected,
                 content_width,
@@ -378,8 +481,8 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 };
                 lines.push(if session.state == SessionState::Exited {
                     exited_session_line(session, &title, now_ms, content_width, position, theme)
-                } else if compact {
-                    compact_session_line(
+                } else {
+                    open_session_line(
                         session,
                         &title,
                         &attention,
@@ -388,67 +491,31 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                         position,
                         theme,
                     )
-                } else {
-                    session_line(
-                        session,
-                        &title,
-                        &attention,
-                        now_ms,
-                        column_widths,
-                        position,
-                        theme,
-                    )
                 });
             }
         }
     }
 
-    f.render_widget(
-        Paragraph::new(lines).scroll((scroll as u16, 0)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(if ui.all_region == AllRegion::Now {
-                    theme.accent
-                } else {
-                    theme.border
-                }))
-                .title(Line::from(vec![
-                    Span::styled(
-                        " SESSION TREE ",
-                        Style::default()
-                            .fg(theme.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("{open_project_count} "),
-                        Style::default()
-                            .fg(theme.foreground)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]))
-                .title(
-                    Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled(
-                            open_session_count.to_string(),
-                            Style::default()
-                                .fg(theme.foreground)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            if open_session_count == 1 {
-                                " OPEN SESSION "
-                            } else {
-                                " OPEN SESSIONS "
-                            },
-                            Style::default().fg(theme.muted),
-                        ),
-                    ])
-                    .right_aligned(),
-                ),
-        ),
-        area,
-    );
+    f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), area);
+}
+
+/// 返回可解析 Project 总数和非临时目录中的 Open Session 总数。
+pub(super) fn tree_counts(snap: &Snapshot) -> (usize, usize) {
+    let project_count = snap
+        .sessions
+        .iter()
+        .filter(|session| !is_system_temporary_cwd(session.cwd.as_deref()))
+        .filter_map(|session| session.project.as_ref())
+        .map(|project| &project.identity)
+        .collect::<HashSet<_>>()
+        .len();
+    let open_session_count = snap
+        .sessions
+        .iter()
+        .filter(|session| !is_system_temporary_cwd(session.cwd.as_deref()))
+        .filter(|session| session.state.is_open())
+        .count();
+    (project_count, open_session_count)
 }
 
 /// 按首页 Attention 顺序返回所有 Open Session。
@@ -490,6 +557,10 @@ impl<'a> SessionBuckets<'a> {
         self.open.len() + self.recent.len() + self.older.len()
     }
 
+    fn is_empty(&self) -> bool {
+        self.open.is_empty() && self.recent.is_empty() && self.older.is_empty()
+    }
+
     fn sort(&mut self, attention: &AttentionSnapshot) {
         self.open
             .sort_by(|left, right| attention.compare_sessions(left, right));
@@ -508,15 +579,11 @@ enum SessionBucket {
 }
 
 struct ProjectGroup<'a> {
-    project: Option<&'a Project>,
+    project: &'a Project,
     worktrees: Vec<WorktreeGroup<'a>>,
     direct_sessions: SessionBuckets<'a>,
-}
-
-impl ProjectGroup<'_> {
-    fn label(&self) -> &str {
-        self.project.map_or("N/A", |project| project.label.as_str())
-    }
+    latest_activity_ms: i64,
+    has_open_session: bool,
 }
 
 struct WorktreeGroup<'a> {
@@ -524,37 +591,47 @@ struct WorktreeGroup<'a> {
     sessions: SessionBuckets<'a>,
 }
 
-/// 将全部可浏览 Session 分组为 Project -> Worktree -> Session Tree 层级。
+struct ProjectInventory<'a> {
+    current_projects: Vec<ProjectGroup<'a>>,
+    older_projects: Vec<ProjectGroup<'a>>,
+    unavailable: SessionBuckets<'a>,
+}
+
+/// 将全部可浏览 Session 分组，并按 Project 最新 Session 活动时间倒序排列。
 fn grouped_sessions<'a>(
     sessions: &'a [Session],
     attention: &AttentionSnapshot,
     now_ms: i64,
-) -> Vec<ProjectGroup<'a>> {
+) -> ProjectInventory<'a> {
     const SEVEN_DAYS_MS: i64 = 7 * 86_400_000;
     let cutoff_ms = now_ms - SEVEN_DAYS_MS;
     let mut projects: Vec<ProjectGroup<'_>> = Vec::new();
+    let mut unavailable = SessionBuckets::default();
 
     for session in sessions {
         if is_system_temporary_cwd(session.cwd.as_deref()) {
             continue;
         }
-        let project_index = match session.project.as_ref() {
-            Some(project) => projects.iter().position(|group| {
-                group
-                    .project
-                    .is_some_and(|existing| existing.identity == project.identity)
-            }),
-            None => projects.iter().position(|group| group.project.is_none()),
+        let Some(resolved_project) = session.project.as_ref() else {
+            unavailable.push(session, session_bucket(session, cutoff_ms));
+            continue;
         };
-        let project_index = project_index.unwrap_or_else(|| {
-            projects.push(ProjectGroup {
-                project: session.project.as_ref(),
-                worktrees: Vec::new(),
-                direct_sessions: SessionBuckets::default(),
+        let project_index = projects
+            .iter()
+            .position(|group| group.project.identity == resolved_project.identity)
+            .unwrap_or_else(|| {
+                projects.push(ProjectGroup {
+                    project: resolved_project,
+                    worktrees: Vec::new(),
+                    direct_sessions: SessionBuckets::default(),
+                    latest_activity_ms: session.last_activity_ms,
+                    has_open_session: false,
+                });
+                projects.len() - 1
             });
-            projects.len() - 1
-        });
         let project = &mut projects[project_index];
+        project.latest_activity_ms = project.latest_activity_ms.max(session.last_activity_ms);
+        project.has_open_session |= session.state.is_open();
 
         if let Some(worktree) = session.worktree.as_ref() {
             let worktree_index = project
@@ -589,27 +666,21 @@ fn grouped_sessions<'a>(
         project.direct_sessions.sort(attention);
     }
     projects.sort_by(|left, right| {
-        compare_optional(
-            attention,
-            best_session(left, attention),
-            best_session(right, attention),
-        )
-        .then_with(|| left.label().cmp(right.label()))
+        right
+            .latest_activity_ms
+            .cmp(&left.latest_activity_ms)
+            .then_with(|| left.project.label.cmp(&right.project.label))
     });
+    unavailable.sort(attention);
 
-    projects
-}
-
-fn best_session<'a>(
-    project: &ProjectGroup<'a>,
-    attention: &AttentionSnapshot,
-) -> Option<&'a Session> {
-    project
-        .worktrees
-        .iter()
-        .flat_map(|worktree| worktree.sessions.open.iter().copied())
-        .chain(project.direct_sessions.open.iter().copied())
-        .min_by(|left, right| attention.compare_sessions(left, right))
+    let (current_projects, older_projects) = projects
+        .into_iter()
+        .partition(|project| project.has_open_session || project.latest_activity_ms >= cutoff_ms);
+    ProjectInventory {
+        current_projects,
+        older_projects,
+        unavailable,
+    }
 }
 
 fn session_bucket(session: &Session, cutoff_ms: i64) -> SessionBucket {
@@ -643,102 +714,7 @@ fn compare_optional(
     }
 }
 
-fn session_line(
-    session: &Session,
-    title: &str,
-    attention: &AttentionSnapshot,
-    now_ms: i64,
-    widths: ColumnWidths,
-    position: SessionTreePosition,
-    theme: Theme,
-) -> Line<'static> {
-    let state = match session.state {
-        SessionState::Busy => "Busy",
-        SessionState::Idle => "Idle",
-        SessionState::Exited => unreachable!("NOW contains only Open Sessions"),
-    };
-    let provider = match session.provider {
-        Provider::ClaudeCode => "Claude",
-        Provider::CodexCli => "Codex",
-    };
-    let attention_rank = attention.rank_for(session);
-    let model = text::shorten_start(
-        session.latest_model.as_deref().unwrap_or("N/A"),
-        widths.model,
-    );
-    let title = text::fit(title, widths.title, true);
-    let attention_label = match attention_rank {
-        AttentionRank::CriticalContext => "CRITICAL",
-        AttentionRank::SharedWorktreeRisk => "SHARED",
-        AttentionRank::WarningContext => "WARNING",
-        AttentionRank::Idle => "IDLE",
-        AttentionRank::HealthyBusy => "BUSY",
-    };
-    let idle_since =
-        attention
-            .conditions_for(session)
-            .iter()
-            .find_map(|condition| match condition {
-                AttentionCondition::Idle { since_ms, .. } => Some(*since_ms),
-                _ => None,
-            });
-    let relative = fmt_relative(idle_since.unwrap_or(session.last_activity_ms), now_ms);
-    let elapsed = if idle_since.is_some() && widths.elapsed >= 7 {
-        format!("Idle {relative}")
-    } else {
-        relative
-    };
-    let elapsed = text::shorten_start(&elapsed, widths.elapsed);
-    let cursor_style = if position.selected {
-        Style::default()
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-    let base_style = Style::default().fg(theme.foreground);
-    let attention_style = match attention_rank {
-        AttentionRank::CriticalContext => Style::default()
-            .fg(theme.critical)
-            .add_modifier(Modifier::BOLD),
-        AttentionRank::SharedWorktreeRisk | AttentionRank::WarningContext => {
-            Style::default().fg(theme.warning)
-        }
-        AttentionRank::Idle => Style::default().fg(theme.idle),
-        AttentionRank::HealthyBusy => Style::default().fg(theme.busy),
-    };
-    let lifecycle_style = match session.state {
-        SessionState::Busy => Style::default().fg(theme.busy).add_modifier(Modifier::BOLD),
-        SessionState::Idle => Style::default().fg(theme.idle),
-        SessionState::Exited => unreachable!("NOW contains only Open Sessions"),
-    };
-    let mut spans = vec![
-        Span::styled(
-            format!(
-                "{}{} ",
-                "  ".repeat(position.depth),
-                if position.selected { ">" } else { " " }
-            ),
-            cursor_style,
-        ),
-        Span::styled(format!("{attention_label:<8} "), attention_style),
-        Span::styled(format!("{state:<4} "), lifecycle_style),
-        Span::styled(format!("{provider:<6} "), base_style),
-        Span::styled(format!("{title} "), base_style),
-    ];
-    spans.extend(context::evidence(session, widths.context_bar, theme));
-    spans.push(Span::styled(
-        format!(
-            "{model:<model_width$} {elapsed:<elapsed_width$}",
-            model_width = widths.model,
-            elapsed_width = widths.elapsed,
-        ),
-        base_style,
-    ));
-    Line::from(spans)
-}
-
-fn compact_session_line(
+fn open_session_line(
     session: &Session,
     title: &str,
     attention: &AttentionSnapshot,
@@ -753,17 +729,11 @@ fn compact_session_line(
         if position.selected { ">" } else { " " }
     );
     let attention_rank = attention.rank_for(session);
-    let attention_label = match (attention_rank, content_width >= WIDE_COMPACT_TREE_WIDTH) {
-        (AttentionRank::CriticalContext, true) => "CRITICAL",
-        (AttentionRank::SharedWorktreeRisk, true) => "SHARED",
-        (AttentionRank::WarningContext, true) => "WARNING",
-        (AttentionRank::Idle, true) => "IDLE",
-        (AttentionRank::HealthyBusy, true) => "BUSY",
-        (AttentionRank::CriticalContext, false) => "C",
-        (AttentionRank::SharedWorktreeRisk, false) => "S",
-        (AttentionRank::WarningContext, false) => "W",
-        (AttentionRank::Idle, false) => "I",
-        (AttentionRank::HealthyBusy, false) => "B",
+    let attention_marker = match attention_rank {
+        AttentionRank::CriticalContext
+        | AttentionRank::SharedWorktreeRisk
+        | AttentionRank::WarningContext => "!",
+        AttentionRank::Idle | AttentionRank::HealthyBusy => " ",
     };
     let attention_style = match attention_rank {
         AttentionRank::CriticalContext => Style::default()
@@ -772,36 +742,40 @@ fn compact_session_line(
         AttentionRank::SharedWorktreeRisk | AttentionRank::WarningContext => {
             Style::default().fg(theme.warning)
         }
-        AttentionRank::Idle => Style::default().fg(theme.idle),
-        AttentionRank::HealthyBusy => Style::default().fg(theme.busy),
+        AttentionRank::Idle | AttentionRank::HealthyBusy => Style::default().fg(theme.muted),
     };
-    let state = match session.state {
-        SessionState::Busy => "Busy",
-        SessionState::Idle => "Idle",
+    let lifecycle_marker = match session.state {
+        SessionState::Busy => "●",
+        SessionState::Idle => "○",
         SessionState::Exited => unreachable!("NOW contains only Open Sessions"),
     };
-    let provider = match session.provider {
-        Provider::ClaudeCode => "Claude",
-        Provider::CodexCli => "Codex",
-    };
-    let context = session
+    let provider = provider_icon(session.provider);
+    let context_value = session
         .context
         .percent()
         .map(|percent| format!("{percent:.0}%"))
         .unwrap_or_else(|| "N/A".to_string());
-    let elapsed = if content_width >= WIDE_COMPACT_TREE_WIDTH {
-        format!(" {}", fmt_relative(session.last_activity_ms, now_ms))
+    let context_value = text::fit_right(&context_value, CONTEXT_VALUE_WIDTH, true);
+    let elapsed = if content_width >= SHOW_ELAPSED_WIDTH {
+        format!(
+            " {}",
+            text::fit_right(
+                &fmt_relative(session.last_activity_ms, now_ms),
+                ELAPSED_VALUE_WIDTH,
+                true,
+            )
+        )
     } else {
         String::new()
     };
     let fixed_width = UnicodeWidthStr::width(prefix.as_str())
-        + UnicodeWidthStr::width(attention_label)
-        + UnicodeWidthStr::width(" ")
-        + UnicodeWidthStr::width(state)
-        + UnicodeWidthStr::width(" ")
         + UnicodeWidthStr::width(provider)
-        + UnicodeWidthStr::width(" ")
-        + UnicodeWidthStr::width(context.as_str())
+        + UnicodeWidthStr::width("  ")
+        + UnicodeWidthStr::width(attention_marker)
+        + UnicodeWidthStr::width("  ")
+        + UnicodeWidthStr::width(lifecycle_marker)
+        + UnicodeWidthStr::width("  ")
+        + UnicodeWidthStr::width(context_value.as_str())
         + UnicodeWidthStr::width(elapsed.as_str());
     let title = text::fit(title, content_width.saturating_sub(fixed_width), true);
     let cursor_style = if position.selected {
@@ -823,14 +797,15 @@ fn compact_session_line(
         .unwrap_or_else(|| Style::default().fg(theme.muted));
     Line::from(vec![
         Span::styled(prefix, cursor_style),
-        Span::styled(attention_label, attention_style),
-        Span::raw(" "),
-        Span::styled(state, lifecycle_style),
-        Span::raw(" "),
-        Span::styled(provider, Style::default().fg(theme.foreground)),
+        Span::styled(provider, Style::default().fg(theme.accent)),
         Span::raw(" "),
         Span::styled(title, Style::default().fg(theme.foreground)),
-        Span::styled(context, context_style),
+        Span::raw(" "),
+        Span::styled(attention_marker, attention_style),
+        Span::raw(" "),
+        Span::styled(lifecycle_marker, lifecycle_style),
+        Span::raw(" "),
+        Span::styled(context_value, context_style),
         Span::styled(elapsed, Style::default().fg(theme.muted)),
     ])
 }
@@ -848,23 +823,13 @@ fn exited_session_line(
         "  ".repeat(position.depth),
         if position.selected { ">" } else { " " }
     );
-    let provider = match session.provider {
-        Provider::ClaudeCode => "Claude",
-        Provider::CodexCli => "Codex",
-    };
+    let provider = provider_icon(session.provider);
     let elapsed = fmt_relative(session.last_activity_ms, now_ms);
     let fixed_width = UnicodeWidthStr::width(prefix.as_str())
-        + UnicodeWidthStr::width("EXITED ")
         + UnicodeWidthStr::width(provider)
-        + 3
+        + 2
         + UnicodeWidthStr::width(elapsed.as_str());
-    let available_width = content_width.saturating_sub(fixed_width);
-    let model_width = available_width / 2;
-    let title = text::fit(title, available_width.saturating_sub(model_width), true);
-    let model = text::shorten_start(
-        session.latest_model.as_deref().unwrap_or("N/A"),
-        model_width,
-    );
+    let title = text::fit(title, content_width.saturating_sub(fixed_width), true);
     let cursor_style = if position.selected {
         Style::default()
             .fg(theme.accent)
@@ -874,35 +839,50 @@ fn exited_session_line(
     };
     Line::from(vec![
         Span::styled(prefix, cursor_style),
-        Span::styled(
-            "EXITED ",
-            Style::default()
-                .fg(theme.exited)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{provider} "),
-            Style::default().fg(theme.foreground),
-        ),
-        Span::styled(title, Style::default().fg(theme.foreground)),
+        Span::styled(provider, Style::default().fg(theme.accent)),
         Span::raw(" "),
-        Span::styled(model, Style::default().fg(theme.foreground)),
+        Span::styled(title, Style::default().fg(theme.exited)),
         Span::raw(" "),
         Span::styled(elapsed, Style::default().fg(theme.muted)),
     ])
 }
 
-fn project_line(
-    project: Option<&Project>,
-    session_count: usize,
+fn provider_icon(provider: Provider) -> &'static str {
+    match provider {
+        Provider::ClaudeCode => "✦",
+        Provider::CodexCli => "◎",
+    }
+}
+
+fn section_line(
+    section: ProjectTreeSection,
+    item_count: usize,
     expanded: bool,
     selected: bool,
     width: usize,
     theme: Theme,
 ) -> Line<'static> {
-    let prefix = group_prefix(0, selected, expanded);
+    let label = match section {
+        ProjectTreeSection::OlderProjects => "Older Projects",
+        ProjectTreeSection::Unavailable => "Unavailable",
+    };
+    group_line(label, item_count, 0, expanded, selected, width, theme)
+}
+
+fn project_line(
+    project: &Project,
+    session_count: usize,
+    depth: usize,
+    expanded: bool,
+    selected: bool,
+    width: usize,
+    theme: Theme,
+) -> Line<'static> {
+    let prefix = group_prefix(depth, selected, expanded);
     let count = format!(" ({session_count})");
-    let label_width = width.saturating_sub(prefix.chars().count() + count.chars().count());
+    let label_width = width.saturating_sub(
+        UnicodeWidthStr::width(prefix.as_str()) + UnicodeWidthStr::width(count.as_str()),
+    );
     Line::from(vec![
         Span::styled(
             prefix,
@@ -915,10 +895,7 @@ fn project_line(
             },
         ),
         Span::styled(
-            text::shorten_end(
-                project.map_or("N/A", |project| project.label.as_str()),
-                label_width,
-            ),
+            text::shorten_end(&project.label, label_width),
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
@@ -930,76 +907,21 @@ fn project_line(
 fn worktree_line(
     worktree: &Worktree,
     attention: &AttentionSnapshot,
+    depth: usize,
     expanded: bool,
     selected: bool,
     width: usize,
     theme: Theme,
 ) -> Line<'static> {
-    if width < COMPACT_TREE_MIN_WIDTH {
-        return compact_worktree_line(worktree, attention, expanded, selected, width, theme);
-    }
-    let branch = worktree.branch.as_deref().unwrap_or("detached HEAD");
-    let evidence = attention
-        .shared_worktree_risk(&worktree.root)
-        .map(|risk| {
-            format!(
-                " | WARNING Shared Worktree Risk x{}",
-                risk.contributing_sessions.len()
-            )
-        })
-        .unwrap_or_default();
-    let prefix = group_prefix(1, selected, expanded);
-    let identity_width = width.saturating_sub(prefix.len() + 3 + evidence.chars().count());
-    let path_width = identity_width.saturating_mul(3) / 5;
-    let branch_width = identity_width.saturating_sub(path_width);
-    let path = home_relative_path(&worktree.root);
-    Line::from(vec![
-        Span::styled(
-            prefix,
-            if selected {
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.muted)
-            },
-        ),
-        Span::styled(
-            format!(
-                "{} | {}{evidence}",
-                text::shorten_end(&path, path_width),
-                text::shorten_start(branch, branch_width),
-            ),
-            Style::default().fg(theme.muted),
-        ),
-    ])
-}
-
-fn compact_worktree_line(
-    worktree: &Worktree,
-    attention: &AttentionSnapshot,
-    expanded: bool,
-    selected: bool,
-    width: usize,
-    theme: Theme,
-) -> Line<'static> {
-    let prefix = group_prefix(1, selected, expanded);
     let branch = worktree.branch.as_deref().unwrap_or("detached HEAD");
     let risk = attention
         .shared_worktree_risk(&worktree.root)
-        .map(|risk| format!(" | Risk x{}", risk.contributing_sessions.len()))
+        .map(|risk| format!(" !{}", risk.contributing_sessions.len()))
         .unwrap_or_default();
-    let branch = format!(" | {branch}");
+    let prefix = group_prefix(depth, selected, expanded);
     let label_width = width.saturating_sub(
-        UnicodeWidthStr::width(prefix.as_str())
-            + UnicodeWidthStr::width(branch.as_str())
-            + UnicodeWidthStr::width(risk.as_str()),
+        UnicodeWidthStr::width(prefix.as_str()) + UnicodeWidthStr::width(risk.as_str()),
     );
-    let label = worktree
-        .root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("N/A");
     Line::from(vec![
         Span::styled(
             prefix,
@@ -1012,10 +934,9 @@ fn compact_worktree_line(
             },
         ),
         Span::styled(
-            text::shorten_end(label, label_width),
+            text::shorten_end(branch, label_width),
             Style::default().fg(theme.foreground),
         ),
-        Span::styled(branch, Style::default().fg(theme.muted)),
         Span::styled(risk, Style::default().fg(theme.warning)),
     ])
 }
@@ -1030,12 +951,34 @@ fn disclosure_line(
     theme: Theme,
 ) -> Line<'static> {
     let label = match band {
-        SessionAgeBand::Recent => "RECENT SESSIONS",
-        SessionAgeBand::Older => "OLDER SESSIONS",
+        SessionAgeBand::Recent => "Recent",
+        SessionAgeBand::Older => "Older",
     };
+    group_line(
+        label,
+        session_count,
+        depth,
+        expanded,
+        selected,
+        width,
+        theme,
+    )
+}
+
+fn group_line(
+    label: &str,
+    item_count: usize,
+    depth: usize,
+    expanded: bool,
+    selected: bool,
+    width: usize,
+    theme: Theme,
+) -> Line<'static> {
     let prefix = group_prefix(depth, selected, expanded);
-    let count = format!(" ({session_count})");
-    let label_width = width.saturating_sub(prefix.len() + count.len());
+    let count = format!(" ({item_count})");
+    let label_width = width.saturating_sub(
+        UnicodeWidthStr::width(prefix.as_str()) + UnicodeWidthStr::width(count.as_str()),
+    );
     Line::from(vec![
         Span::styled(
             prefix,
@@ -1057,10 +1000,10 @@ fn disclosure_line(
 
 fn group_prefix(depth: usize, selected: bool, expanded: bool) -> String {
     format!(
-        "{}{} {} ",
+        "{}{}{} ",
         "  ".repeat(depth),
         if selected { ">" } else { " " },
-        if expanded { "-" } else { "+" }
+        if expanded { "▾" } else { "▸" }
     )
 }
 
@@ -1078,86 +1021,15 @@ pub(super) fn home_relative_path(path: &Path) -> Cow<'_, str> {
     }
 }
 
-const MIN_CONTEXT_BAR_WIDTH: usize = 12;
-const COMPACT_TREE_MIN_WIDTH: usize = 70;
-const WIDE_COMPACT_TREE_WIDTH: usize = 45;
-const MAX_CONTEXT_BAR_WIDTH: usize = 20;
-const COMPACT_TERMINAL_WIDTH: u16 = 80;
-const COLUMNS_PER_CONTEXT_CELL: u16 = 5;
-const MIN_TITLE_WIDTH: usize = 14;
-const MAX_TITLE_WIDTH: usize = 20;
-const MIN_MODEL_WIDTH: usize = 11;
-const PREFERRED_MODEL_WIDTH: usize = 14;
-const FIXED_WIDTH_WITHOUT_FLEXIBLE_COLUMNS_AND_ELAPSED: usize = 33;
-const WORKTREE_SESSION_PREFIX_EXTRA: usize = 4;
-const COMPACT_ELAPSED_WIDTH: usize = 4;
-const WIDE_ELAPSED_WIDTH: usize = 8;
-const COMPACT_CONTENT_WIDTH: usize = FIXED_WIDTH_WITHOUT_FLEXIBLE_COLUMNS_AND_ELAPSED
-    + COMPACT_ELAPSED_WIDTH
-    + MIN_TITLE_WIDTH
-    + MIN_CONTEXT_BAR_WIDTH
-    + MIN_MODEL_WIDTH;
-
-#[derive(Debug, Clone, Copy)]
-struct ColumnWidths {
-    title: usize,
-    context_bar: usize,
-    model: usize,
-    elapsed: usize,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct SessionTreePosition {
     depth: usize,
     selected: bool,
 }
 
-fn column_widths(terminal_width: u16, content_width: usize) -> ColumnWidths {
-    let content_width = content_width.saturating_sub(WORKTREE_SESSION_PREFIX_EXTRA);
-    let elapsed = if terminal_width <= COMPACT_TERMINAL_WIDTH {
-        COMPACT_ELAPSED_WIDTH
-    } else {
-        WIDE_ELAPSED_WIDTH
-    };
-    let title = title_width(content_width);
-    let context_bar = context_bar_width(terminal_width, content_width, title);
-    let model = content_width
-        .saturating_sub(
-            FIXED_WIDTH_WITHOUT_FLEXIBLE_COLUMNS_AND_ELAPSED + elapsed + title + context_bar,
-        )
-        .max(MIN_MODEL_WIDTH);
-    ColumnWidths {
-        title,
-        context_bar,
-        model,
-        elapsed,
-    }
-}
-
-fn title_width(content_width: usize) -> usize {
-    MIN_TITLE_WIDTH
-        + content_width
-            .saturating_sub(COMPACT_CONTENT_WIDTH)
-            .min(MAX_TITLE_WIDTH - MIN_TITLE_WIDTH)
-}
-
-fn preferred_context_bar_width(terminal_width: u16) -> usize {
-    let extra_cells =
-        terminal_width.saturating_sub(COMPACT_TERMINAL_WIDTH) / COLUMNS_PER_CONTEXT_CELL;
-    (MIN_CONTEXT_BAR_WIDTH + extra_cells as usize).min(MAX_CONTEXT_BAR_WIDTH)
-}
-
-fn context_bar_width(terminal_width: u16, content_width: usize, title_width: usize) -> usize {
-    let available_cells = content_width
-        .saturating_sub(
-            FIXED_WIDTH_WITHOUT_FLEXIBLE_COLUMNS_AND_ELAPSED
-                + WIDE_ELAPSED_WIDTH
-                + title_width
-                + PREFERRED_MODEL_WIDTH,
-        )
-        .max(MIN_CONTEXT_BAR_WIDTH);
-    preferred_context_bar_width(terminal_width).min(available_cells)
-}
+const SHOW_ELAPSED_WIDTH: usize = 42;
+const CONTEXT_VALUE_WIDTH: usize = 4;
+const ELAPSED_VALUE_WIDTH: usize = 4;
 
 #[cfg(test)]
 #[path = "projects_test.rs"]

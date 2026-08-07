@@ -1,6 +1,6 @@
 //! 总览页布局组合。
 
-use super::{editor, projects, signals, snapshot_now_ms, tasks, Ui};
+use super::{editor, session_browser, signals, snapshot_now_ms, tasks, Ui};
 use crate::app::Snapshot;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::Frame;
@@ -34,18 +34,7 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
         .split(rows[1]);
-    let tree_height = if editor_columns[0].height <= 14 {
-        4
-    } else {
-        editor_columns[0].height / 2
-    };
-    let editor_left = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(tree_height), Constraint::Min(8)])
-        .split(editor_columns[0]);
-
-    projects::draw(f, editor_left[0], snap, ui);
-    editor::draw_selected_session(f, editor_left[1], snap, ui);
+    session_browser::draw(f, editor_columns[0], snap, ui);
     editor::draw_workspace(f, editor_columns[1], snap, ui);
 }
 

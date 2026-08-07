@@ -7,18 +7,18 @@
         │  Sessions    │Passive observation is the default.            │       │
         │  Signals     │Control Operations require explicit            │       │
         │  Theme       │authorization.                                 │───────┘
-┌ SESSIO│              │Pages                                          │───────┐
-│    - s│              │1  All                                         │       │
-│    > C│              │2  Claude Code                                 │       │
-└───────│              │3  Codex CLI                                   │       │
-┌ Select│              │Current and recent                             │       │
-│Session│              │NOW shows current conditions.                  │       │
-│Provide│              │Recent Signals show transitions.               │       │
-│Project│              │                                               │       │
-│Worktre│              │                                               │       │
-│Latest │              │                                               │       │
-│Current│              │                                               │       │
-│Current└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘       │
-│Operation Task N/A                 ││                                         │
+┌ PROJEC│              │Pages                                          │───────┐
+│ ▾ sess│              │1  All                                         │       │
+│   ▾ ma│              │2  Claude Code                                 │       │
+│    > ✦│              │3  Codex CLI                                   │       │
+│      ◎│              │Current and recent                             │       │
+│   ▾ wa│              │NOW shows current conditions.                  │       │
+│      ✦│              │Recent Signals show transitions.               │       │
+│   ▾ id│              │                                               │       │
+│      ◎│              │                                               │       │
+│ DETAIL│              │                                               │       │
+│Provide│              │                                               │       │
+│Worktre└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘       │
+│Model      claude-opus-4-8         ││                                         │
 └───────────────────────────────────┘└─────────────────────────────────────────┘
 j/k | Left/Right | Enter | e Edit | ? | q Quit                     fixture ready

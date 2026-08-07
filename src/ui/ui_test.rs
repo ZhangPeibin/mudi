@@ -842,15 +842,14 @@ fn now_groups_open_sessions_across_providers_and_omits_exited_sessions() {
     snapshot.sessions.extend([codex, exited]);
 
     let page = rendered_rows_at(&ui, &snapshot, 120, 30);
-    let project = page.find("\n│  - sessionmesh").unwrap();
-    let worktree = page.find("Risk x2").unwrap();
-    let claude = page.find("Claude -session").unwrap();
-    let codex = page.find("Codex dex-open").unwrap();
+    let project = page.find("▾ sessionmesh").unwrap();
+    let claude = page.find("✦ -session").unwrap();
+    let codex = page.find("◎ dex-open").unwrap();
 
-    assert!(project < worktree && worktree < claude && claude < codex);
+    assert!(project < claude && claude < codex);
     assert_eq!(
         page.lines()
-            .filter(|line| line.starts_with("│  - sessionmesh"))
+            .filter(|line| line.contains("▾ sessionmesh"))
             .count(),
         1
     );
@@ -872,13 +871,14 @@ fn now_groups_open_sessions_across_providers_and_omits_exited_sessions() {
 }
 
 #[test]
-fn now_applies_attention_order_to_projects_worktrees_and_sessions() {
+fn now_sorts_projects_by_activity_and_their_sessions_by_attention() {
     let mut healthy = demo_snapshot().sessions.remove(0);
     healthy.id = "healthy".into();
     healthy.project = Some(test_project("healthy"));
     healthy.worktree.as_mut().unwrap().root = PathBuf::from("/worktrees/healthy");
     healthy.latest_model = Some("healthy-model".into());
     healthy.context.tokens = 80_000;
+    healthy.last_activity_ms = 2_000;
 
     let mut warning = healthy.clone();
     warning.id = "warning".into();
@@ -886,6 +886,7 @@ fn now_applies_attention_order_to_projects_worktrees_and_sessions() {
     warning.worktree.as_mut().unwrap().root = PathBuf::from("/worktrees/a-warning");
     warning.latest_model = Some("warning-model".into());
     warning.context.tokens = 150_000;
+    warning.last_activity_ms = 1_000;
 
     let mut shared = warning.clone();
     shared.provider = Provider::CodexCli;
@@ -904,6 +905,7 @@ fn now_applies_attention_order_to_projects_worktrees_and_sessions() {
     let mut snapshot = Snapshot {
         sessions: vec![healthy, warning, shared, critical],
         status: "watching".into(),
+        generated_ms: 3_000,
         ready: true,
         ..Snapshot::default()
     };
@@ -923,13 +925,12 @@ fn now_applies_attention_order_to_projects_worktrees_and_sessions() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(session_ids, ["critical", "shared", "warning", "healthy"]);
+    assert_eq!(session_ids, ["healthy", "critical", "shared", "warning"]);
 
     let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
-    assert!(page.contains("Claude critical"));
-    assert!(page.contains("Codex shared"));
-    assert!(page.contains("Claude warning"));
-    assert!(page.contains("Risk x2"));
+    assert!(page.contains("✦ critical"));
+    assert!(page.contains("◎ shared"));
+    assert!(page.contains("✦ warning"));
 }
 
 #[test]
@@ -946,18 +947,17 @@ fn now_shows_shared_worktree_risk_and_every_contributing_session() {
     snapshot.attention = Some(AttentionEngine::default().update(&snapshot.sessions, 2_000));
 
     let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
-    let risk_line = page.lines().find(|line| line.contains("Risk x2")).unwrap();
-    let risk = page.find(risk_line).unwrap();
-    let claude = page.find("Claude -session").unwrap();
-    let codex = page.find("Codex tributor").unwrap();
+    let claude = page
+        .lines()
+        .find(|line| line.contains("✦ -session"))
+        .unwrap();
+    let codex = page
+        .lines()
+        .find(|line| line.contains("◎ tributor"))
+        .unwrap();
 
-    assert!(risk < claude && risk < codex);
-    assert_eq!(
-        page.lines()
-            .filter(|line| line.contains("Claude -session") || line.contains("Codex tributor"))
-            .count(),
-        2
-    );
+    assert!(claude.contains('!'));
+    assert!(codex.contains('!'));
 }
 
 #[test]
@@ -970,13 +970,13 @@ fn now_shows_critical_context_label_and_exact_percentage_in_the_editor_tree() {
     let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
     let critical = page
         .lines()
-        .find(|line| line.contains("CRITICAL Busy Claude"))
+        .find(|line| line.contains("✦ -session"))
         .unwrap();
 
-    assert!(critical.contains("CRITICAL"));
+    assert!(critical.contains('!'));
     assert!(critical.contains("90%"));
-    assert!(critical.contains("Busy"));
-    assert!(critical.contains("Claude"));
+    assert!(critical.contains('●'));
+    assert!(critical.contains('✦'));
     assert!(critical.contains("-session"));
 }
 
@@ -989,10 +989,10 @@ fn now_shows_warning_context_label_and_exact_percentage_in_the_editor_tree() {
     let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
     let warning = page
         .lines()
-        .find(|line| line.contains("WARNING Busy Claude"))
+        .find(|line| line.contains("✦ -session"))
         .unwrap();
 
-    assert!(warning.contains("WARNING"));
+    assert!(warning.contains('!'));
     assert!(warning.contains("75%"));
 }
 
@@ -1005,11 +1005,11 @@ fn now_shows_the_last_eight_native_session_id_characters() {
     let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
     let session = page
         .lines()
-        .find(|line| line.contains("WARNING Busy Claude"))
+        .find(|line| line.contains("✦ ining-id"))
         .unwrap();
 
-    assert!(session.contains("Claude ining-id"));
-    assert!(page.contains("Latest model session-id-model"));
+    assert!(session.contains("✦ ining-id"));
+    assert!(page.contains("Model      session-id-model"));
     assert!(!session.contains("12345678"));
 }
 
@@ -1034,9 +1034,9 @@ fn now_preserves_lifecycle_colors_when_attention_overrides_rank() {
     };
 
     let terminal = render_terminal_at(&ui, &snapshot, 120, 30);
-    let busy = rendered_style_at(&terminal, "Busy");
-    let idle = rendered_style_at(&terminal, "Idle");
-    let warning = rendered_style_at(&terminal, "WARNING");
+    let busy = rendered_style_at(&terminal, "●");
+    let idle = rendered_style_at(&terminal, "○");
+    let warning = rendered_style_at(&terminal, "!");
 
     assert_eq!(busy.fg, Some(Color::Rgb(120, 205, 120)));
     assert!(busy.add_modifier.contains(Modifier::BOLD));
@@ -1071,16 +1071,16 @@ fn now_shows_idle_elapsed_from_transition_and_last_activity_fallback() {
     let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
     let observed = page
         .lines()
-        .find(|line| line.contains("IDLE Idle Claude"))
+        .find(|line| line.contains("✦ ved-idle"))
         .unwrap();
     let fallback = page
         .lines()
-        .find(|line| line.contains("IDLE Idle Codex"))
+        .find(|line| line.contains("◎ ack-idle"))
         .unwrap();
 
-    assert!(observed.contains("IDLE"));
+    assert!(observed.contains('○'));
     assert!(observed.contains("ved-idle"));
-    assert!(fallback.contains("IDLE"));
+    assert!(fallback.contains('○'));
     assert!(fallback.contains("ack-idle"));
 }
 
@@ -1127,25 +1127,21 @@ fn session_tree_keyboard_traverses_visible_nodes_and_never_hidden_sessions() {
 
     ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    let collapsed_worktree = rendered_rows_at(&ui, &snapshot, 120, 30);
-    assert!(collapsed_worktree.contains("> +"));
-    assert!(!collapsed_worktree.contains("first-open-model"));
-    assert!(!collapsed_worktree.contains("second-open-model"));
+    let collapsed_project = rendered_rows_at(&ui, &snapshot, 120, 30);
+    assert!(collapsed_project.contains(">▸ sessionmesh (2)"));
+    assert!(!collapsed_project.contains("✦ -session"));
+    assert!(!collapsed_project.contains("◎ ond-open"));
     assert!(ui.selected_session(&snapshot).is_none());
 
-    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
-    assert!(ui.selected_session(&snapshot).is_none());
     ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
     assert_eq!(ui.selected_session(&snapshot).unwrap().id, "demo-session");
 
     ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    let collapsed_project = rendered_rows_at(&ui, &snapshot, 120, 30);
-    assert!(collapsed_project.contains("> + sessionmesh (2)"));
-    assert!(!collapsed_project.contains("/Users/x/code/sessionmesh | main"));
+    let collapsed_again = rendered_rows_at(&ui, &snapshot, 120, 30);
+    assert!(collapsed_again.contains(">▸ sessionmesh (2)"));
+    assert!(!collapsed_again.contains("/Users/x/code/sessionmesh"));
 }
 
 #[test]
@@ -1282,11 +1278,11 @@ fn now_keeps_known_and_unknown_current_context_evidence_visible() {
         .collect::<Vec<_>>();
     let known = page
         .iter()
-        .find(|line| line.contains("SHARED Busy Claude"))
+        .find(|line| line.contains("✦ -session"))
         .unwrap();
     let unknown = page
         .iter()
-        .find(|line| line.contains("SHARED Busy Codex"))
+        .find(|line| line.contains("◎ -context"))
         .unwrap();
 
     assert!(known.contains("70%"));
@@ -1298,7 +1294,7 @@ fn now_keeps_known_and_unknown_current_context_evidence_visible() {
 }
 
 #[test]
-fn now_keeps_a_single_worktree_as_an_explicit_tree_node_without_context() {
+fn now_flattens_a_single_worktree_and_moves_its_location_to_details() {
     let mut snapshot = demo_snapshot();
     snapshot.sessions[0].worktree.as_mut().unwrap().branch = Some("feature/shared".into());
     let ui = Ui::default();
@@ -1306,17 +1302,14 @@ fn now_keeps_a_single_worktree_as_an_explicit_tree_node_without_context() {
     let page = rendered_rows_at(&ui, &snapshot, 120, 30);
     let project = page
         .lines()
-        .find(|line| line.starts_with("│  - sessionmesh"))
-        .unwrap();
-    let worktree = page
-        .lines()
-        .find(|line| line.contains("sessionmesh | feature/shared"))
+        .find(|line| line.contains("▾ sessionmesh"))
         .unwrap();
 
     assert!(project.contains("(1)"));
-    assert!(worktree.starts_with("│    - "));
+    assert!(!page.contains("▾ feature/shared"));
+    assert!(page.contains("Worktree"));
+    assert!(page.contains("@ feature/shared"));
     assert!(!project.contains("Context"));
-    assert!(!worktree.contains("Context"));
 }
 
 #[test]
@@ -1334,15 +1327,15 @@ fn now_keeps_multiple_worktrees_below_the_project_without_context() {
 
     let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
     let mut lines = page.lines();
-    let project = lines
-        .find(|line| line.starts_with("│  - sessionmesh"))
-        .unwrap();
-    let main = lines.find(|line| line.contains("| main")).unwrap();
-    let feature = lines.find(|line| line.contains("| feature")).unwrap();
+    let project = lines.find(|line| line.contains("▾ sessionmesh")).unwrap();
+    let main = lines.find(|line| line.contains("▾ main")).unwrap();
+    let feature = lines.find(|line| line.contains("▾ feature")).unwrap();
 
     assert!(project.contains("(2)"));
-    assert!(main.starts_with("│    - "));
-    assert!(feature.starts_with("│    - "));
+    assert!(main.starts_with("│  "));
+    assert!(feature.starts_with("│  "));
+    assert!(!main.contains("/Users"));
+    assert!(!feature.contains("/Users"));
     assert!(!main.contains("Context"));
     assert!(!feature.contains("Context"));
 }
@@ -1392,7 +1385,7 @@ fn all_page_places_status_panels_side_by_side_in_the_upper_right() {
     let wide_lines = wide.lines().collect::<Vec<_>>();
     assert!(wide_lines[1].contains("RECENT SIGNALS"));
     assert!(wide_lines[1].contains("TASKS"));
-    assert!(wide_lines[9].contains("SESSION TREE"));
+    assert!(wide_lines[9].contains("PROJECT TREE"));
     assert!(wide_lines[9].contains("Session Workspace"));
     for line in &wide_lines[1..9] {
         assert!(line.chars().take(40).all(|character| character == ' '));
@@ -1402,7 +1395,7 @@ fn all_page_places_status_panels_side_by_side_in_the_upper_right() {
     let compact_lines = compact.lines().collect::<Vec<_>>();
     assert!(compact_lines[1].contains("RECENT SIGNALS"));
     assert!(compact_lines[1].contains("TASKS"));
-    assert!(compact_lines[9].contains("SESSION TREE"));
+    assert!(compact_lines[9].contains("PROJECT TREE"));
     assert!(compact_lines[9].contains("Session Workspace"));
     for line in &compact_lines[1..9] {
         assert!(line.chars().take(26).all(|character| character == ' '));
@@ -1751,8 +1744,8 @@ fn compact_status_strip_limits_signal_rows_while_the_editor_remains_visible() {
 
     let page = rendered_rows_at(&Ui::default(), &snapshot, 80, 24);
 
-    assert!(page.contains("SESSION TREE"));
-    assert!(page.contains("Selected Session"));
+    assert!(page.contains("PROJECT TREE"));
+    assert!(page.contains("DETAILS"));
     assert!(page.contains("Session Workspace"));
     for visible in [
         "signal-1", "signal-2", "signal-3", "signal-4", "signal-5", "signal-6",
@@ -1789,14 +1782,15 @@ fn now_keeps_healthy_busy_sessions_visible_without_manufacturing_attention() {
     let page = rendered_rows_at(&ui, &snapshot, 120, 30);
     let session = page
         .lines()
-        .find(|line| line.contains("BUSY Busy Claude"))
+        .find(|line| line.contains("✦ -session"))
         .unwrap();
 
-    assert!(session.contains("Busy"));
-    assert!(session.contains("Claude"));
+    assert!(session.contains('●'));
+    assert!(session.contains('✦'));
     assert!(session.contains("40%"));
     assert!(session.contains("-session"));
-    assert_eq!(page.matches("Claude -session").count(), 1);
+    assert!(!session.contains('!'));
+    assert_eq!(page.matches("✦ -session").count(), 1);
     for manufactured_condition in ["Alert", "ATTENTION", "Warning", "Critical"] {
         assert!(!page.contains(manufactured_condition));
     }
@@ -1818,12 +1812,12 @@ fn compact_now_shortens_long_identity_before_operational_evidence() {
     let page = rendered_rows_at(&ui, &snapshot, 80, 24);
     let session = page
         .lines()
-        .find(|line| line.contains("W Busy Claude"))
+        .find(|line| line.contains("✦ -session"))
         .unwrap();
 
-    assert!(page.contains("Worktree ..."));
-    assert!(page.contains("Latest model claude-sonnet"));
-    for evidence in ["W", "Busy", "Claude", "-session", "75%"] {
+    assert!(page.contains("Worktree"));
+    assert!(page.contains("Model"));
+    for evidence in ["!", "●", "✦", "-session", "75%"] {
         assert!(
             session.contains(evidence),
             "missing compact evidence: {evidence}"
@@ -2673,7 +2667,7 @@ fn old_open_session_remains_now_and_restores_its_provider_disclosure_after_detai
     let mut ui = Ui::default();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
 
-    assert!(rendered_rows_at(&ui, &snapshot, 80, 24).contains("Claude -session"));
+    assert!(rendered_rows_at(&ui, &snapshot, 80, 24).contains("✦ -session"));
 
     ui.handle_key(key(KeyCode::Char('2')), &snapshot).unwrap();
     let collapsed = rendered_rows_at(&ui, &snapshot, 80, 24);

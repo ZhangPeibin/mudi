@@ -26,7 +26,8 @@ fn compact_overview_reserves_left_third_and_composes_the_session_editor() {
     assert!(rows[0].chars().take(26).all(|character| character == ' '));
     assert!(rows[0].contains("RECENT SIGNALS"));
     assert!(rows[0].contains("TASKS"));
-    assert!(rows[8].starts_with("┌ SESSION TREE"));
+    assert!(rows[8].starts_with("┌ PROJECT TREE"));
     assert!(rows[8].contains("Session Workspace"));
-    assert!(rows[12].starts_with("┌ Selected Session"));
+    assert!(rows.iter().any(|row| row.contains("DETAILS")));
+    assert!(!rows.iter().any(|row| row.contains("Selected Session")));
 }

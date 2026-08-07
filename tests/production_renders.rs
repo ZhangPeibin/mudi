@@ -926,7 +926,7 @@ fn wide_home_places_status_panels_side_by_side_in_the_upper_right() {
         .lines()
         .enumerate()
         .find_map(|(row, line)| {
-            line.find("SESSION TREE")
+            line.find("PROJECT TREE")
                 .map(|byte| (row, line[..byte].chars().count()))
         })
         .unwrap();
@@ -1623,7 +1623,7 @@ fn global_header_combines_navigation_with_indexed_usage_and_project_totals() {
     let session_tree_row = wide
         .text
         .lines()
-        .position(|line| line.contains("SESSION TREE"))
+        .position(|line| line.contains("PROJECT TREE"))
         .unwrap();
     let signals_row = wide
         .text
@@ -1654,19 +1654,14 @@ fn global_header_combines_navigation_with_indexed_usage_and_project_totals() {
         .text
         .lines()
         .nth(9)
-        .is_some_and(|line| line.contains("SESSION TREE")));
+        .is_some_and(|line| line.contains("PROJECT TREE")));
 }
 
 #[test]
 fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
     let snapshot = production_snapshot();
     let rendered = render(&snapshot, &Ui::default(), 120, 30);
-    for expected in [
-        "SESSION TREE 1",
-        "5 OPEN SESSIONS",
-        "RECENT SIGNALS 5",
-        "latest 5s",
-    ] {
+    for expected in ["PROJECT TREE 1", "5 OPEN", "RECENT SIGNALS 5", "latest 5s"] {
         assert!(
             rendered.text.lines().any(|line| line.contains(expected)),
             "missing frame summary: {expected}"
@@ -1694,11 +1689,8 @@ fn all_page_labels_the_session_tree_and_uses_theme_foreground_for_project_names(
     assert!(dark
         .text
         .lines()
-        .any(|line| line.contains(" SESSION TREE ")));
-    assert!(dark
-        .text
-        .lines()
-        .any(|line| line.starts_with("│  - sessionmesh")));
+        .any(|line| line.contains(" PROJECT TREE ")));
+    assert!(dark.text.lines().any(|line| line.contains("▾ sessionmesh")));
     assert!(!dark.text.contains("PROJECT  sessionmesh"));
     let dark_project = dark.style_at("sessionmesh");
     assert_eq!(dark_project.fg, Some(Color::Rgb(224, 220, 210)));
@@ -1733,11 +1725,12 @@ fn all_page_keeps_multiple_worktrees_below_the_project_without_context() {
     let worktree = rendered
         .text
         .lines()
-        .find(|line| line.contains("Risk x2"))
+        .find(|line| line.contains("▾ main !2"))
         .expect("All page should render the shared Worktree below its Project");
 
     assert!(worktree.starts_with("│  "));
-    assert!(worktree.contains("| main"));
+    assert!(worktree.contains("main"));
+    assert!(!worktree.contains("/Users"));
     assert!(!worktree.contains("Context"));
 }
 
@@ -1764,12 +1757,12 @@ fn all_page_abbreviates_the_current_users_home_in_worktree_paths() {
 
     let rendered = render(&snapshot, &Ui::default(), 120, 30);
 
-    assert!(rendered.text.contains("  - sessionmesh (1)"));
+    assert!(rendered.text.contains("▾ sessionmesh (1)"));
     assert!(rendered.text.contains("~/code/sessionmesh @ main"));
     assert!(!rendered
         .text
         .lines()
-        .find(|line| line.starts_with("│  - sessionmesh"))
+        .find(|line| line.contains("▾ sessionmesh"))
         .unwrap()
         .contains("Context"));
     assert!(!rendered.text.contains(root_text.as_ref()));
@@ -1817,7 +1810,7 @@ fn production_render_uses_the_snapshot_time_for_relative_session_age() {
     let session_row = rendered
         .text
         .lines()
-        .find(|line| line.contains("BUSY Busy Claude -session"))
+        .find(|line| line.contains("✦ -session"))
         .unwrap_or_else(|| {
             panic!(
                 "stable clock Session should be rendered:\n{}",
@@ -1839,7 +1832,7 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
     let lines = rendered.text.lines().collect::<Vec<_>>();
     assert!(lines[1].contains("RECENT SIGNALS"));
     assert!(lines[1].contains("TASKS"));
-    assert!(lines[9].contains("SESSION TREE"));
+    assert!(lines[9].contains("PROJECT TREE"));
     assert!(lines[9].contains("Session Workspace"));
     assert!(lines[9].starts_with('┌'));
     assert!(lines[9].ends_with('┐'));
@@ -1850,12 +1843,12 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
         );
     }
     for required in [
-        "CRITICAL",
-        "Risk x2",
-        "WARNING",
-        "IDLE",
+        "90%",
+        "main !2",
+        "75%",
+        "○",
         "Conversation unavailable.",
-        "Current Run",
+        "DETAILS",
     ] {
         assert!(
             rendered.text.contains(required),
@@ -1880,7 +1873,7 @@ fn compact_all_page_matches_the_reviewed_production_fixture() {
 
     assert_eq!((rendered.width, rendered.height), (80, 24));
     assert!(rendered.text.contains("critical"));
-    assert!(rendered.text.contains("Selected Session"));
+    assert!(rendered.text.contains("DETAILS"));
     assert!(rendered.text.contains("Session Workspace"));
     assert!(rendered.text.contains("Conversation unavailable."));
     assert!(rendered.text.contains("Ctx +Warning"));
@@ -1947,8 +1940,8 @@ fn session_tree_keeps_open_sessions_visible_and_discloses_exited_age_bands() {
     let rendered = render(&snapshot, &Ui::default(), 120, 30);
 
     assert!(rendered.text.contains("open-model"));
-    assert!(rendered.text.contains("RECENT SESSIONS (1)"));
-    assert!(rendered.text.contains("OLDER SESSIONS (1)"));
+    assert!(rendered.text.contains("Recent (1)"));
+    assert!(rendered.text.contains("Older (1)"));
     assert!(!rendered.text.contains("recent-model"));
     assert!(!rendered.text.contains("older-model"));
 }
@@ -1998,14 +1991,14 @@ fn historical_session_tree_disclosures_render_at_supported_sizes() {
             press(&mut ui, &snapshot, KeyCode::Down);
             let recent = render(&snapshot, &ui, width, height);
             assert!(
-                recent.text.contains("RECENT SESSIONS (1)"),
+                recent.text.contains("Recent (1)"),
                 "compact render lost Recent disclosure:\n{}",
                 recent.text
             );
             press(&mut ui, &snapshot, KeyCode::Down);
             let older = render(&snapshot, &ui, width, height);
             assert!(
-                older.text.contains("OLDER SESSIONS (1)"),
+                older.text.contains("Older (1)"),
                 "compact render lost Older disclosure:\n{}",
                 older.text
             );
@@ -2013,8 +2006,8 @@ fn historical_session_tree_disclosures_render_at_supported_sizes() {
             assert!(!older.text.contains("older-model"));
         } else {
             let rendered = render(&snapshot, &ui, width, height);
-            assert!(rendered.text.contains("RECENT SESSIONS (1)"));
-            assert!(rendered.text.contains("OLDER SESSIONS (1)"));
+            assert!(rendered.text.contains("Recent (1)"));
+            assert!(rendered.text.contains("Older (1)"));
             assert!(!rendered.text.contains("recent-model"));
             assert!(!rendered.text.contains("older-model"));
         }
@@ -2064,23 +2057,46 @@ fn session_tree_age_disclosures_expand_independently() {
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let recent_expanded = render(&snapshot, &ui, 120, 30);
-    assert!(recent_expanded.text.contains("- RECENT SESSIONS (1)"));
-    assert!(recent_expanded.text.contains("recent-model"));
-    assert!(!recent_expanded.text.contains("older-model"));
+    assert!(recent_expanded.text.contains("▾ Recent (1)"));
+    assert!(recent_expanded.text.contains("▸ Older (1)"));
+    assert!(recent_expanded
+        .text
+        .lines()
+        .any(|line| line.contains('◎') && line.contains("1d")));
+    assert!(!recent_expanded
+        .text
+        .lines()
+        .any(|line| line.contains('✦') && line.contains("8d")));
 
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let both_expanded = render(&snapshot, &ui, 120, 30);
-    assert!(both_expanded.text.contains("recent-model"));
-    assert!(both_expanded.text.contains("older-model"));
+    assert!(both_expanded.text.contains("▾ Recent (1)"));
+    assert!(both_expanded.text.contains("▾ Older (1)"));
+    assert!(both_expanded
+        .text
+        .lines()
+        .any(|line| line.contains('◎') && line.contains("1d")));
+    assert!(both_expanded
+        .text
+        .lines()
+        .any(|line| line.contains('✦') && line.contains("8d")));
 
     press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let only_older_expanded = render(&snapshot, &ui, 120, 30);
-    assert!(!only_older_expanded.text.contains("recent-model"));
-    assert!(only_older_expanded.text.contains("older-model"));
+    assert!(only_older_expanded.text.contains("▸ Recent (1)"));
+    assert!(only_older_expanded.text.contains("▾ Older (1)"));
+    assert!(!only_older_expanded
+        .text
+        .lines()
+        .any(|line| line.contains('◎') && line.contains("1d")));
+    assert!(only_older_expanded
+        .text
+        .lines()
+        .any(|line| line.contains('✦') && line.contains("8d")));
 }
 
 #[test]
@@ -2120,11 +2136,9 @@ fn selecting_an_exited_session_targets_the_inspector_and_workspace() {
     let rendered = render(&snapshot, &ui, 120, 30);
 
     for required in [
-        "EXITED Codex",
-        "Session Label recent",
-        "Provider / Lifecycle Codex CLI / Exited",
-        "Latest model recent-model",
-        "Current Run N/A (Exited Session)",
+        "◎ recent",
+        "Provider   Codex CLI",
+        "Model      recent-model",
         "Session Codex CLI / recent",
         "Conversation unavailable.",
     ] {
@@ -2212,9 +2226,11 @@ fn session_tree_hides_system_temporary_sources_but_keeps_unavailable_sessions() 
 
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Down);
     let rendered = render(&snapshot, &ui, 120, 30);
 
-    assert!(rendered.text.contains("N/A (1)"));
+    assert!(rendered.text.contains("Unavailable (1)"));
+    assert!(!rendered.text.contains("N/A (1)"));
     assert!(rendered.text.contains("missing-model"));
     assert!(!rendered.text.contains("temporary-model"));
 }
@@ -2270,12 +2286,10 @@ fn historical_tree_selection_survives_refresh_by_provider_and_native_id() {
     .unwrap();
     let refreshed = render(&snapshot, &ui, 120, 30);
 
-    assert!(refreshed
-        .text
-        .contains("Provider / Lifecycle Codex CLI / Exited"));
-    assert!(refreshed.text.contains("Latest model codex-model"));
+    assert!(refreshed.text.contains("Provider   Codex CLI"));
+    assert!(refreshed.text.contains("Model      codex-model"));
     assert!(refreshed.text.contains("Session Codex CLI /"));
-    assert!(!refreshed.text.contains("Latest model claude-model"));
+    assert!(!refreshed.text.contains("Model      claude-model"));
 }
 
 #[test]
@@ -2309,8 +2323,8 @@ fn session_tree_keeps_non_git_history_directly_under_its_project() {
     let rendered = render(&snapshot, &ui, 120, 30);
 
     assert_eq!(rendered.text.matches("non-git-project").count(), 1);
-    assert!(rendered.text.contains("RECENT SESSIONS (1)"));
-    assert!(rendered.text.contains("non-git-model"));
+    assert!(rendered.text.contains("Recent (1)"));
+    assert!(rendered.text.contains("✦ non-git"));
     assert!(!rendered.text.contains("detached HEAD"));
 }
 
@@ -2344,28 +2358,30 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
     };
     let mut ui = Ui::default();
 
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let alpha_expanded = render(&snapshot, &ui, 120, 30);
-    assert!(alpha_expanded.text.contains("alpha-model"));
-    assert!(!alpha_expanded.text.contains("beta-model"));
+    assert!(alpha_expanded.text.contains("✦ alpha"));
+    assert!(!alpha_expanded.text.contains("◎ beta"));
 
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let both_expanded = render(&snapshot, &ui, 120, 30);
-    assert!(both_expanded.text.contains("alpha-model"));
-    assert!(both_expanded.text.contains("beta-model"));
+    assert!(both_expanded.text.contains("✦ alpha"));
+    assert!(both_expanded.text.contains("◎ beta"));
 
     press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let only_beta_expanded = render(&snapshot, &ui, 120, 30);
-    assert!(!only_beta_expanded.text.contains("alpha-model"));
-    assert!(only_beta_expanded.text.contains("beta-model"));
+    assert!(!only_beta_expanded.text.contains("✦ alpha"));
+    assert!(only_beta_expanded.text.contains("◎ beta"));
 }
 
 #[test]
@@ -2376,10 +2392,10 @@ fn session_tree_selection_drives_the_inspector_and_workspace_after_refresh() {
     press(&mut ui, &snapshot, KeyCode::Down);
     let selected = render(&snapshot, &ui, 120, 30);
     for required in [
-        "SHARED Busy Codex x-shared",
-        "Session Label x-shared",
-        "Provider / Lifecycle Codex CLI / Busy",
-        "Current Context 80.0k (40%)",
+        "◎ x-shared",
+        "Provider   Codex CLI",
+        "Model      gpt-5-codex",
+        "40%",
         "Session Codex CLI / x-shared",
         "Conversation unavailable.",
     ] {
@@ -2397,7 +2413,7 @@ fn session_tree_selection_drives_the_inspector_and_workspace_after_refresh() {
     .unwrap();
     let refreshed = render(&snapshot, &ui, 120, 30);
     for required in [
-        "Session Label x-shared",
+        "Provider   Codex CLI",
         "Session Codex CLI / x-shared",
         "Conversation unavailable.",
     ] {
@@ -2417,26 +2433,23 @@ fn session_tree_keyboard_collapse_and_expand_render_at_supported_sizes() {
         press(&mut ui, &snapshot, KeyCode::Left);
 
         let collapsed = render(&snapshot, &ui, width, height);
-        assert!(collapsed.text.lines().any(|line| line.contains("> +")));
+        assert!(collapsed.text.lines().any(|line| line.contains(">▸")));
         assert!(!collapsed
             .text
             .lines()
-            .any(|line| line.contains("CRITICAL Busy Claude")));
+            .any(|line| line.contains("✦ critical")));
         assert!(!collapsed
             .text
             .lines()
-            .any(|line| line.contains("SHARED Busy Codex")));
+            .any(|line| line.contains("◎ x-shared")));
 
         press(&mut ui, &snapshot, KeyCode::Right);
         press(&mut ui, &snapshot, KeyCode::Right);
         let expanded = render(&snapshot, &ui, width, height);
-        assert!(expanded.text.lines().any(|line| {
-            line.contains(if width == 80 {
-                "> C Busy Claude critical"
-            } else {
-                "> CRITICAL Busy Claude critical"
-            })
-        }));
+        assert!(expanded
+            .text
+            .lines()
+            .any(|line| line.contains("> ✦ critical") && line.contains("90%")));
     }
 }
 
@@ -2455,7 +2468,7 @@ fn now_session_row_uses_the_saved_alias_as_its_title() {
     let critical_row = rendered
         .text
         .lines()
-        .find(|line| line.contains("CRITICAL") && line.contains("Busy"))
+        .find(|line| line.contains("✦ Auth fix"))
         .expect("critical NOW Session should render");
     assert!(
         critical_row.contains("Auth fix"),
@@ -2479,20 +2492,14 @@ fn compact_now_renders_a_readable_unicode_session_title() {
         let critical_row = rendered
             .text
             .lines()
-            .find(|line| {
-                line.contains(if width == 80 {
-                    "C Busy Claude"
-                } else {
-                    "CRITICAL Busy Claude"
-                })
-            })
+            .find(|line| line.contains("✦ Dao"))
             .expect("critical NOW Session should render");
         assert!(critical_row.contains("Dao"));
         if width == 120 {
             assert!(rendered
                 .text
                 .replace(' ', "")
-                .contains("SessionLabelDao文档整理"));
+                .contains("SessionClaudeCode/Dao文档整理"));
         }
     }
 }
@@ -2512,10 +2519,12 @@ fn wide_editor_keeps_the_complete_session_title_in_the_inspector() {
     let critical_row = rendered
         .text
         .lines()
-        .find(|line| line.contains("CRITICAL") && line.contains("Busy"))
+        .find(|line| line.contains("✦") && line.contains("cleanup"))
         .expect("critical NOW Session should render");
-    assert!(critical_row.contains("...ure cleanup"));
-    assert!(rendered.text.contains("Session Label Architecture cleanup"));
+    assert!(critical_row.contains("Architecture cleanup"));
+    assert!(rendered
+        .text
+        .contains("Session Claude Code / Architecture cleanup"));
 }
 
 #[test]
@@ -2525,7 +2534,7 @@ fn long_unicode_now_title_does_not_move_operational_evidence() {
     let baseline_row = baseline
         .text
         .lines()
-        .find(|line| line.contains("C Busy Claude"))
+        .find(|line| line.contains("✦ critical"))
         .expect("baseline critical NOW Session should render");
 
     let mut ui = Ui::default();
@@ -2538,7 +2547,7 @@ fn long_unicode_now_title_does_not_move_operational_evidence() {
     let aliased_row = aliased
         .text
         .lines()
-        .find(|line| line.contains("C Busy Claude"))
+        .find(|line| line.contains('>') && line.contains("90%"))
         .expect("aliased critical NOW Session should render");
 
     let column = |row: &str, text: &str| {
@@ -2552,15 +2561,14 @@ fn long_unicode_now_title_does_not_move_operational_evidence() {
         "90% should stay in its stable column"
     );
     assert!(aliased_row.contains("90%"));
-    assert!(aliased.text.contains("Session Label Dao"));
     assert!(!aliased
         .text
-        .contains("Session Label Dao 文档整理和项目路线图"));
+        .contains("Session Claude Code / Dao 文档整理和项目路线图"));
     let wide = render(&snapshot, &ui, 120, 30);
     assert!(wide
         .text
         .replace(' ', "")
-        .contains("SessionLabelDao文档整理和项目路线图"));
+        .contains("SessionClaudeCode/Dao文档整理和项目路线图"));
 }
 
 #[test]
@@ -2720,12 +2728,12 @@ fn wide_now_keeps_duplicate_aliases_distinguishable() {
     let critical = rendered
         .text
         .lines()
-        .find(|line| line.contains("CRITICAL") && line.contains("Busy"))
+        .find(|line| line.contains("✦ Pair") && line.contains("90%"))
         .expect("critical NOW row should render");
     let warning = rendered
         .text
         .lines()
-        .find(|line| line.contains("WARNING") && line.contains("Busy"))
+        .find(|line| line.contains("✦ Pair") && line.contains("75%"))
         .expect("warning NOW row should render");
     assert!(critical.contains("Pair · critical"));
     assert!(warning.contains("Pair · -warning"));
@@ -3769,12 +3777,10 @@ fn sessions_guide_explains_providers_lifecycle_and_current_context() {
     let rendered = render(&snapshot, &ui, 120, 30);
 
     for required in [
-        "CL  Claude Code",
-        "CX  Codex CLI",
+        "✦ Claude Code   ◎ Codex CLI",
         "Open Session",
-        "Busy  A request is running.",
-        "Idle  The process is waiting for input.",
-        "Exited  No live Provider process is attached.",
+        "● Busy   ○ Idle   no marker Exited",
+        "!  The Session currently needs attention.",
         "Current Context is the latest known content occupying the model window.",
         "It is not cumulative Processed Usage.",
         "Warning  70%",
@@ -3959,10 +3965,10 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         }
 
         let roles = [
-            ("critical", rendered.style_at("CRITICAL")),
-            ("warning", rendered.style_at("WARNING")),
-            ("idle", rendered.style_at("IDLE")),
-            ("busy", rendered.style_at("Busy")),
+            ("critical", rendered.style_at_in_row("critical", "!")),
+            ("warning", rendered.style_at_in_row("-warning", "!")),
+            ("idle", rendered.style_at_in_row("dex-idle", "○")),
+            ("busy", rendered.style_at_in_row("critical", "●")),
         ];
         for (role, style) in roles {
             let ratio = contrast_ratio(style);
@@ -3971,15 +3977,21 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
                 "Theme {expected_theme} rendered {role} at contrast {ratio:.2}"
             );
         }
-        assert_ne!(rendered.style_at("WARNING"), rendered.style_at("IDLE"));
-        assert_ne!(rendered.style_at("IDLE"), rendered.style_at("Busy"));
+        assert_ne!(
+            rendered.style_at_in_row("-warning", "!"),
+            rendered.style_at_in_row("dex-idle", "○")
+        );
+        assert_ne!(
+            rendered.style_at_in_row("dex-idle", "○"),
+            rendered.style_at_in_row("critical", "●")
+        );
 
-        let warning = rendered.style_at_in_row("-warning", "WARNING");
-        let busy = rendered.style_at_in_row("-warning", "Busy");
-        let idle = rendered.style_at_in_row("dex-idle", "Idle");
+        let warning = rendered.style_at_in_row("-warning", "!");
+        let busy = rendered.style_at_in_row("-warning", "●");
+        let idle = rendered.style_at_in_row("dex-idle", "○");
         let selected_cursor = rendered.style_at_in_row("critical", ">");
-        let selected_critical = rendered.style_at_in_row("critical", "CRITICAL");
-        let selected_busy = rendered.style_at_in_row("critical", "Busy");
+        let selected_critical = rendered.style_at_in_row("critical", "!");
+        let selected_busy = rendered.style_at_in_row("critical", "●");
         let critical_context = rendered.style_at_in_row("critical", "90%");
         let ratio = contrast_ratio(critical_context);
         assert!(
@@ -4006,7 +4018,7 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         );
         assert_eq!(
             selected_cursor.fg,
-            rendered.style_at("SESSION TREE").fg,
+            rendered.style_at("PROJECT TREE").fg,
             "Theme {expected_theme} did not use its accent for the selected Session cursor"
         );
         assert!(selected_cursor.add_modifier.contains(Modifier::BOLD));

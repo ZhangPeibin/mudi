@@ -7,24 +7,24 @@
                                         │CX dex-idle Busy -> Idle              ││                                      │
                                         │                                      ││                                      │
                                         └──────────────────────────────────────┘└──────────────────────────────────────┘
-┌ SESSION TREE 1 ──────────────────── 5 OPEN SESSIONS ┐┌ Session Workspace ────────────────────────────────────────────┐
-│  - sessionmesh (7)                                  ││Session Claude Code / critical                                 │
-│    - sessionmesh | main | Risk x2                   ││Conversation unavailable.                                      │
-│    > CRITICAL Busy Claude critical           90% 30s││                                                               │
-│      SHARED Busy Codex x-shared               40% 1m││                                                               │
-│    - sessionmesh-warning | warning                  ││                                                               │
-│      WARNING Busy Claude -warning             75% 2m││                                                               │
-│    - sessionmesh-idle | idle                        ││                                                               │
-│      IDLE Idle Codex dex-idle                 30% 3m││                                                               │
-└─────────────────────────────────────────────────────┘│                                                               │
-┌ Selected Session ───────────────────────────────────┐│                                                               │
-│Session Label critical                               ││                                                               │
-│Provider / Lifecycle Claude Code / Busy              ││                                                               │
-│Project sessionmesh                                  ││                                                               │
-│Worktree /Users/fixture/code/sessionmesh @ main      ││                                                               │
-│Latest model claude-opus-4-8                         ││                                                               │
-│Current Context 180.0k (90%)                         ││                                                               │
-│Current Run Busy (usage available)                   ││                                                               │
-│Operation Task N/A                                   ││                                                               │
+┌ PROJECT TREE 1 ───────────────────────────── 5 OPEN ┐┌ Session Workspace ────────────────────────────────────────────┐
+│ ▾ sessionmesh (7)                                   ││Session Claude Code / critical                                 │
+│   ▾ main !2                                         ││Conversation unavailable.                                      │
+│    > ✦ critical                      ! ●  90%  30s  ││                                                               │
+│      ◎ x-shared                      ! ●  40%   1m  ││                                                               │
+│   ▾ warning                                         ││                                                               │
+│      ✦ -warning                      ! ●  75%   2m  ││                                                               │
+│   ▾ idle                                            ││                                                               │
+│      ◎ dex-idle                        ○  30%   3m  ││                                                               │
+│   ▾ healthy                                         ││                                                               │
+│      ✦ -healthy                        ●  20%   4m  ││                                                               │
+│   ▾ done                                            ││                                                               │
+│     ▸ Recent (1)                                    ││                                                               │
+│   ▾ archive                                         ││                                                               │
+│ DETAILS ────────────────────────────────────────────││                                                               │
+│Provider   Claude Code                               ││                                                               │
+│Worktree   /Users/fixture/code/sessionmesh @ main    ││                                                               │
+│Model      claude-opus-4-8                           ││                                                               │
+│Run usage  in 1.2k | out 230 | read 3.4k | create 45 ││                                                               │
 └─────────────────────────────────────────────────────┘└───────────────────────────────────────────────────────────────┘
 j/k | Left/Right | Enter | e Edit title | 1/2/3 | r | ? | q Quit                                           fixture ready

@@ -7,18 +7,18 @@
                           │                         ││                         │
                           │                         ││                         │
                           └─────────────────────────┘└─────────────────────────┘
-┌ SESSION TREE 1 ── 5 OPEN SESSIONS ┐┌ Session Workspace ──────────────────────┐
-│    - sessionmesh | main | Risk x2 ││Session Claude Code / critical           │
-│    > C Busy Claude critical    90%││Conversation unavailable.                │
-└───────────────────────────────────┘│                                         │
-┌ Selected Session ─────────────────┐│                                         │
-│Session Label critical             ││                                         │
-│Provider / Lifecycle Claude Code...││                                         │
-│Project sessionmesh                ││                                         │
-│Worktree ...code/sessionmesh @ main││                                         │
-│Latest model claude-opus-4-8       ││                                         │
-│Current Context 180.0k (90%)       ││                                         │
-│Current Run Busy (usage available) ││                                         │
-│Operation Task N/A                 ││                                         │
+┌ PROJECT TREE 1 ─────────── 5 OPEN ┐┌ Session Workspace ──────────────────────┐
+│ ▾ sessionmesh (7)                 ││Session Claude Code / critical           │
+│   ▾ main !2                       ││Conversation unavailable.                │
+│    > ✦ critical         ! ●  90%  ││                                         │
+│      ◎ x-shared         ! ●  40%  ││                                         │
+│   ▾ warning                       ││                                         │
+│      ✦ -warning         ! ●  75%  ││                                         │
+│   ▾ idle                          ││                                         │
+│      ◎ dex-idle           ○  30%  ││                                         │
+│ DETAILS ──────────────────────────││                                         │
+│Provider   Claude Code             ││                                         │
+│Worktree   ...de/sessionmesh @ main││                                         │
+│Model      claude-opus-4-8         ││                                         │
 └───────────────────────────────────┘└─────────────────────────────────────────┘
 j/k | Left/Right | Enter | e Edit | ? | q Quit                     fixture ready
