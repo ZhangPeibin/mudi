@@ -1888,8 +1888,8 @@ fn overview_workspace_uses_one_unframed_split_surface() {
 }
 
 #[test]
-fn minimum_width_header_keeps_two_digit_project_and_open_counts_distinct() {
-    let sessions = (0..10)
+fn minimum_width_header_keeps_three_digit_project_and_open_counts_distinct() {
+    let sessions = (0..100)
         .map(|index| {
             let mut session = fixture_session(
                 Provider::ClaudeCode,
@@ -1947,8 +1947,10 @@ fn minimum_width_header_keeps_two_digit_project_and_open_counts_distinct() {
         .chars()
         .take(24)
         .collect::<String>();
-    assert!(left_header.contains("PROJECT TREE 10"), "{left_header:?}");
-    assert!(left_header.contains("10 OPEN"), "{left_header:?}");
+    assert!(left_header.contains("PROJECT TREE"), "{left_header:?}");
+    assert!(left_header.contains("OPEN"), "{left_header:?}");
+    assert_eq!(left_header.matches("100").count(), 2, "{left_header:?}");
+    assert!(!left_header.contains("100100"), "{left_header:?}");
 }
 
 #[test]
@@ -2189,6 +2191,43 @@ fn alt_arrow_resizes_without_replacing_project_tree_navigation() {
         .skip(9)
         .take(20)
         .all(|line| line.chars().nth(56) == Some('│')));
+}
+
+#[test]
+fn keyboard_resize_adjusts_the_preference_after_the_effective_width_is_clamped() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-keyboard-split-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(
+        &profile_path,
+        br#"{"help_seen":true,"overview_left_width":65}"#,
+    )
+    .unwrap();
+    let snapshot = production_snapshot();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+
+    ui.handle_event(
+        Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT)),
+        ratatui::layout::Rect::new(0, 0, 80, 24),
+        &snapshot,
+    )
+    .unwrap();
+
+    let reloaded = Ui::load(&profile_path, None).unwrap();
+    let restored = render(&snapshot, &reloaded, 120, 30);
+    assert!(restored
+        .text
+        .lines()
+        .skip(9)
+        .take(20)
+        .all(|line| line.chars().nth(66) == Some('│')));
+
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

@@ -10,6 +10,49 @@ use ratatui::Frame;
 
 const MIN_TREE_HEIGHT: u16 = 4;
 
+#[derive(Clone, Copy)]
+struct HeaderFormat {
+    project_heading: &'static str,
+    project_count_prefix: &'static str,
+    project_count_suffix: &'static str,
+    open_count_prefix: &'static str,
+    open_suffix: &'static str,
+}
+
+impl HeaderFormat {
+    fn total_width(self, project_count: &str, open_session_count: &str) -> usize {
+        self.project_heading.chars().count()
+            + self.project_count_prefix.chars().count()
+            + project_count.chars().count()
+            + self.project_count_suffix.chars().count()
+            + self.open_count_prefix.chars().count()
+            + open_session_count.chars().count()
+            + self.open_suffix.chars().count()
+    }
+
+    fn open_label_width(self, open_session_count: &str) -> u16 {
+        (self.open_count_prefix.chars().count()
+            + open_session_count.chars().count()
+            + self.open_suffix.chars().count()) as u16
+    }
+}
+
+const DECORATED_HEADER: HeaderFormat = HeaderFormat {
+    project_heading: " PROJECT TREE ",
+    project_count_prefix: "",
+    project_count_suffix: " ",
+    open_count_prefix: "",
+    open_suffix: " OPEN  ",
+};
+
+const COMPACT_HEADER: HeaderFormat = HeaderFormat {
+    project_heading: "PROJECT TREE ",
+    project_count_prefix: "",
+    project_count_suffix: "/",
+    open_count_prefix: "OPEN",
+    open_suffix: "",
+};
+
 /// Draw the Project Tree above Selected Session Details in one unframed pane.
 pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
@@ -20,40 +63,33 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .split(area);
     let project_count = project_count.to_string();
     let open_session_count = open_session_count.to_string();
-    let decorated_width = " PROJECT TREE ".chars().count()
-        + project_count.chars().count()
-        + 1
-        + open_session_count.chars().count()
-        + " OPEN ".chars().count()
-        + 1;
-    let compact_header = decorated_width > usize::from(area.width);
-    let project_heading = if compact_header {
-        "PROJECT TREE "
+    let header_format = if DECORATED_HEADER.total_width(&project_count, &open_session_count)
+        > usize::from(area.width)
+    {
+        COMPACT_HEADER
     } else {
-        " PROJECT TREE "
+        DECORATED_HEADER
     };
-    let project_count_suffix = if compact_header { "" } else { " " };
-    let open_suffix = if compact_header { " OPEN" } else { " OPEN " };
-    let open_label_width = open_session_count.chars().count()
-        + open_suffix.chars().count()
-        + usize::from(!compact_header);
     let header = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(0),
-            Constraint::Length(open_label_width as u16),
+            Constraint::Length(header_format.open_label_width(&open_session_count)),
         ])
         .split(pane[0]);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                project_heading,
+                header_format.project_heading,
                 Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{project_count}{project_count_suffix}"),
+                format!(
+                    "{}{project_count}{}",
+                    header_format.project_count_prefix, header_format.project_count_suffix
+                ),
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
@@ -64,12 +100,12 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                open_session_count,
+                format!("{}{open_session_count}", header_format.open_count_prefix),
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(open_suffix, Style::default().fg(theme.muted)),
+            Span::styled(header_format.open_suffix, Style::default().fg(theme.muted)),
         ])),
         header[1],
     );

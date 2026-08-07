@@ -61,12 +61,15 @@ impl State {
     }
 
     pub(in crate::ui) fn adjust(&mut self, area: Rect, direction: ResizeDirection) {
-        let current = self.layout(area).left.width;
+        let current = self
+            .preferred_left_width
+            .unwrap_or_else(|| self.layout(area).left.width)
+            .max(layout::MIN_LEFT_WIDTH);
         let desired = match direction {
             ResizeDirection::Left => current.saturating_sub(1),
             ResizeDirection::Right => current.saturating_add(1),
         };
-        self.preferred_left_width = Some(layout::split(area, Some(desired)).left.width);
+        self.preferred_left_width = Some(desired.max(layout::MIN_LEFT_WIDTH));
     }
 
     pub(in crate::ui) fn preferred_left_width(&self) -> Option<u16> {
