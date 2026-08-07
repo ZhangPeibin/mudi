@@ -1888,6 +1888,23 @@ fn overview_workspace_uses_one_unframed_split_surface() {
 }
 
 #[test]
+fn project_tree_and_details_headings_keep_horizontal_section_rules() {
+    let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
+    let lines = rendered.text.lines().collect::<Vec<_>>();
+    let project_header = lines[9].chars().take(55).collect::<String>();
+    let details_header = lines
+        .iter()
+        .find(|line| line.contains("DETAILS"))
+        .unwrap()
+        .chars()
+        .take(55)
+        .collect::<String>();
+
+    assert!(project_header.contains('─'), "{project_header:?}");
+    assert!(details_header.contains('─'), "{details_header:?}");
+}
+
+#[test]
 fn minimum_width_header_keeps_four_digit_project_and_open_counts_distinct() {
     let sessions = (0..1000)
         .map(|index| {

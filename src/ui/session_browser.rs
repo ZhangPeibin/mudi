@@ -5,7 +5,7 @@ use crate::app::Snapshot;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 
 const MIN_TREE_HEIGHT: u16 = 4;
@@ -29,19 +29,13 @@ impl HeaderFormat {
             + open_session_count.chars().count()
             + self.open_suffix.chars().count()
     }
-
-    fn open_label_width(self, open_session_count: &str) -> u16 {
-        (self.open_count_prefix.chars().count()
-            + open_session_count.chars().count()
-            + self.open_suffix.chars().count()) as u16
-    }
 }
 
 const DECORATED_HEADER: HeaderFormat = HeaderFormat {
     project_heading: " PROJECT TREE ",
     project_count_prefix: "",
     project_count_suffix: " ",
-    open_count_prefix: "",
+    open_count_prefix: " ",
     open_suffix: " OPEN  ",
 };
 
@@ -101,44 +95,40 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
             full_open_session_count,
         )
     };
-    let header = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(header_format.open_label_width(&open_session_count)),
-        ])
-        .split(pane[0]);
     f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                header_format.project_heading,
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(
-                    "{}{project_count}{}",
-                    header_format.project_count_prefix, header_format.project_count_suffix
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(theme.border))
+            .title(Line::from(vec![
+                Span::styled(
+                    header_format.project_heading,
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
+                Span::styled(
+                    format!(
+                        "{}{project_count}{}",
+                        header_format.project_count_prefix, header_format.project_count_suffix
+                    ),
+                    Style::default()
+                        .fg(theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]))
+            .title(
+                Line::from(vec![
+                    Span::styled(
+                        format!("{}{open_session_count}", header_format.open_count_prefix),
+                        Style::default()
+                            .fg(theme.foreground)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(header_format.open_suffix, Style::default().fg(theme.muted)),
+                ])
+                .right_aligned(),
             ),
-        ])),
-        header[0],
-    );
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!("{}{open_session_count}", header_format.open_count_prefix),
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(header_format.open_suffix, Style::default().fg(theme.muted)),
-        ])),
-        header[1],
+        pane[0],
     );
     let inner = pane[1];
 
