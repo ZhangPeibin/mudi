@@ -768,15 +768,21 @@ fn open_session_line(
     } else {
         String::new()
     };
-    let fixed_width = UnicodeWidthStr::width(prefix.as_str())
-        + UnicodeWidthStr::width(provider)
-        + UnicodeWidthStr::width("  ")
-        + UnicodeWidthStr::width(attention_marker)
-        + UnicodeWidthStr::width("  ")
-        + UnicodeWidthStr::width(lifecycle_marker)
-        + UnicodeWidthStr::width("  ")
-        + UnicodeWidthStr::width(context_value.as_str())
-        + UnicodeWidthStr::width(elapsed.as_str());
+    let fixed_width = [
+        prefix.as_str(),
+        provider,
+        SESSION_COLUMN_GAP,
+        SESSION_COLUMN_GAP,
+        attention_marker,
+        SESSION_COLUMN_GAP,
+        lifecycle_marker,
+        SESSION_COLUMN_GAP,
+        context_value.as_str(),
+        elapsed.as_str(),
+    ]
+    .into_iter()
+    .map(UnicodeWidthStr::width)
+    .sum::<usize>();
     let title = text::fit(title, content_width.saturating_sub(fixed_width), true);
     let cursor_style = if position.selected {
         Style::default()
@@ -798,13 +804,13 @@ fn open_session_line(
     Line::from(vec![
         Span::styled(prefix, cursor_style),
         Span::styled(provider, Style::default().fg(theme.accent)),
-        Span::raw(" "),
+        Span::raw(SESSION_COLUMN_GAP),
         Span::styled(title, Style::default().fg(theme.foreground)),
-        Span::raw(" "),
+        Span::raw(SESSION_COLUMN_GAP),
         Span::styled(attention_marker, attention_style),
-        Span::raw(" "),
+        Span::raw(SESSION_COLUMN_GAP),
         Span::styled(lifecycle_marker, lifecycle_style),
-        Span::raw(" "),
+        Span::raw(SESSION_COLUMN_GAP),
         Span::styled(context_value, context_style),
         Span::styled(elapsed, Style::default().fg(theme.muted)),
     ])
@@ -1030,6 +1036,7 @@ struct SessionTreePosition {
 const SHOW_ELAPSED_WIDTH: usize = 42;
 const CONTEXT_VALUE_WIDTH: usize = 4;
 const ELAPSED_VALUE_WIDTH: usize = 4;
+const SESSION_COLUMN_GAP: &str = " ";
 
 #[cfg(test)]
 #[path = "projects_test.rs"]

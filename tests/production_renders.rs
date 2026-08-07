@@ -2505,6 +2505,104 @@ fn compact_now_renders_a_readable_unicode_session_title() {
 }
 
 #[test]
+fn compact_now_uses_every_title_cell_before_operational_evidence() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    for character in "0123456789abcdefghijklmnop".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let critical_row = rendered
+        .text
+        .lines()
+        .find(|line| line.contains('>') && line.contains("90%"))
+        .expect("critical NOW Session should render");
+
+    assert!(
+        critical_row.contains("✦ ...bcdefghijklmnop ! ●  90%││"),
+        "Session Title should use every cell before operational evidence:\n{critical_row}"
+    );
+}
+
+#[test]
+fn wide_now_aligns_all_operational_evidence_for_supported_context_values() {
+    const NOW: i64 = 1_700_000_000_000;
+    let contexts = [
+        ("critical", 200_000, Some(200_000), "100%", true, "0s"),
+        ("warning", 150_000, Some(200_000), "75%", true, "1s"),
+        ("nine", 18_000, Some(200_000), "9%", false, "2s"),
+        ("unknown", 50_000, None, "N/A", false, "3s"),
+    ];
+    let sessions = contexts
+        .iter()
+        .enumerate()
+        .map(|(index, (id, tokens, window, _, _, _))| {
+            let mut session = fixture_session(
+                Provider::ClaudeCode,
+                id,
+                "test-model",
+                SessionState::Busy,
+                *tokens,
+                NOW - index as i64 * 1_000,
+                ("/Users/fixture/code/aligned", "main"),
+            );
+            session.context.window = *window;
+            session.worktree.as_mut().unwrap().writable = false;
+            session
+        })
+        .collect::<Vec<_>>();
+    let attention = AttentionEngine::default().update(&sessions, NOW);
+    let snapshot = Snapshot {
+        sessions,
+        attention: Some(attention),
+        generated_ms: NOW,
+        ready: true,
+        ..Snapshot::default()
+    };
+
+    let rendered = render(&snapshot, &Ui::default(), 120, 30);
+    let rows = contexts
+        .iter()
+        .map(|(id, _, _, value, needs_attention, elapsed)| {
+            let row = rendered
+                .text
+                .lines()
+                .find(|line| line.contains('✦') && line.contains(id))
+                .unwrap_or_else(|| panic!("Session {id} should render"));
+            (row, *value, *needs_attention, *elapsed)
+        })
+        .collect::<Vec<_>>();
+    let column = |row: &str, value: &str| {
+        row[..row.find(value).expect("evidence should render")]
+            .chars()
+            .count()
+    };
+    let evidence_end = |row: &str, value: &str| column(row, value) + value.chars().count();
+
+    let lifecycle_column = column(rows[0].0, "●");
+    let attention_column = lifecycle_column - 2;
+    let context_end = evidence_end(rows[0].0, rows[0].1);
+    let elapsed_end = evidence_end(rows[0].0, rows[0].3);
+    for (row, value, needs_attention, elapsed) in rows {
+        assert_eq!(
+            row.chars().nth(attention_column),
+            Some(if needs_attention { '!' } else { ' ' })
+        );
+        assert_eq!(column(row, "●"), lifecycle_column);
+        assert_eq!(evidence_end(row, value), context_end);
+        assert_eq!(evidence_end(row, elapsed), elapsed_end);
+        assert!(
+            row.contains(&format!("{elapsed}││")),
+            "elapsed evidence should end at the Tree edge:\n{row}"
+        );
+    }
+}
+
+#[test]
 fn wide_editor_keeps_the_complete_session_title_in_the_inspector() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
