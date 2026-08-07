@@ -7,7 +7,7 @@
                                         │CX dex-idle Busy -> Idle              ││                                      │
                                         │                                      ││                                      │
                                         └──────────────────────────────────────┘└──────────────────────────────────────┘
- PROJECT TREE 1 ────────────────────────────── 5 OPEN  │ Session Workspace
+ PROJECT 1 ─────────────────────────────────── 5 OPEN  │ Session Workspace ─────────────────────────────────────────────
  ▾ sessionmesh (7)                                     │Session Claude Code / critical
    ▾ main !2                                           │Conversation unavailable.
     > ✦ critical                          ! ●  90%  30s│

@@ -24,7 +24,7 @@ fn browser_uses_compact_headers_and_an_internal_details_divider() {
         .collect::<Vec<_>>();
     let rendered = rows.join("\n");
 
-    assert!(rows[0].contains("PROJECT TREE 0"));
+    assert!(rows[0].contains("PROJECT 0"));
     assert!(rows[0].contains("0 OPEN"));
     assert!(rendered.contains("DETAILS"));
     assert!(rendered.contains("No Open Session selected."));

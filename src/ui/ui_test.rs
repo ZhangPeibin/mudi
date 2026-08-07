@@ -1362,7 +1362,7 @@ fn all_page_places_status_panels_side_by_side_in_the_upper_right() {
     let wide_lines = wide.lines().collect::<Vec<_>>();
     assert!(wide_lines[1].contains("RECENT SIGNALS"));
     assert!(wide_lines[1].contains("TASKS"));
-    assert!(wide_lines[9].contains("PROJECT TREE"));
+    assert!(wide_lines[9].contains("PROJECT"));
     assert!(wide_lines[9].contains("Session Workspace"));
     for line in &wide_lines[1..9] {
         assert!(line.chars().take(40).all(|character| character == ' '));
@@ -1372,7 +1372,7 @@ fn all_page_places_status_panels_side_by_side_in_the_upper_right() {
     let compact_lines = compact.lines().collect::<Vec<_>>();
     assert!(compact_lines[1].contains("RECENT SIGNALS"));
     assert!(compact_lines[1].contains("TASKS"));
-    assert!(compact_lines[9].contains("PROJECT TREE"));
+    assert!(compact_lines[9].contains("PROJECT"));
     assert!(compact_lines[9].contains("Session Workspace"));
     for line in &compact_lines[1..9] {
         assert!(line.chars().take(26).all(|character| character == ' '));
@@ -1721,7 +1721,7 @@ fn compact_status_strip_limits_signal_rows_while_the_editor_remains_visible() {
 
     let page = rendered_rows_at(&Ui::default(), &snapshot, 80, 24);
 
-    assert!(page.contains("PROJECT TREE"));
+    assert!(page.contains("PROJECT"));
     assert!(page.contains("DETAILS"));
     assert!(page.contains("Session Workspace"));
     for visible in [

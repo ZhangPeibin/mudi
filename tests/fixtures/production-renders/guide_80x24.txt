@@ -7,7 +7,7 @@
         │  Sessions    │Passive observation is the default.            │       │
         │  Signals     │Control Operations require explicit            │       │
         │  Theme       │authorization.                                 │───────┘
- PROJECT│              │Pages                                          │
+ PROJECT│              │Pages                                          │────────
  ▾ sessi│              │1  All                                         │
    ▾ mai│              │2  Claude Code                                 │
     > ✦ │              │3  Codex CLI                                   │

@@ -32,7 +32,7 @@ impl HeaderFormat {
 }
 
 const DECORATED_HEADER: HeaderFormat = HeaderFormat {
-    project_heading: " PROJECT TREE ",
+    project_heading: " PROJECT ",
     project_count_prefix: "",
     project_count_suffix: " ",
     open_count_prefix: " ",
@@ -40,7 +40,7 @@ const DECORATED_HEADER: HeaderFormat = HeaderFormat {
 };
 
 const COMPACT_HEADER: HeaderFormat = HeaderFormat {
-    project_heading: "PROJECT TREE ",
+    project_heading: "PROJECT ",
     project_count_prefix: "P",
     project_count_suffix: " ",
     open_count_prefix: "O",

@@ -928,7 +928,7 @@ fn wide_home_places_status_panels_side_by_side_in_the_upper_right() {
         .lines()
         .enumerate()
         .find_map(|(row, line)| {
-            line.find("PROJECT TREE")
+            line.find("PROJECT")
                 .map(|byte| (row, line[..byte].chars().count()))
         })
         .unwrap();
@@ -1625,7 +1625,7 @@ fn global_header_combines_navigation_with_indexed_usage_and_project_totals() {
     let session_tree_row = wide
         .text
         .lines()
-        .position(|line| line.contains("PROJECT TREE"))
+        .position(|line| line.contains("PROJECT"))
         .unwrap();
     let signals_row = wide
         .text
@@ -1656,14 +1656,14 @@ fn global_header_combines_navigation_with_indexed_usage_and_project_totals() {
         .text
         .lines()
         .nth(9)
-        .is_some_and(|line| line.contains("PROJECT TREE")));
+        .is_some_and(|line| line.contains("PROJECT")));
 }
 
 #[test]
 fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
     let snapshot = production_snapshot();
     let rendered = render(&snapshot, &Ui::default(), 120, 30);
-    for expected in ["PROJECT TREE 1", "5 OPEN", "RECENT SIGNALS 5", "latest 5s"] {
+    for expected in ["PROJECT 1", "5 OPEN", "RECENT SIGNALS 5", "latest 5s"] {
         assert!(
             rendered.text.lines().any(|line| line.contains(expected)),
             "missing frame summary: {expected}"
@@ -1688,10 +1688,7 @@ fn all_page_labels_the_session_tree_and_uses_theme_foreground_for_project_names(
     let ui = Ui::default();
 
     let dark = render(&snapshot, &ui, 120, 30);
-    assert!(dark
-        .text
-        .lines()
-        .any(|line| line.contains(" PROJECT TREE ")));
+    assert!(dark.text.lines().any(|line| line.contains(" PROJECT ")));
     assert!(dark.text.lines().any(|line| line.contains("▾ sessionmesh")));
     assert!(!dark.text.contains("PROJECT  sessionmesh"));
     let dark_project = dark.style_at("sessionmesh");
@@ -1835,7 +1832,7 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
     let lines = rendered.text.lines().collect::<Vec<_>>();
     assert!(lines[1].contains("RECENT SIGNALS"));
     assert!(lines[1].contains("TASKS"));
-    assert!(lines[9].contains("PROJECT TREE"));
+    assert!(lines[9].contains("PROJECT"));
     assert!(lines[9].contains("Session Workspace"));
     assert_ne!(lines[9].chars().next(), Some('┌'));
     assert_ne!(lines[9].chars().last(), Some('┐'));
@@ -1876,7 +1873,7 @@ fn overview_workspace_uses_one_unframed_split_surface() {
     let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
     let lines = rendered.text.lines().collect::<Vec<_>>();
 
-    assert!(lines[9].contains("PROJECT TREE"));
+    assert!(lines[9].contains("PROJECT"));
     assert!(lines[9].contains("Session Workspace"));
     assert_ne!(lines[9].chars().next(), Some('├'));
     assert_ne!(lines[9].chars().next(), Some('┌'));
@@ -1888,10 +1885,10 @@ fn overview_workspace_uses_one_unframed_split_surface() {
 }
 
 #[test]
-fn project_tree_and_details_headings_keep_horizontal_section_rules() {
+fn workspace_and_details_headings_keep_horizontal_section_rules() {
     let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
     let lines = rendered.text.lines().collect::<Vec<_>>();
-    let project_header = lines[9].chars().take(55).collect::<String>();
+    let (project_header, workspace_header) = lines[9].split_once('│').unwrap();
     let details_header = lines
         .iter()
         .find(|line| line.contains("DETAILS"))
@@ -1900,7 +1897,13 @@ fn project_tree_and_details_headings_keep_horizontal_section_rules() {
         .take(55)
         .collect::<String>();
 
+    assert!(project_header.contains("PROJECT 1"), "{project_header:?}");
+    assert!(
+        !project_header.contains("PROJECT TREE"),
+        "{project_header:?}"
+    );
     assert!(project_header.contains('─'), "{project_header:?}");
+    assert!(workspace_header.contains('─'), "{workspace_header:?}");
     assert!(details_header.contains('─'), "{details_header:?}");
 }
 
@@ -1964,7 +1967,7 @@ fn minimum_width_header_keeps_four_digit_project_and_open_counts_distinct() {
         .chars()
         .take(24)
         .collect::<String>();
-    assert!(left_header.contains("PROJECT TREE"), "{left_header:?}");
+    assert!(left_header.contains("PROJECT"), "{left_header:?}");
     assert!(left_header.contains("P1000"), "{left_header:?}");
     assert!(left_header.contains("O1000"), "{left_header:?}");
 }
@@ -2004,7 +2007,7 @@ fn dragging_the_overview_divider_resizes_the_complete_workspace() {
     }
     assert_eq!(
         rendered.buffer[(70, 12)].style().fg,
-        rendered.style_at("PROJECT TREE").fg
+        rendered.style_at("PROJECT").fg
     );
 }
 
@@ -4551,7 +4554,7 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         );
         assert_eq!(
             selected_cursor.fg,
-            rendered.style_at("PROJECT TREE").fg,
+            rendered.style_at("PROJECT").fg,
             "Theme {expected_theme} did not use its accent for the selected Session cursor"
         );
         assert!(selected_cursor.add_modifier.contains(Modifier::BOLD));
