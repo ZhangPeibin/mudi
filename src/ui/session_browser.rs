@@ -18,24 +18,42 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
-    let open_label = format!(" {open_session_count} OPEN ");
+    let project_count = project_count.to_string();
+    let open_session_count = open_session_count.to_string();
+    let decorated_width = " PROJECT TREE ".chars().count()
+        + project_count.chars().count()
+        + 1
+        + open_session_count.chars().count()
+        + " OPEN ".chars().count()
+        + 1;
+    let compact_header = decorated_width > usize::from(area.width);
+    let project_heading = if compact_header {
+        "PROJECT TREE "
+    } else {
+        " PROJECT TREE "
+    };
+    let project_count_suffix = if compact_header { "" } else { " " };
+    let open_suffix = if compact_header { " OPEN" } else { " OPEN " };
+    let open_label_width = open_session_count.chars().count()
+        + open_suffix.chars().count()
+        + usize::from(!compact_header);
     let header = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(0),
-            Constraint::Length(open_label.chars().count() as u16),
+            Constraint::Length(open_label_width as u16),
         ])
         .split(pane[0]);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                " PROJECT TREE ",
+                project_heading,
                 Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{project_count} "),
+                format!("{project_count}{project_count_suffix}"),
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
@@ -46,12 +64,12 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                open_session_count.to_string(),
+                open_session_count,
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" OPEN ", Style::default().fg(theme.muted)),
+            Span::styled(open_suffix, Style::default().fg(theme.muted)),
         ])),
         header[1],
     );

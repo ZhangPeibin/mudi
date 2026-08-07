@@ -489,8 +489,12 @@ impl Ui {
                 {
                     let screen = layout::screen(terminal_area);
                     let workspace = overview::workspace_area(screen.content);
-                    self.workspace_split
-                        .adjust(workspace, key.code == crossterm::event::KeyCode::Right);
+                    let direction = match key.code {
+                        crossterm::event::KeyCode::Left => split_pane::ResizeDirection::Left,
+                        crossterm::event::KeyCode::Right => split_pane::ResizeDirection::Right,
+                        _ => unreachable!("guarded by the key-code match"),
+                    };
+                    self.workspace_split.adjust(workspace, direction);
                     self.save_workspace_split_preference()?;
                     return Ok(UiAction::None);
                 }
@@ -500,7 +504,9 @@ impl Ui {
                 if self.overview_split_is_interactive(terminal_area) {
                     let screen = layout::screen(terminal_area);
                     let workspace = overview::workspace_area(screen.content);
-                    if self.workspace_split.handle_mouse(mouse, workspace) {
+                    if self.workspace_split.handle_mouse(mouse, workspace)
+                        == split_pane::MouseOutcome::Committed
+                    {
                         self.save_workspace_split_preference()?;
                     }
                 } else {
@@ -517,12 +523,7 @@ impl Ui {
             && terminal_area.height >= MIN_TERMINAL_HEIGHT
             && self.tab == Tab::All
             && self.detail.is_none()
-            && !self.guide_open
-            && self.edit_title.is_none()
-            && self.handoff_confirmation.is_none()
-            && self.task_cancellation_confirmation.is_none()
-            && self.task_deletion_confirmation.is_none()
-            && self.task_retry_confirmation.is_none()
+            && !modals::blocks_background_interaction(self)
     }
 
     fn save_workspace_split_preference(&mut self) -> std::io::Result<()> {

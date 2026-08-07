@@ -5,7 +5,7 @@ mod state;
 mod view;
 
 pub(in crate::ui) use layout::Areas;
-pub(in crate::ui) use state::State;
+pub(in crate::ui) use state::{MouseOutcome, ResizeDirection, State};
 
 use super::theme::Theme;
 use ratatui::{layout::Rect, Frame};

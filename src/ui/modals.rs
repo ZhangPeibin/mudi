@@ -14,6 +14,16 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+/// Whether a modal interaction layer currently owns input over page content.
+pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
+    ui.guide_open
+        || ui.edit_title.is_some()
+        || ui.handoff_confirmation.is_some()
+        || ui.task_cancellation_confirmation.is_some()
+        || ui.task_deletion_confirmation.is_some()
+        || ui.task_retry_confirmation.is_some()
+}
+
 /// 按层级绘制当前打开的菜单、Guide、编辑器和授权确认框。
 pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     // 后绘制的确认框覆盖前面的菜单，保证最高优先级操作始终可见。

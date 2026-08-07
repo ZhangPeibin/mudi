@@ -2,6 +2,19 @@ use super::{layout, Areas};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::ui) enum MouseOutcome {
+    Ignored,
+    Dragging,
+    Committed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::ui) enum ResizeDirection {
+    Left,
+    Right,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(in crate::ui) struct State {
     preferred_left_width: Option<u16>,
@@ -24,22 +37,22 @@ impl State {
         self.dragging
     }
 
-    pub(in crate::ui) fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> bool {
+    pub(in crate::ui) fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> MouseOutcome {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) if self.hits_divider(event, area) => {
                 self.dragging = true;
-                false
+                MouseOutcome::Dragging
             }
             MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
                 self.move_divider(event.column, area);
-                false
+                MouseOutcome::Dragging
             }
             MouseEventKind::Up(MouseButton::Left) if self.dragging => {
                 self.move_divider(event.column, area);
                 self.dragging = false;
-                true
+                MouseOutcome::Committed
             }
-            _ => false,
+            _ => MouseOutcome::Ignored,
         }
     }
 
@@ -47,12 +60,11 @@ impl State {
         self.dragging = false;
     }
 
-    pub(in crate::ui) fn adjust(&mut self, area: Rect, increase: bool) {
+    pub(in crate::ui) fn adjust(&mut self, area: Rect, direction: ResizeDirection) {
         let current = self.layout(area).left.width;
-        let desired = if increase {
-            current.saturating_add(1)
-        } else {
-            current.saturating_sub(1)
+        let desired = match direction {
+            ResizeDirection::Left => current.saturating_sub(1),
+            ResizeDirection::Right => current.saturating_add(1),
         };
         self.preferred_left_width = Some(layout::split(area, Some(desired)).left.width);
     }

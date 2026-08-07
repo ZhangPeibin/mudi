@@ -1888,6 +1888,70 @@ fn overview_workspace_uses_one_unframed_split_surface() {
 }
 
 #[test]
+fn minimum_width_header_keeps_two_digit_project_and_open_counts_distinct() {
+    let sessions = (0..10)
+        .map(|index| {
+            let mut session = fixture_session(
+                Provider::ClaudeCode,
+                &format!("session-{index}"),
+                "test-model",
+                SessionState::Busy,
+                10_000,
+                1_700_000_000_000 - i64::from(index),
+                (&format!("/fixtures/project-{index}"), "main"),
+            );
+            session.project = Some(Project {
+                identity: ProjectIdentity::GitCommonDir(PathBuf::from(format!(
+                    "/fixtures/project-{index}/.git"
+                ))),
+                label: format!("project-{index}"),
+            });
+            session
+        })
+        .collect();
+    let snapshot = Snapshot {
+        sessions,
+        generated_ms: 1_700_000_000_000,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    let terminal_area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+    ] {
+        ui.handle_event(
+            Event::Mouse(MouseEvent {
+                kind,
+                column: if matches!(kind, MouseEventKind::Down(_)) {
+                    31
+                } else {
+                    0
+                },
+                row: 12,
+                modifiers: KeyModifiers::NONE,
+            }),
+            terminal_area,
+            &snapshot,
+        )
+        .unwrap();
+    }
+
+    let rendered = render(&snapshot, &ui, 80, 24);
+    let left_header = rendered
+        .text
+        .lines()
+        .nth(9)
+        .unwrap()
+        .chars()
+        .take(24)
+        .collect::<String>();
+    assert!(left_header.contains("PROJECT TREE 10"), "{left_header:?}");
+    assert!(left_header.contains("10 OPEN"), "{left_header:?}");
+}
+
+#[test]
 fn dragging_the_overview_divider_resizes_the_complete_workspace() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
@@ -2011,6 +2075,85 @@ fn mouse_activity_outside_the_visible_workspace_does_not_resize_it() {
         .skip(9)
         .take(20)
         .all(|line| line.chars().nth(55) == Some('│')));
+}
+
+#[test]
+fn non_primary_other_tab_and_detail_mouse_events_do_not_resize_the_overview() {
+    let snapshot = production_snapshot();
+    let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
+    let send_mouse = |ui: &mut Ui, kind| {
+        ui.handle_event(
+            Event::Mouse(MouseEvent {
+                kind,
+                column: 55,
+                row: 12,
+                modifiers: KeyModifiers::NONE,
+            }),
+            terminal_area,
+            &snapshot,
+        )
+        .unwrap();
+        ui.handle_event(
+            Event::Mouse(MouseEvent {
+                kind: match kind {
+                    MouseEventKind::Down(button) => MouseEventKind::Drag(button),
+                    _ => kind,
+                },
+                column: 70,
+                row: 12,
+                modifiers: KeyModifiers::NONE,
+            }),
+            terminal_area,
+            &snapshot,
+        )
+        .unwrap();
+    };
+    let assert_default_split = |ui: &Ui| {
+        let rendered = render(&snapshot, ui, 120, 30);
+        assert!(rendered
+            .text
+            .lines()
+            .skip(9)
+            .take(20)
+            .all(|line| line.chars().nth(55) == Some('│')));
+    };
+
+    let mut ui = Ui::default();
+    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Right));
+    assert_default_split(&ui);
+
+    ui.handle_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left));
+    ui.handle_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+    assert_default_split(&ui);
+
+    ui.handle_event(
+        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Session detail"));
+    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left));
+    ui.handle_event(
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        terminal_area,
+        &snapshot,
+    )
+    .unwrap();
+    assert_default_split(&ui);
 }
 
 #[test]
