@@ -1,14 +1,19 @@
 use super::*;
-use crate::ui::theme::ThemeName;
 
 #[test]
-fn wrapped_detail_fields_align_continuation_lines() {
-    let mut lines = Vec::new();
-    let theme = ThemeName::default().palette();
+fn selectable_detail_field_keeps_its_complete_copy_value() {
+    let field = DetailLine::field("Session ID", "native-session-with-full-identity", true);
 
-    push_wrapped_detail_field(&mut lines, "Field", "abcd", 16, theme);
+    assert_eq!(
+        field.copy_value(),
+        Some(("Session ID", "native-session-with-full-identity".into()))
+    );
+}
 
-    assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0].spans[0].content, "Field         ");
-    assert_eq!(lines[1].spans[0].content, "              ");
+#[test]
+fn unavailable_detail_field_is_not_selectable() {
+    let field = DetailLine::unavailable("Worktree", "N/A (non-Git Project)");
+
+    assert!(!field.is_selectable());
+    assert_eq!(field.copy_value(), None);
 }

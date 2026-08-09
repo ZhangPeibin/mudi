@@ -13,3 +13,13 @@ fn fifty_percent_is_centered_on_both_axes() {
 
     assert_eq!(centered_rect(50, 50, area), Rect::new(25, 10, 50, 20));
 }
+
+#[test]
+fn capped_centered_rect_keeps_the_requested_height_and_caps_width() {
+    let area = Rect::new(0, 0, 160, 40);
+
+    assert_eq!(
+        centered_rect_with_max_width(80, 80, 100, area),
+        Rect::new(30, 4, 100, 32)
+    );
+}

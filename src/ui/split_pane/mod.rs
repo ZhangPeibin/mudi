@@ -8,8 +8,8 @@ pub(in crate::ui) use layout::Areas;
 pub(in crate::ui) use state::{MouseOutcome, ResizeDirection, State};
 
 use super::theme::Theme;
-use ratatui::{layout::Rect, Frame};
+use ratatui::Frame;
 
-pub(super) fn draw_divider(f: &mut Frame, area: Rect, dragging: bool, theme: Theme) {
-    view::draw_divider(f, area, dragging, theme);
+pub(super) fn draw_frame(f: &mut Frame, areas: Areas, dragging: bool, theme: Theme) {
+    view::draw_frame(f, areas, dragging, theme);
 }

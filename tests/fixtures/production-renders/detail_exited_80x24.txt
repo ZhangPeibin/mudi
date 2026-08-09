@@ -1,24 +1,24 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
-┌ Session detail - Esc to go back ─────────────────────────────────────────────┐
-│Provider      Claude Code / Exited                                            │
-│Project       sessionmesh                                                     │
-│Title         de-older                                                        │
-│Session ID    claude-older                                                    │
-│Model         claude-sonnet-4-5                                               │
-│Context       50.0k / 200.0k (25.0%)                                          │
-│Attention Conditions                                                          │
-│  None - Exited Session has no current Attention Conditions                   │
-│Transcript Lifetime Usage                                                     │
-│in 12.3k | out 2.3k | cache read 34.6k | cache create 456 | API est. $0.42    │
-│Worktree      /Users/fixture/code/sessionmesh-older @ archive                 │
-│cwd           /Users/fixture/code/sessionmesh-older                           │
-│Source log    /Users/fixture/.sessions/claude-older.jsonl                     │
-│Source format JSONL                                                           │
-│Compactions (0)  none observed                                                │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-└──────────────────────────────────────────────────────────── lines 1-15 of 15 ┘
-Esc | j/k | c | e Edit title | h | ? | q Quit          Estimated using API rates
+┌ CLAUDE CODE SESSIONS | grouped by Project ───────────────────────────────────┐
+│  State┌ Session Detail ──────────────────────────────────────────────┐       │
+│       │Provider        Claude Code                                   │       │
+│PROJECT│Project         sessionmesh                                   │       │
+│  Busy │Worktree        /Users/fixture/code/sessionmesh-older         │       │
+│    I 1│Branch          archive                                       │       │
+│  Busy │cwd             /Users/fixture/code/sessionmesh-older         │       │
+│    I 1│Source log      /Users/fixture/.sessions/claude-older.jsonl   │       │
+│  Busy │Source format   JSONL                                         │       │
+│    I 1│Title           de-older                                      │       │
+│  - OLD│Session ID      claude-older                                  │       │
+│> · —  │Latest model    claude-sonnet-4-5                             │       │
+│    I 1│State           Exited                                        │       │
+│       │                                                              │       │
+│       │Current Context                                               │       │
+│       │Occupancy        50.0k / 200.0k (25.0%)                       │       │
+│       │                                                              │       │
+│       │Attention Conditions                                          │       │
+│       │  None - Exited Session has no current Attention Conditions   │       │
+│       │                                                              │       │
+│       └ Up/Down Select | c Copy | h Handoff | Esc Close  fields 1/17 ┘       │
+└──────────────────────────────────────────────────────────────────────────────┘
+Esc | j/k Fields | c Copy | e Edit | h Handoff | ? | q Quit Estimated using API

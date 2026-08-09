@@ -1,30 +1,30 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ─────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
                                         ┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
                                         │WT /Users/fixture/co...  Risk detected││                                      │
-                                        │CL ...ical Ctx +Critical 160.0k>180.0k││                                      │
-                                        │CL .. Cmp auto 188.0k>100.0k -Critical││                                      │
-                                        │CL -warning Ctx +Warning 120.0k>150.0k││                                      │
-                                        │CX dex-idle Busy -> Idle              ││                                      │
+                                        │✳ critical Ctx +Critical 160.0k>180.0k││                                      │
+                                        │✳ ... Cmp auto 188.0k>100.0k -Critical││                                      │
+                                        │✳ -warning Ctx +Warning 120.0k>150.0k ││                                      │
+                                        │⬡ dex-idle Busy -> Idle               ││                                      │
                                         │                                      ││                                      │
                                         └──────────────────────────────────────┘└──────────────────────────────────────┘
  PROJECT 1 ─────────────────────────────────── 5 OPEN  │ Session Workspace ─────────────────────────────────────────────
  ▾ sessionmesh (7)                                     │Session Claude Code / critical
    ▾ main !2                                           │Conversation unavailable.
-    > ✦ critical                          ! ●  90%  30s│
-      ◎ x-shared                          ! ●  40%   1m│
+    > ✳ critical                          ! ●  90%  30s│
+      ⬡ x-shared                          ! ●  40%   1m│
    ▾ warning                                           │
-      ✦ -warning                          ! ●  75%   2m│
+      ✳ -warning                          ! ●  75%   2m│
    ▾ idle                                              │
-      ◎ dex-idle                            ○  30%   3m│
+      ⬡ dex-idle                            ○  30%   3m│
    ▾ healthy                                           │
-      ✦ -healthy                            ●  20%   4m│
-   ▾ done                                              │
  DETAILS ──────────────────────────────────────────────│
-                                                       │
- Provider   Claude Code                                │
- Worktree   /Users/fixture/code/sessionmesh @ main     │
- Model      claude-opus-4-8                            │
- Run usage  in 1.2k | out 230 | read 3.4k | create 45  │
-                                                       │
-                                                       │
-j/k | Left/Right | Enter | e Edit title | 1/2/3 | r | ? | q Quit                                           fixture ready
+ Title       critical                                  │
+ Description N/A                                       │
+ Context     [###########-] 90.0%                      │
+ Attention   Critical Context · 90% · +1               │
+ Provider    Claude Code                               │
+ Worktree    /Users/fixture/code/sessionmesh @ main    │
+ Model       claude-opus-4-8                           │
+ Run usage   in 1.2k | out 230 | read 3.4k | create 45 │
+───────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────
+j/k | Left/Right | Enter | e Edit session | 1/2/3 | r | ? | q Quit                                         fixture ready

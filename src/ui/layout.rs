@@ -44,6 +44,23 @@ pub(super) fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
+/// Center a percentage-sized region while keeping its width within a readable limit.
+pub(super) fn centered_rect_with_max_width(
+    pct_x: u16,
+    pct_y: u16,
+    max_width: u16,
+    area: Rect,
+) -> Rect {
+    let percentage_area = centered_rect(pct_x, pct_y, area);
+    let width = percentage_area.width.min(max_width);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        percentage_area.y,
+        width,
+        percentage_area.height,
+    )
+}
+
 #[cfg(test)]
 #[path = "layout_test.rs"]
 mod tests;

@@ -150,6 +150,31 @@ impl ProductionRender {
         }
         panic!("rendered text not found: {text:?}");
     }
+
+    fn top_rule_style(&self, title: &str) -> Style {
+        let position = self.position_of(title);
+        let row_start = position.y as usize * self.width as usize;
+        let row = &self.buffer.content()[row_start..row_start + self.width as usize];
+        row[..position.x as usize]
+            .iter()
+            .rev()
+            .chain(row[position.x as usize + title.chars().count()..].iter())
+            .find(|cell| matches!(cell.symbol(), "─" | "┌" | "┬"))
+            .unwrap_or_else(|| panic!("top rule not found beside region title {title:?}"))
+            .style()
+    }
+
+    fn style_before_right_border_in_row(&self, text: &str) -> Style {
+        let position = self.position_of(text);
+        let row_start = position.y as usize * self.width as usize;
+        let row = &self.buffer.content()[row_start..row_start + self.width as usize];
+        let border = row[position.x as usize..]
+            .iter()
+            .position(|cell| cell.symbol() == "│")
+            .map(|offset| position.x as usize + offset)
+            .unwrap_or_else(|| panic!("right border not found after selected row {text:?}"));
+        row[border.saturating_sub(1)].style()
+    }
 }
 
 fn render(snapshot: &Snapshot, ui: &Ui, width: u16, height: u16) -> ProductionRender {
@@ -429,6 +454,118 @@ fn production_snapshot() -> Snapshot {
         generated_ms: NOW,
         ready: true,
         ..Snapshot::default()
+    }
+}
+
+fn focus_fixture_task(now_ms: i64) -> OperationTask {
+    OperationTask {
+        id: "task-focus".into(),
+        state: OperationTaskState::Queued,
+        source_provider: Provider::ClaudeCode,
+        source_session_id: "claude-critical".into(),
+        source_record_path: PathBuf::from("/private/source.jsonl"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        successor_provider: Provider::ClaudeCode,
+        successor_executable: PathBuf::from("/usr/local/bin/claude"),
+        created_at_ms: now_ms - 1_000,
+        state_changed_at_ms: now_ms - 1_000,
+        worker_process_identity: None,
+        provider_process_identity: None,
+        prompt_sent_at_ms: None,
+        provider_exited_at_ms: None,
+        provider_exit_code: None,
+        running_deadline_ms: None,
+        cancellation_requested_at_ms: None,
+        termination_requested_at_ms: None,
+        retry_of_task_id: None,
+        retry_ready_at_ms: None,
+        artifact_path: None,
+        successor_launch_plan: None,
+        successor_launch_metadata: None,
+        successor_session_id: None,
+        successor_linked_at_ms: None,
+        failure_code: None,
+        acknowledged_at_ms: None,
+        end_current_run_authorized: false,
+        source_process_identity: None,
+        waiting_reason: None,
+        waiting_deadline_ms: None,
+        control_used_at_ms: None,
+        deletion_requested_at_ms: None,
+        deletion_failure_code: None,
+    }
+}
+
+fn assert_overview_focus(rendered: &ProductionRender, focused_index: usize) {
+    let focused_style = rendered.style_at("1 2 3");
+    let titles = [
+        rendered.style_at("PROJECT"),
+        rendered.style_at("RECENT SIGNALS"),
+        rendered.style_at("TASKS"),
+    ];
+    let title_counts = [
+        rendered.style_at_in_row("PROJECT", "1"),
+        rendered.style_at_in_row("RECENT SIGNALS", "5"),
+        rendered.style_at_in_row("TASKS", "1"),
+    ];
+    for (title, count) in titles.iter().zip(title_counts) {
+        assert_eq!(
+            count, *title,
+            "region title count split the focus treatment"
+        );
+    }
+    assert_eq!(
+        titles
+            .iter()
+            .filter(|style| {
+                style.fg == focused_style.fg
+                    && style.bg == focused_style.bg
+                    && style.add_modifier.contains(Modifier::BOLD)
+            })
+            .count(),
+        1,
+        "exactly one Overview title should carry the focused presentation"
+    );
+    assert_eq!(titles[focused_index].fg, focused_style.fg);
+    assert_eq!(titles[focused_index].bg, focused_style.bg);
+    assert!(titles[focused_index].add_modifier.contains(Modifier::BOLD));
+    assert!(contrast_ratio(titles[focused_index]) >= 4.5);
+    for (index, title) in titles.iter().enumerate() {
+        if index == focused_index {
+            continue;
+        }
+        assert_ne!(title.bg, focused_style.bg);
+        assert!(!title.add_modifier.contains(Modifier::BOLD));
+    }
+
+    let rules = [
+        rendered.top_rule_style("PROJECT"),
+        rendered.top_rule_style("RECENT SIGNALS"),
+        rendered.top_rule_style("TASKS"),
+    ];
+    let focused_rule = rules[focused_index].fg;
+    assert_eq!(
+        rules
+            .iter()
+            .filter(|style| style.fg == focused_rule)
+            .count(),
+        1,
+        "exactly one Overview top rule should carry the focus accent"
+    );
+
+    let selected_background = focused_style.bg;
+    assert_eq!(
+        rendered.style_at_in_row("> ✳ critical", "critical").bg,
+        selected_background
+    );
+    assert_eq!(rendered.style_at("Risk detected").bg, selected_background);
+    assert_eq!(rendered.style_at("Queued").bg, selected_background);
+    for selected_row in ["> ✳ critical", "Risk detected", "Queued"] {
+        assert_eq!(
+            rendered.style_before_right_border_in_row(selected_row).bg,
+            selected_background,
+            "selected row background did not fill its region for {selected_row:?}"
+        );
     }
 }
 
@@ -750,7 +887,7 @@ fn retained_handoff_task_appears_in_the_minimal_upper_right_tasks_surface() {
     }
 
     for expected in [
-        "TASKS", "Handoff", "CL", "critical", "Queued", "Ready", "Failed",
+        "TASKS", "Handoff", "✳", "critical", "Queued", "Ready", "Failed",
     ] {
         assert!(
             rendered.contains(expected),
@@ -1011,7 +1148,7 @@ fn compact_tasks_can_receive_focus_and_scroll_to_every_retained_task() {
     assert!(!rendered.text.contains("ource-00"));
     assert_eq!(
         rendered.style_at("ource-07").bg,
-        Some(Color::Rgb(68, 61, 43))
+        Some(Color::Rgb(32, 35, 38))
     );
 }
 
@@ -1080,13 +1217,13 @@ fn task_rows_show_transition_time_and_unread_only_for_unacknowledged_terminal_ou
         .find(|line| line.contains("failedid"))
         .unwrap();
 
-    for expected in ["NEW", "Handoff", "CL:ready-id", "Ready", "1s"] {
+    for expected in ["NEW", "Handoff", "✳:ready-id", "Ready", "1s"] {
         assert!(
             ready_row.contains(expected),
             "missing {expected:?}: {ready_row}"
         );
     }
-    for expected in ["Handoff", "CX:failedid", "Failed", "2s"] {
+    for expected in ["Handoff", "⬡:failedid", "Failed", "2s"] {
         assert!(
             failed_row.contains(expected),
             "missing {expected:?}: {failed_row}"
@@ -1154,8 +1291,8 @@ fn task_rows_resolve_the_current_session_alias_without_changing_task_identity() 
 
     let rendered = render(&snapshot, &ui, 80, 24).text;
 
-    assert!(rendered.contains("CL:...ordinator"));
-    assert!(!rendered.contains("CL:critical"));
+    assert!(rendered.contains("✳:...oordinator"));
+    assert!(!rendered.contains("✳:critical"));
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -1210,8 +1347,8 @@ fn task_rows_disambiguate_colliding_session_labels() {
     press(&mut ui, &snapshot, KeyCode::Down);
     let second = render(&snapshot, &ui, 80, 24).text;
 
-    assert!(first.contains("CX:Asame0000"));
-    assert!(second.contains("CX:Bsame0000"));
+    assert!(first.contains("⬡:Asame0000"));
+    assert!(second.contains("⬡:Bsame0000"));
 }
 
 #[test]
@@ -1472,7 +1609,7 @@ fn expired_waiting_authority_is_an_unread_cancelled_task_with_a_clear_explanatio
         .lines()
         .find(|line| line.contains("Cancelled"))
         .unwrap();
-    for expected in ["NEW", "Handoff", "CX:", "Cancelled"] {
+    for expected in ["NEW", "Handoff", "⬡:", "Cancelled"] {
         assert!(
             cancelled_row.contains(expected),
             "missing {expected:?}: {cancelled_row}"
@@ -1683,6 +1820,55 @@ fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
 }
 
 #[test]
+fn overview_focus_and_retained_selection_render_across_themes_and_target_sizes() {
+    for theme in [
+        "sessionmesh",
+        "catppuccin",
+        "dracula",
+        "gruvbox",
+        "light",
+        "high-contrast",
+    ] {
+        for (width, height) in [(120, 30), (80, 24)] {
+            let mut snapshot = production_snapshot();
+            snapshot.tasks = vec![focus_fixture_task(snapshot.generated_ms)];
+            let mut ui = ui_with_theme(theme);
+
+            let project = render(&snapshot, &ui, width, height);
+            assert_overview_focus(&project, 0);
+
+            press(&mut ui, &snapshot, KeyCode::Tab);
+            let signals = render(&snapshot, &ui, width, height);
+            assert_overview_focus(&signals, 1);
+
+            press(&mut ui, &snapshot, KeyCode::Tab);
+            let tasks = render(&snapshot, &ui, width, height);
+            assert_overview_focus(&tasks, 2);
+
+            for rendered in [&project, &signals, &tasks] {
+                assert!(rendered
+                    .text
+                    .lines()
+                    .all(|line| line.chars().count() == width as usize));
+            }
+
+            ui.handle_key(
+                KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+                &snapshot,
+            )
+            .unwrap();
+            assert_overview_focus(&render(&snapshot, &ui, width, height), 1);
+            ui.handle_key(
+                KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+                &snapshot,
+            )
+            .unwrap();
+            assert_overview_focus(&render(&snapshot, &ui, width, height), 0);
+        }
+    }
+}
+
+#[test]
 fn all_page_labels_the_session_tree_and_uses_theme_foreground_for_project_names() {
     let snapshot = production_snapshot();
     let ui = Ui::default();
@@ -1810,7 +1996,7 @@ fn production_render_uses_the_snapshot_time_for_relative_session_age() {
     let session_row = rendered
         .text
         .lines()
-        .find(|line| line.contains("✦ -session"))
+        .find(|line| line.contains("✳ -session"))
         .unwrap_or_else(|| {
             panic!(
                 "stable clock Session should be rendered:\n{}",
@@ -1869,7 +2055,7 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
 }
 
 #[test]
-fn overview_workspace_uses_one_unframed_split_surface() {
+fn overview_workspace_uses_one_split_surface_with_a_shared_bottom_rule() {
     let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
     let lines = rendered.text.lines().collect::<Vec<_>>();
 
@@ -1879,9 +2065,13 @@ fn overview_workspace_uses_one_unframed_split_surface() {
     assert_ne!(lines[9].chars().next(), Some('┌'));
     assert_ne!(lines[9].chars().last(), Some('┤'));
     assert_ne!(lines[9].chars().last(), Some('┐'));
-    for line in &lines[9..29] {
+    for line in &lines[9..28] {
         assert_eq!(line.chars().nth(55), Some('│'), "{line:?}");
     }
+    let bottom = lines[28].chars().collect::<Vec<_>>();
+    assert!(bottom[..55].iter().all(|character| *character == '─'));
+    assert_eq!(bottom[55], '┴');
+    assert!(bottom[56..].iter().all(|character| *character == '─'));
 }
 
 #[test]
@@ -1908,7 +2098,7 @@ fn workspace_and_details_headings_keep_horizontal_section_rules() {
 }
 
 #[test]
-fn selected_session_details_align_content_below_one_breathing_row() {
+fn selected_session_details_start_immediately_and_use_content_height() {
     let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
     let lines = rendered.text.lines().collect::<Vec<_>>();
     let details_row = lines
@@ -1917,11 +2107,14 @@ fn selected_session_details_align_content_below_one_breathing_row() {
         .unwrap();
     let left_pane = |row: usize| lines[row].split_once('│').unwrap().0;
 
-    assert!(left_pane(details_row + 1).trim().is_empty());
-    assert!(left_pane(details_row + 2).starts_with(" Provider"));
-    assert_eq!(rendered.height as usize - 1 - details_row, 8);
-    assert!(rendered
-        .style_at("Provider")
+    assert!(left_pane(details_row + 1).starts_with(" Title"));
+    assert_eq!(rendered.height as usize - 1 - details_row, 10);
+    assert!(!rendered
+        .style_at_in_row("Provider    Claude Code", "Provider")
+        .add_modifier
+        .contains(Modifier::BOLD));
+    assert!(!rendered
+        .style_at_in_row("Provider    Claude Code", "Claude Code")
         .add_modifier
         .contains(Modifier::BOLD));
 }
@@ -2064,12 +2257,14 @@ fn dragging_the_overview_divider_resizes_the_complete_workspace() {
     .unwrap();
 
     let rendered = render(&snapshot, &ui, 120, 30);
-    for line in rendered.text.lines().collect::<Vec<_>>()[9..29].iter() {
+    let lines = rendered.text.lines().collect::<Vec<_>>();
+    for line in &lines[9..28] {
         assert_eq!(line.chars().nth(70), Some('│'), "{line:?}");
     }
+    assert_eq!(lines[28].chars().nth(70), Some('┴'));
     assert_eq!(
         rendered.buffer[(70, 12)].style().fg,
-        rendered.style_at("PROJECT").fg
+        Some(Color::Rgb(230, 180, 80))
     );
 }
 
@@ -2101,7 +2296,7 @@ fn divider_clamps_to_both_pane_minima_and_stops_after_release() {
         .text
         .lines()
         .skip(9)
-        .take(20)
+        .take(19)
         .all(|line| line.chars().nth(24) == Some('│')));
 
     send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 24);
@@ -2111,7 +2306,7 @@ fn divider_clamps_to_both_pane_minima_and_stops_after_release() {
         .text
         .lines()
         .skip(9)
-        .take(20)
+        .take(19)
         .all(|line| line.chars().nth(71) == Some('│')));
 }
 
@@ -2156,7 +2351,7 @@ fn mouse_activity_outside_the_visible_workspace_does_not_resize_it() {
         .text
         .lines()
         .skip(9)
-        .take(20)
+        .take(19)
         .all(|line| line.chars().nth(55) == Some('│')));
 }
 
@@ -2197,7 +2392,7 @@ fn non_primary_other_tab_and_detail_mouse_events_do_not_resize_the_overview() {
             .text
             .lines()
             .skip(9)
-            .take(20)
+            .take(19)
             .all(|line| line.chars().nth(55) == Some('│')));
     };
 
@@ -2228,7 +2423,7 @@ fn non_primary_other_tab_and_detail_mouse_events_do_not_resize_the_overview() {
     .unwrap();
     assert!(render(&snapshot, &ui, 120, 30)
         .text
-        .contains("Session detail"));
+        .contains("Session Detail"));
     send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left));
     ui.handle_event(
         Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
@@ -2256,7 +2451,7 @@ fn alt_arrow_resizes_without_replacing_project_tree_navigation() {
         .text
         .lines()
         .skip(9)
-        .take(20)
+        .take(19)
         .all(|line| line.chars().nth(56) == Some('│')));
 
     ui.handle_event(
@@ -2270,7 +2465,7 @@ fn alt_arrow_resizes_without_replacing_project_tree_navigation() {
         .text
         .lines()
         .skip(9)
-        .take(20)
+        .take(19)
         .all(|line| line.chars().nth(56) == Some('│')));
 }
 
@@ -2305,7 +2500,7 @@ fn keyboard_resize_adjusts_the_preference_after_the_effective_width_is_clamped()
         .text
         .lines()
         .skip(9)
-        .take(20)
+        .take(19)
         .all(|line| line.chars().nth(66) == Some('│')));
 
     std::fs::remove_dir_all(directory).unwrap();
@@ -2354,14 +2549,14 @@ fn completed_drag_persists_the_preferred_width_across_terminal_sizes() {
         .text
         .lines()
         .skip(9)
-        .take(14)
+        .take(13)
         .all(|line| line.chars().nth(31) == Some('│')));
     let wide = render(&snapshot, &reloaded, 120, 30);
     assert!(wide
         .text
         .lines()
         .skip(9)
-        .take(20)
+        .take(19)
         .all(|line| line.chars().nth(65) == Some('│')));
 
     std::fs::remove_dir_all(directory).unwrap();
@@ -2377,8 +2572,8 @@ fn compact_all_page_matches_the_reviewed_production_fixture() {
     assert!(rendered.text.contains("Session Workspace"));
     assert!(rendered.text.contains("Conversation unavailable."));
     assert!(rendered.text.contains("Ctx +Warning"));
-    assert!(!rendered.text.contains("Before 1: CL:critical"));
-    assert!(!rendered.text.contains("After 2: CL:critical, CX:x-shared"));
+    assert!(!rendered.text.contains("Before 1: ✳:critical"));
+    assert!(!rendered.text.contains("After 2: ✳:critical, ⬡:x-shared"));
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/all_populated_80x24.txt"),
@@ -2562,11 +2757,11 @@ fn session_tree_age_disclosures_expand_independently() {
     assert!(recent_expanded
         .text
         .lines()
-        .any(|line| line.contains('◎') && line.contains("1d")));
+        .any(|line| line.contains('⬡') && line.contains("1d")));
     assert!(!recent_expanded
         .text
         .lines()
-        .any(|line| line.contains('✦') && line.contains("8d")));
+        .any(|line| line.contains('✳') && line.contains("8d")));
 
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -2577,11 +2772,11 @@ fn session_tree_age_disclosures_expand_independently() {
     assert!(both_expanded
         .text
         .lines()
-        .any(|line| line.contains('◎') && line.contains("1d")));
+        .any(|line| line.contains('⬡') && line.contains("1d")));
     assert!(both_expanded
         .text
         .lines()
-        .any(|line| line.contains('✦') && line.contains("8d")));
+        .any(|line| line.contains('✳') && line.contains("8d")));
 
     press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Up);
@@ -2592,11 +2787,11 @@ fn session_tree_age_disclosures_expand_independently() {
     assert!(!only_older_expanded
         .text
         .lines()
-        .any(|line| line.contains('◎') && line.contains("1d")));
+        .any(|line| line.contains('⬡') && line.contains("1d")));
     assert!(only_older_expanded
         .text
         .lines()
-        .any(|line| line.contains('✦') && line.contains("8d")));
+        .any(|line| line.contains('✳') && line.contains("8d")));
 }
 
 #[test]
@@ -2636,7 +2831,7 @@ fn selecting_an_exited_session_targets_the_inspector_and_workspace() {
     let rendered = render(&snapshot, &ui, 120, 30);
 
     for required in [
-        "◎ recent",
+        "⬡ recent",
         "Provider   Codex CLI",
         "Model      recent-model",
         "Session Codex CLI / recent",
@@ -2686,7 +2881,7 @@ fn exited_session_tree_selection_opens_transcript_lifetime_detail_and_returns() 
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let detail = render(&snapshot, &ui, 160, 30);
-    assert!(detail.text.contains("exited (no marker)"));
+    assert!(detail.text.contains("State           Exited"));
     assert!(detail.text.contains("Transcript Lifetime Usage"));
     assert!(!detail.text.contains("Current Run Usage"));
 
@@ -2820,7 +3015,7 @@ fn session_tree_keeps_non_git_history_directly_under_its_project() {
 
     assert_eq!(rendered.text.matches("non-git-project").count(), 1);
     assert!(rendered.text.contains("Recent (1)"));
-    assert!(rendered.text.contains("✦ non-git"));
+    assert!(rendered.text.contains("✳ non-git"));
     assert!(!rendered.text.contains("detached HEAD"));
 }
 
@@ -2860,24 +3055,24 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let alpha_expanded = render(&snapshot, &ui, 120, 30);
-    assert!(alpha_expanded.text.contains("✦ alpha"));
-    assert!(!alpha_expanded.text.contains("◎ beta"));
+    assert!(alpha_expanded.text.contains("✳ alpha"));
+    assert!(!alpha_expanded.text.contains("⬡ beta"));
 
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let both_expanded = render(&snapshot, &ui, 120, 30);
-    assert!(both_expanded.text.contains("✦ alpha"));
-    assert!(both_expanded.text.contains("◎ beta"));
+    assert!(both_expanded.text.contains("✳ alpha"));
+    assert!(both_expanded.text.contains("⬡ beta"));
 
     press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let only_beta_expanded = render(&snapshot, &ui, 120, 30);
-    assert!(!only_beta_expanded.text.contains("✦ alpha"));
-    assert!(only_beta_expanded.text.contains("◎ beta"));
+    assert!(!only_beta_expanded.text.contains("✳ alpha"));
+    assert!(only_beta_expanded.text.contains("⬡ beta"));
 }
 
 #[test]
@@ -2888,9 +3083,9 @@ fn session_tree_selection_drives_the_inspector_and_workspace_after_refresh() {
     press(&mut ui, &snapshot, KeyCode::Down);
     let selected = render(&snapshot, &ui, 120, 30);
     for required in [
-        "◎ x-shared",
-        "Provider   Codex CLI",
-        "Model      gpt-5-codex",
+        "⬡ x-shared",
+        "Provider    Codex CLI",
+        "Model       gpt-5-codex",
         "40%",
         "Session Codex CLI / x-shared",
         "Conversation unavailable.",
@@ -2909,7 +3104,7 @@ fn session_tree_selection_drives_the_inspector_and_workspace_after_refresh() {
     .unwrap();
     let refreshed = render(&snapshot, &ui, 120, 30);
     for required in [
-        "Provider   Codex CLI",
+        "Provider    Codex CLI",
         "Session Codex CLI / x-shared",
         "Conversation unavailable.",
     ] {
@@ -2933,11 +3128,11 @@ fn session_tree_keyboard_collapse_and_expand_render_at_supported_sizes() {
         assert!(!collapsed
             .text
             .lines()
-            .any(|line| line.contains("✦ critical")));
+            .any(|line| line.contains("✳ critical") && line.contains("90%")));
         assert!(!collapsed
             .text
             .lines()
-            .any(|line| line.contains("◎ x-shared")));
+            .any(|line| line.contains("⬡ x-shared")));
 
         press(&mut ui, &snapshot, KeyCode::Right);
         press(&mut ui, &snapshot, KeyCode::Right);
@@ -2945,7 +3140,7 @@ fn session_tree_keyboard_collapse_and_expand_render_at_supported_sizes() {
         assert!(expanded
             .text
             .lines()
-            .any(|line| line.contains("> ✦ critical") && line.contains("90%")));
+            .any(|line| line.contains("> ✳ critical") && line.contains("90%")));
     }
 }
 
@@ -2964,7 +3159,7 @@ fn now_session_row_uses_the_saved_alias_as_its_title() {
     let critical_row = rendered
         .text
         .lines()
-        .find(|line| line.contains("✦ Auth fix"))
+        .find(|line| line.contains("✳ Auth fix"))
         .expect("critical NOW Session should render");
     assert!(
         critical_row.contains("Auth fix"),
@@ -2988,7 +3183,7 @@ fn compact_now_renders_a_readable_unicode_session_title() {
         let critical_row = rendered
             .text
             .lines()
-            .find(|line| line.contains("✦ Dao"))
+            .find(|line| line.contains("✳ Dao"))
             .expect("critical NOW Session should render");
         assert!(critical_row.contains("Dao"));
         if width == 120 {
@@ -3019,7 +3214,7 @@ fn compact_now_uses_every_title_cell_before_operational_evidence() {
         .expect("critical NOW Session should render");
 
     assert!(
-        critical_row.contains("✦ ...fghijklmnop ! ●  90%│"),
+        critical_row.contains("✳ ...fghijklmnop ! ●  90%│"),
         "Session Title should use every cell before operational evidence:\n{critical_row}"
     );
 }
@@ -3067,7 +3262,7 @@ fn wide_now_aligns_all_operational_evidence_for_supported_context_values() {
             let row = rendered
                 .text
                 .lines()
-                .find(|line| line.contains('✦') && line.contains(id))
+                .find(|line| line.contains('✳') && line.contains(id))
                 .unwrap_or_else(|| panic!("Session {id} should render"));
             (row, *value, *needs_attention, *elapsed)
         })
@@ -3113,7 +3308,7 @@ fn wide_editor_keeps_the_complete_session_title_in_the_inspector() {
     let critical_row = rendered
         .text
         .lines()
-        .find(|line| line.contains("✦") && line.contains("cleanup"))
+        .find(|line| line.contains("✳") && line.contains("cleanup"))
         .expect("critical NOW Session should render");
     assert!(critical_row.contains("Architecture cleanup"));
     assert!(rendered
@@ -3128,7 +3323,7 @@ fn long_unicode_now_title_does_not_move_operational_evidence() {
     let baseline_row = baseline
         .text
         .lines()
-        .find(|line| line.contains("✦ critical"))
+        .find(|line| line.contains("✳ critical"))
         .expect("baseline critical NOW Session should render");
 
     let mut ui = Ui::default();
@@ -3205,7 +3400,7 @@ fn existing_recent_signal_resolves_the_current_session_title() {
         .lines()
         .find(|line| line.contains("Ctx +Critical"))
         .expect("existing Context Signal should render");
-    assert!(context_signal.contains("CL Auth"));
+    assert!(context_signal.contains("✳ Auth"));
     assert_eq!(snapshot.recent_signals.len(), signal_count);
 }
 
@@ -3231,9 +3426,9 @@ fn worktree_signal_members_resolve_current_provider_qualified_titles() {
         .lines()
         .find(|line| line.contains("After 2:"))
         .expect("Worktree Signal after-members should render");
-    assert!(before.contains("CL:Auth"));
-    assert!(after.contains("CL:Auth"));
-    assert!(after.contains("CX:x-shared"));
+    assert!(before.contains("✳:Auth"));
+    assert!(after.contains("✳:Auth"));
+    assert!(after.contains("⬡:x-shared"));
 }
 
 #[test]
@@ -3259,8 +3454,8 @@ fn worktree_signal_disambiguates_duplicate_member_aliases() {
         .lines()
         .find(|line| line.contains("After 2:"))
         .expect("Worktree Signal after-members should render");
-    assert!(after.contains("CL:Pair · critical"));
-    assert!(after.contains("CX:Pair · x-shared"));
+    assert!(after.contains("✳:Pair · critical"));
+    assert!(after.contains("⬡:Pair · x-shared"));
 }
 
 #[test]
@@ -3296,8 +3491,8 @@ fn session_signals_disambiguate_duplicate_visible_aliases() {
         .lines()
         .find(|line| line.contains("Ctx +Warning"))
         .expect("Warning Context Signal should render");
-    assert!(critical.contains("CL Pair · critical"));
-    assert!(warning.contains("CL Pair · -warning"));
+    assert!(critical.contains("✳ Pair · critical"));
+    assert!(warning.contains("✳ Pair · -warning"));
 }
 
 #[test]
@@ -3322,12 +3517,12 @@ fn wide_now_keeps_duplicate_aliases_distinguishable() {
     let critical = rendered
         .text
         .lines()
-        .find(|line| line.contains("✦ Pair") && line.contains("90%"))
+        .find(|line| line.contains("✳ Pair") && line.contains("90%"))
         .expect("critical NOW row should render");
     let warning = rendered
         .text
         .lines()
-        .find(|line| line.contains("✦ Pair") && line.contains("75%"))
+        .find(|line| line.contains("✳ Pair") && line.contains("75%"))
         .expect("warning NOW row should render");
     assert!(critical.contains("Pair · critical"));
     assert!(warning.contains("Pair · -warning"));
@@ -3509,11 +3704,10 @@ fn compact_open_detail_matches_the_reviewed_production_fixture() {
 
     assert_eq!((rendered.width, rendered.height), (80, 24));
     for required in [
-        "Session detail",
+        "Session Detail",
         "claude-critical",
-        "Attention Conditions",
-        "Current Run Usage",
-        "Transcript Lifetime Usage",
+        "Current Context",
+        "Occupancy",
         "Source log",
         "Source format",
         "JSONL",
@@ -3583,13 +3777,10 @@ fn wide_session_detail_separates_the_title_from_the_complete_session_id() {
 }
 
 #[test]
-fn compact_open_detail_stays_stable_when_complete_compaction_history_fits() {
+fn compact_detail_field_navigation_reveals_complete_compaction_history() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Enter);
-    let initial = render(&snapshot, &ui, 80, 24);
-    assert!(initial.text.contains("trigger=auto"));
-    assert!(initial.text.contains("trigger=manual"));
 
     for _ in 0..100 {
         press(&mut ui, &snapshot, KeyCode::Down);
@@ -3604,7 +3795,6 @@ fn compact_open_detail_stays_stable_when_complete_compaction_history_fits() {
             rendered.visible_text()
         );
     }
-    assert_eq!(rendered.visible_text(), initial.visible_text());
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/detail_open_scrolled_80x24.txt"),
@@ -3626,10 +3816,8 @@ fn compact_exited_detail_matches_the_reviewed_production_fixture() {
 
     assert_eq!((rendered.width, rendered.height), (80, 24));
     assert!(rendered.text.contains("claude-older"));
-    assert!(rendered.text.contains("Transcript Lifetime Usage"));
-    assert!(rendered
-        .text
-        .contains("Exited Session has no current Attention"));
+    assert!(rendered.text.contains("State           Exited"));
+    assert!(rendered.text.contains("Current Context"));
     assert!(!rendered.text.contains("Current Run Usage"));
     assert!(!rendered.text.contains("Last Run Usage"));
     assert_fixture(
@@ -3647,15 +3835,15 @@ fn full_open_detail_matches_the_reviewed_production_fixture() {
 
     assert_eq!((rendered.width, rendered.height), (120, 30));
     for required in [
+        "Session Detail",
+        "Current Context",
+        "Occupancy",
         "Attention Conditions",
         "CRITICAL Current Context",
         "Shared Worktree Risk",
-        "Current Run Usage",
-        "Transcript Lifetime Usage",
-        "Compactions (2)",
-        "trigger=auto",
-        "trigger=manual",
-        "q Quit",
+        "Source log",
+        "Session ID",
+        "fields 1/22",
     ] {
         assert!(
             rendered.text.contains(required),
@@ -3669,7 +3857,7 @@ fn full_open_detail_matches_the_reviewed_production_fixture() {
 }
 
 #[test]
-fn edit_title_opens_for_the_selected_session_with_identity_evidence() {
+fn edit_session_opens_for_the_selected_session_with_identity_evidence() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
 
@@ -3677,31 +3865,83 @@ fn edit_title_opens_for_the_selected_session_with_identity_evidence() {
     let rendered = render(&snapshot, &ui, 80, 24);
 
     for required in [
-        "Edit title",
+        "Edit Session",
         "Session  Claude Code · critical",
+        "Title",
+        "Description",
+        "Tab/Shift+Tab Fields",
         "Enter Save",
         "Esc Cancel",
     ] {
         assert!(
             rendered.text.contains(required),
-            "Edit title should contain {required:?}:\n{}",
+            "Edit Session should contain {required:?}:\n{}",
             rendered.visible_text()
         );
     }
 }
 
 #[test]
-fn empty_title_editor_places_the_cursor_after_the_field_label() {
+fn tab_and_shift_tab_move_session_editor_focus_between_fields() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+
+    let title = render(&snapshot, &ui, 80, 24);
+    assert!(title.text.contains("> Title"));
+    let title_cursor = title.cursor_position;
+
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    let description = render(&snapshot, &ui, 80, 24);
+    assert!(description.text.contains("> Description"));
+    assert_eq!(description.cursor_position.y, title_cursor.y + 1);
+
+    ui.handle_key(
+        KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+        &snapshot,
+    )
+    .unwrap();
+    let title_again = render(&snapshot, &ui, 80, 24);
+    assert!(title_again.text.contains("> Title"));
+    assert_eq!(title_again.cursor_position, title_cursor);
+}
+
+#[test]
+fn description_editor_accepts_unicode_and_enforces_the_240_character_limit() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    for character in "界".repeat(241).chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let invalid = render(&snapshot, &ui, 120, 30);
+    assert!(invalid
+        .text
+        .contains("Description must be 240 characters or fewer"));
+    assert!(invalid.cursor_visible);
+
+    press(&mut ui, &snapshot, KeyCode::Backspace);
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let saved = render(&snapshot, &ui, 120, 30);
+    assert!(!saved.cursor_visible);
+    assert!(saved.text.contains("Session metadata saved"));
+}
+
+#[test]
+fn empty_session_editor_places_the_cursor_after_the_title_field_label() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
 
     let rendered = render(&snapshot, &ui, 80, 24);
-    let label = rendered.position_of("Title    ");
+    let label = rendered.position_of("Title");
 
     assert_eq!(
         rendered.cursor_position,
-        Position::new(label.x + 9, label.y)
+        Position::new(label.x + 13, label.y)
     );
     assert!(rendered.cursor_visible);
 }
@@ -3716,11 +3956,11 @@ fn title_editor_keeps_the_cursor_after_ascii_input() {
     }
 
     let rendered = render(&snapshot, &ui, 80, 24);
-    let label = rendered.position_of("Title    ");
+    let label = rendered.position_of("Title");
 
     assert_eq!(
         rendered.cursor_position,
-        Position::new(label.x + 17, label.y)
+        Position::new(label.x + 21, label.y)
     );
 }
 
@@ -3734,11 +3974,11 @@ fn title_editor_places_the_cursor_after_double_width_unicode_input() {
     }
 
     let rendered = render(&snapshot, &ui, 80, 24);
-    let label = rendered.position_of("Title    ");
+    let label = rendered.position_of("Title");
 
     assert_eq!(
         rendered.cursor_position,
-        Position::new(label.x + 13, label.y)
+        Position::new(label.x + 17, label.y)
     );
 }
 
@@ -3753,11 +3993,11 @@ fn backspace_moves_the_title_editor_cursor_to_the_new_input_end() {
     press(&mut ui, &snapshot, KeyCode::Backspace);
 
     let rendered = render(&snapshot, &ui, 80, 24);
-    let label = rendered.position_of("Title    ");
+    let label = rendered.position_of("Title");
 
     assert_eq!(
         rendered.cursor_position,
-        Position::new(label.x + 11, label.y)
+        Position::new(label.x + 15, label.y)
     );
 }
 
@@ -3771,16 +4011,16 @@ fn long_title_input_keeps_the_cursor_inside_the_editor() {
     }
 
     let rendered = render(&snapshot, &ui, 80, 24);
-    let label = rendered.position_of("Title    ");
+    let label = rendered.position_of("Title");
     let row = &rendered.buffer.content()[label.y as usize * rendered.width as usize
         ..(label.y as usize + 1) * rendered.width as usize];
     let editor_right = row
         .iter()
         .enumerate()
-        .skip(label.x as usize + 9)
+        .skip(label.x as usize + 13)
         .find(|(_, cell)| cell.symbol() == "│")
         .map(|(x, _)| x as u16)
-        .expect("Edit title should retain its right border");
+        .expect("Edit Session should retain its right border");
 
     assert_eq!(
         rendered.cursor_position,
@@ -3792,7 +4032,7 @@ fn long_title_input_keeps_the_cursor_inside_the_editor() {
 }
 
 #[test]
-fn cancelling_title_editing_hides_the_terminal_cursor() {
+fn cancelling_session_editing_hides_the_terminal_cursor() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
@@ -3807,7 +4047,7 @@ fn cancelling_title_editing_hides_the_terminal_cursor() {
 }
 
 #[test]
-fn edit_title_save_survives_reloading_the_ui() {
+fn edit_session_metadata_survives_reloading_the_ui() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
         "sessionmesh-edit-title-{}-{}",
@@ -3824,13 +4064,22 @@ fn edit_title_save_survives_reloading_the_ui() {
     for character in "Auth fix".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    for character in "Auth boundary 登录".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
     press(&mut ui, &snapshot, KeyCode::Enter);
-    assert!(!render(&snapshot, &ui, 80, 24).cursor_visible);
+    let saved = render(&snapshot, &ui, 120, 30);
+    assert!(!saved.cursor_visible);
+    assert!(saved.text.contains("Auth fix"));
+    assert!(saved.text.contains("Auth boundary"));
 
     let mut reloaded = Ui::load(&profile_path, None).unwrap();
     press(&mut reloaded, &snapshot, KeyCode::Char('e'));
     let rendered = render(&snapshot, &reloaded, 80, 24);
-    assert!(rendered.text.contains("Title    Auth fix"));
+    assert!(rendered.text.contains("Auth fix"));
+    assert!(rendered.text.contains("Auth boundary"));
+    assert!(rendered.text.contains('登'));
 
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -3859,15 +4108,15 @@ fn deleting_an_existing_alias_and_confirming_clears_the_title() {
         press(&mut ui, &snapshot, KeyCode::Backspace);
     }
     let cleared = render(&snapshot, &ui, 80, 24);
-    assert!(cleared.text.contains("Enter Clear title"));
+    assert!(cleared.text.contains("Enter Save"));
     press(&mut ui, &snapshot, KeyCode::Enter);
     assert!(!render(&snapshot, &ui, 80, 24).cursor_visible);
 
     let mut reloaded = Ui::load(&profile_path, None).unwrap();
     press(&mut reloaded, &snapshot, KeyCode::Char('e'));
     let rendered = render(&snapshot, &reloaded, 80, 24);
-    assert!(rendered.text.contains("Title    "));
-    assert!(!rendered.text.contains("Title    Auth fix"));
+    assert!(rendered.text.contains("Title"));
+    assert!(!rendered.text.contains("Auth fix"));
 
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -3890,20 +4139,20 @@ fn malformed_label_store_disables_editing_until_rescan_reloads_it() {
 
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     let degraded = render(&snapshot, &ui, 160, 30);
-    assert!(!degraded.text.contains("Edit title"));
+    assert!(!degraded.text.contains("Edit Session"));
     assert!(degraded.text.contains("Label Store error"));
     assert!(degraded.text.contains("session-labels.json"));
 
     std::fs::remove_file(&label_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Char('r'));
     press(&mut ui, &snapshot, KeyCode::Char('e'));
-    assert!(render(&snapshot, &ui, 80, 24).text.contains("Edit title"));
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("Edit Session"));
 
     std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
-fn failed_title_save_preserves_the_editor_input_for_a_successful_retry() {
+fn failed_metadata_save_preserves_both_editor_inputs_for_a_successful_retry() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
         "sessionmesh-title-retry-{}-{}",
@@ -3920,19 +4169,24 @@ fn failed_title_save_preserves_the_editor_input_for_a_successful_retry() {
     for character in "Retry title".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    for character in "Retry description".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
     std::fs::write(&label_path, b"broken during edit").unwrap();
 
     press(&mut ui, &snapshot, KeyCode::Enter);
     let failed = render(&snapshot, &ui, 120, 30);
-    assert!(failed.text.contains("Edit title"));
-    assert!(failed.text.contains("Title    Retry title"));
+    assert!(failed.text.contains("Edit Session"));
+    assert!(failed.text.contains("Retry title"));
+    assert!(failed.text.contains("Retry description"));
 
     std::fs::remove_file(&label_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Char('e'));
-    assert!(render(&snapshot, &ui, 120, 30)
-        .text
-        .contains("Title    Retry title"));
+    let retried = render(&snapshot, &ui, 120, 30);
+    assert!(retried.text.contains("Retry title"));
+    assert!(retried.text.contains("Retry description"));
 
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -3957,50 +4211,57 @@ fn title_editor_rejects_81_characters_and_accepts_80() {
     press(&mut ui, &snapshot, KeyCode::Enter);
     let saved = render(&snapshot, &ui, 120, 30);
     assert!(!saved.text.contains("Enter Save | Esc Cancel"));
-    assert!(saved.text.contains("Title saved"));
+    assert!(saved.text.contains("Session metadata saved"));
 }
 
 #[test]
-fn escape_cancels_title_editing_without_persisting_or_prefilling_the_draft() {
+fn escape_cancels_session_editing_without_persisting_or_prefilling_either_draft() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     for character in "Cancelled draft".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
+    press(&mut ui, &snapshot, KeyCode::Tab);
+    for character in "Cancelled description".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
     press(&mut ui, &snapshot, KeyCode::Esc);
 
     let cancelled = render(&snapshot, &ui, 120, 30);
     assert!(!cancelled.text.contains("Cancelled draft"));
+    assert!(!cancelled.text.contains("Cancelled description"));
     assert!(!cancelled.cursor_visible);
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     let reopened = render(&snapshot, &ui, 120, 30);
     assert!(reopened.text.contains("Enter Save | Esc Cancel"));
     assert!(!reopened.text.contains("Cancelled draft"));
-    assert!(!reopened.text.contains("Title    critical"));
+    assert!(!reopened.text.contains("Cancelled description"));
 }
 
 #[test]
-fn edit_title_shortcut_is_shown_only_for_a_concrete_session_target() {
+fn edit_session_shortcut_is_shown_only_for_a_concrete_session_target() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
 
     assert!(render(&snapshot, &ui, 120, 30)
         .text
-        .contains("e Edit title"));
+        .contains("e Edit session"));
 
     press(&mut ui, &snapshot, KeyCode::Tab);
     let signals = render(&snapshot, &ui, 120, 30);
-    assert!(!signals.text.contains("e Edit title"));
+    assert!(!signals.text.contains("e Edit session"));
     press(&mut ui, &snapshot, KeyCode::Char('e'));
-    assert!(!render(&snapshot, &ui, 120, 30).text.contains("Edit title"));
+    assert!(!render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Edit Session"));
 
     press(&mut ui, &snapshot, KeyCode::Tab);
     press(&mut ui, &snapshot, KeyCode::Tab);
     press(&mut ui, &snapshot, KeyCode::Enter);
     assert!(render(&snapshot, &ui, 120, 30)
         .text
-        .contains("e Edit title"));
+        .contains("e Edit session"));
 }
 
 #[test]
@@ -4104,7 +4365,7 @@ fn navigation_guide_lists_global_and_contextual_controls_without_theme_cycling()
         "Up/Down or j/k  Move or scroll",
         "Enter  Inspect or expand",
         "Esc  Back or close",
-        "c  Copy source metadata in Session Detail",
+        "c  Copy the selected Session Detail field",
         "h  Authorize a Handoff from Session Detail",
         "Left/Right  Choose a Successor Provider",
         "o  Open a Ready Successor in Terminal.app",
@@ -4147,24 +4408,24 @@ fn signals_guide_explains_every_recent_signal_and_retention_rule() {
 
     for required in [
         "Session lifecycle",
-        "CX session1 Busy -> Idle",
-        "CX session1 Busy -> Exited",
-        "CX session1 Idle -> Exited",
-        "CX session1 Exited -> Busy",
-        "CX session1 Exited -> Idle",
-        "CL session1 Ctx +Warning 120.0k>150.0k",
-        "CL session1 Ctx +Critical 160.0k>180.0k",
-        "CL session1 Ctx -Warning 150.0k>120.0k",
-        "CL session1 Ctx -Critical 180.0k>160.0k",
+        "⬡ session1 Busy -> Idle",
+        "⬡ session1 Busy -> Exited",
+        "⬡ session1 Idle -> Exited",
+        "⬡ session1 Exited -> Busy",
+        "⬡ session1 Exited -> Idle",
+        "✳ session1 Ctx +Warning 120.0k>150.0k",
+        "✳ session1 Ctx +Critical 160.0k>180.0k",
+        "✳ session1 Ctx -Warning 150.0k>120.0k",
+        "✳ session1 Ctx -Critical 180.0k>160.0k",
         "Warning starts at 70%; Critical starts at 85%.",
-        "CL session1 Cmp auto 188.0k>100.0k",
-        "CL session1 Cmp auto 188.0k>100.0k -Critical",
+        "✳ session1 Cmp auto 188.0k>100.0k",
+        "✳ session1 Cmp auto 188.0k>100.0k -Critical",
         "WT /project  Risk detected",
         "WT /project  Risk cleared",
-        "Before 1: CL:session1",
-        "After 2: CL:session1, CX:session2",
-        "CL  Claude Code",
-        "CX  Codex CLI",
+        "Before 1: ✳:session1",
+        "After 2: ✳:session1, ⬡:session2",
+        "✳  Claude Code",
+        "⬡  Codex CLI",
         "WT  Worktree",
         "Idle -> Busy is not recorded.",
         "ordinary Current Context percentage changes",
@@ -4371,7 +4632,7 @@ fn sessions_guide_explains_providers_lifecycle_and_current_context() {
     let rendered = render(&snapshot, &ui, 120, 30);
 
     for required in [
-        "✦ Claude Code   ◎ Codex CLI",
+        "✳ Claude Code   ⬡ Codex CLI",
         "Open Session",
         "● Busy   ○ Idle   no marker Exited",
         "!  The Session currently needs attention.",
@@ -4401,7 +4662,7 @@ fn sessions_guide_explains_titles_aliases_fallbacks_and_editing() {
         "Alias  A local user-authored Title.",
         "Short Session ID  The last eight characters",
         "Duplicate Titles include their Short Session ID.",
-        "e Edit title  Set or clear the selected Session's Alias.",
+        "e Edit session  Set or clear its local Title and Description.",
     ] {
         assert!(
             rendered.text.contains(required),
@@ -4506,31 +4767,6 @@ fn guide_focus_moves_between_categories_and_content() {
 }
 
 #[test]
-fn compact_copy_menu_matches_the_reviewed_production_fixture() {
-    let snapshot = production_snapshot();
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Char('c'));
-    let rendered = render(&snapshot, &ui, 80, 24);
-
-    assert_eq!((rendered.width, rendered.height), (80, 24));
-    for required in [
-        "Copy source metadata",
-        "> Source log",
-        "Worktree",
-        "cwd",
-        "Session ID",
-        "Enter Copy | Esc Cancel",
-    ] {
-        assert!(rendered.text.contains(required));
-    }
-    assert_fixture(
-        &rendered,
-        include_str!("fixtures/production-renders/copy_menu_80x24.txt"),
-    );
-}
-
-#[test]
 fn all_six_themes_render_readable_distinct_semantic_roles() {
     let snapshot = production_snapshot();
     let mut baseline_body = None;
@@ -4583,10 +4819,12 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         let warning = rendered.style_at_in_row("-warning", "!");
         let busy = rendered.style_at_in_row("-warning", "●");
         let idle = rendered.style_at_in_row("dex-idle", "○");
-        let selected_cursor = rendered.style_at_in_row("critical", ">");
-        let selected_critical = rendered.style_at_in_row("critical", "!");
-        let selected_busy = rendered.style_at_in_row("critical", "●");
-        let critical_context = rendered.style_at_in_row("critical", "90%");
+        let selected_row = "> ✳ critical";
+        let selected_cursor = rendered.style_at_in_row(selected_row, ">");
+        let selected_title = rendered.style_at_in_row(selected_row, "critical");
+        let selected_critical = rendered.style_at_in_row(selected_row, "!");
+        let selected_busy = rendered.style_at_in_row(selected_row, "●");
+        let critical_context = rendered.style_at_in_row(selected_row, "90%");
         let ratio = contrast_ratio(critical_context);
         assert!(
             ratio >= 4.5,
@@ -4610,22 +4848,37 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
             idle, warning,
             "Theme {expected_theme} let Warning override Idle"
         );
+        let focused_project = rendered.style_at("PROJECT");
+        let selected_page = rendered.style_at("1 2 3");
+        assert_eq!(focused_project.fg, selected_page.fg);
+        assert_eq!(focused_project.bg, selected_page.bg);
+        assert!(focused_project.add_modifier.contains(Modifier::BOLD));
         assert_eq!(
             selected_cursor.fg,
-            rendered.style_at("PROJECT").fg,
+            rendered.top_rule_style("PROJECT").fg,
             "Theme {expected_theme} did not use its accent for the selected Session cursor"
         );
         assert!(selected_cursor.add_modifier.contains(Modifier::BOLD));
         for (role, style) in [
             ("cursor", selected_cursor),
+            ("title", selected_title),
             ("Critical attention", selected_critical),
             ("Busy state", selected_busy),
         ] {
             assert_eq!(
+                style.bg, selected_cursor.bg,
+                "Theme {expected_theme} did not extend the selected Tree background to {role}"
+            );
+            assert_ne!(
                 style.bg, warning.bg,
-                "Theme {expected_theme} added a selected background to {role}"
+                "Theme {expected_theme} did not distinguish the selected Tree {role}"
             );
         }
+        let selected_row_end = rendered.buffer[(54, 12)].style();
+        assert_eq!(
+            selected_row_end.bg, selected_cursor.bg,
+            "Theme {expected_theme} did not extend the selected Tree background through its row"
+        );
         assert_ne!(
             selected_critical, selected_busy,
             "Theme {expected_theme} let selection merge Attention and lifecycle roles"

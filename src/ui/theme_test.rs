@@ -16,6 +16,18 @@ fn every_theme_preserves_semantic_contrast() {
             ("critical", theme.critical, theme.background, 4.5),
             ("warning", theme.warning, theme.background, 4.5),
             (
+                "provider-claude",
+                theme.provider_claude,
+                theme.background,
+                3.0,
+            ),
+            (
+                "provider-codex",
+                theme.provider_codex,
+                theme.background,
+                3.0,
+            ),
+            (
                 "context-normal",
                 theme.context_normal,
                 theme.background,
@@ -40,6 +52,28 @@ fn every_theme_preserves_semantic_contrast() {
             assert!(
                 ratio >= minimum,
                 "theme {} role {role} contrast {ratio:.2} is below {minimum:.1}",
+                theme_name.as_str(),
+            );
+        }
+        for (role, foreground, minimum) in [
+            ("foreground", theme.foreground, 4.5),
+            ("muted", theme.muted, 3.0),
+            ("accent", theme.accent, 4.5),
+            ("provider-claude", theme.provider_claude, 3.0),
+            ("provider-codex", theme.provider_codex, 3.0),
+            ("critical", theme.critical, 4.5),
+            ("warning", theme.warning, 4.5),
+            ("context-normal", theme.context_normal, 4.5),
+            ("context-warning", theme.context_warning, 4.5),
+            ("context-critical", theme.context_critical, 4.5),
+            ("idle", theme.idle, 4.5),
+            ("busy", theme.busy, 4.5),
+            ("exited", theme.exited, 3.0),
+        ] {
+            let ratio = contrast_ratio(foreground, theme.selected_background);
+            assert!(
+                ratio >= minimum,
+                "theme {} selected Tree {role} contrast {ratio:.2} is below {minimum:.1}",
                 theme_name.as_str(),
             );
         }

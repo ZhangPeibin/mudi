@@ -26,7 +26,6 @@ cargo test --test production_renders
 | `detail_open_scrolled_80x24.txt` | Compact open Session Detail remains stable when all Compaction rows already fit |
 | `detail_exited_80x24.txt` | Compact exited Session Detail without Current Run or Last Run Usage |
 | `guide_80x24.txt` | Compact Guide modal with category navigation and Overview content |
-| `copy_menu_80x24.txt` | Compact source-metadata Copy menu |
 | `too_small_79x23.txt` | Terminal-too-small fallback with required/current dimensions and Quit only |
 
 `production_renders.rs` also renders all six built-in Themes through the production

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use sessionmesh::attention::{AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity};
+use sessionmesh::attention::{
+    AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity,
+};
 use sessionmesh::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, Worktree,
 };

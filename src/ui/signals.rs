@@ -1,16 +1,19 @@
 //! Recent Signal 的格式化与首页面板。
 
-use super::{selected_style, text, AllRegion, Ui};
+use super::{
+    provider_mark, region_border_style, region_title_style, retained_selection, text, AllRegion, Ui,
+};
 use crate::app::{fmt_relative, fmt_tokens};
 use crate::domain::{Provider, SessionState};
 use crate::session_labels::SessionLabels;
 use crate::signals::{ContextAlertLevel, RecentSignal, RecentSignalKind};
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use std::collections::{HashMap, HashSet};
+use unicode_width::UnicodeWidthStr;
 
 /// 在首页状态带中绘制最近发生的状态变化证据。
 pub(super) fn draw_panel(
@@ -21,6 +24,7 @@ pub(super) fn draw_panel(
     ui: &Ui,
 ) {
     let theme = ui.theme.palette();
+    let focused = ui.all_region == AllRegion::RecentSignals;
     let width = area.width.saturating_sub(2) as usize;
     let height = area.height.saturating_sub(2) as usize;
     let titles = visible_titles(signals, &ui.labels);
@@ -38,12 +42,7 @@ pub(super) fn draw_panel(
             .sum::<usize>()
             > height;
         for (index, signal) in signals.iter().enumerate() {
-            let style = if ui.all_region == AllRegion::RecentSignals && index == ui.signal_selected
-            {
-                selected_style(theme)
-            } else {
-                Style::default().fg(theme.foreground)
-            };
+            let selected = index == ui.signal_selected;
             let max_signal_lines = if compact { 1 } else { usize::MAX };
             for text in lines_for(signal, width, &titles)
                 .into_iter()
@@ -52,7 +51,11 @@ pub(super) fn draw_panel(
                 if lines.len() == height {
                     break;
                 }
-                lines.push(Line::from(Span::styled(text, style)));
+                let line = provider_mark::colorize(
+                    Line::from(Span::styled(text, Style::default().fg(theme.foreground))),
+                    theme,
+                );
+                lines.push(retained_selection(line, selected, width, theme));
             }
             if lines.len() == height {
                 break;
@@ -62,25 +65,12 @@ pub(super) fn draw_panel(
     };
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_style(
-            Style::default().fg(if ui.all_region == AllRegion::RecentSignals {
-                theme.accent
-            } else {
-                theme.border
-            }),
-        )
+        .border_style(region_border_style(theme, focused))
         .title(Line::from(vec![
-            Span::styled(
-                " RECENT SIGNALS ",
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(" RECENT SIGNALS ", region_title_style(theme, focused)),
             Span::styled(
                 format!("{} ", signals.len()),
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
+                region_title_style(theme, focused),
             ),
         ]));
     // 只有标题空间足够时才显示 latest，避免和左侧标题重叠。
@@ -236,11 +226,9 @@ fn lines_for(signal: &RecentSignal, width: usize, titles: &VisibleTitles) -> Vec
         }
     };
     let title = visible_title(titles, *provider, session_id);
-    let provider = match provider {
-        Provider::ClaudeCode => "CL",
-        Provider::CodexCli => "CX",
-    };
-    let fixed_width = provider.chars().count() + evidence.chars().count() + 2;
+    let provider = provider_mark::icon(*provider);
+    let fixed_width =
+        UnicodeWidthStr::width(provider) + UnicodeWidthStr::width(evidence.as_str()) + 2;
     let session_width = width.saturating_sub(fixed_width);
     let session = text::shorten_end(title, session_width);
     let text = if session.is_empty() {
@@ -256,10 +244,7 @@ fn members(members: &[crate::attention::SessionIdentity], titles: &VisibleTitles
     members
         .iter()
         .map(|identity| {
-            let provider = match identity.provider {
-                Provider::ClaudeCode => "CL",
-                Provider::CodexCli => "CX",
-            };
+            let provider = provider_mark::icon(identity.provider);
             let title = visible_title(titles, identity.provider, &identity.native_id);
             format!("{provider}:{title}")
         })

@@ -10,6 +10,7 @@ pub(in crate::ui) struct Areas {
     pub(in crate::ui) left: Rect,
     pub(in crate::ui) divider: Rect,
     pub(in crate::ui) right: Rect,
+    pub(in crate::ui) bottom: Rect,
 }
 
 pub(super) fn split(area: Rect, preferred_left_width: Option<u16>) -> Areas {
@@ -20,20 +21,28 @@ pub(super) fn split(area: Rect, preferred_left_width: Option<u16>) -> Areas {
     let left_width = desired.clamp(minimum_left, maximum_left);
     let divider_width = DIVIDER_WIDTH.min(area.width.saturating_sub(left_width));
     let right_width = area.width.saturating_sub(left_width + divider_width);
+    let content_height = area.height.saturating_sub(1);
+    let bottom_height = area.height.min(1);
 
     Areas {
-        left: Rect::new(area.x, area.y, left_width, area.height),
+        left: Rect::new(area.x, area.y, left_width, content_height),
         divider: Rect::new(
             area.x.saturating_add(left_width),
             area.y,
             divider_width,
-            area.height,
+            content_height,
         ),
         right: Rect::new(
             area.x.saturating_add(left_width + divider_width),
             area.y,
             right_width,
-            area.height,
+            content_height,
+        ),
+        bottom: Rect::new(
+            area.x,
+            area.y.saturating_add(content_height),
+            area.width,
+            bottom_height,
         ),
     }
 }

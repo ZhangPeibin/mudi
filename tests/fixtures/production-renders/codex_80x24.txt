@@ -21,4 +21,4 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-j/k | Enter Inspect | e Edit title | ? Guide | q Quit  Estimated using API rates
+j/k | Enter Inspect | e Edit | ? Guide | q Quit        Estimated using API rates

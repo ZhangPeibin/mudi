@@ -1,11 +1,14 @@
 //! Ratatui rendering for Project Tree rows.
 
-use super::super::{context, current_attention, snapshot_now_ms, text, theme::Theme};
+use super::super::{
+    context, current_attention, provider_mark, retained_selection, snapshot_now_ms, text,
+    theme::Theme,
+};
 use super::model::{ProjectTreeRow, ProjectTreeSection, SessionAgeBand};
 use super::State;
 use crate::app::{fmt_relative, Snapshot};
 use crate::attention::{AttentionRank, AttentionSnapshot};
-use crate::domain::{Project, Provider, Session, SessionState, Worktree};
+use crate::domain::{Project, Session, SessionState, Worktree};
 use crate::session_labels::SessionLabels;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -21,7 +24,6 @@ pub(in crate::ui) fn draw(
     snap: &Snapshot,
     state: &State,
     labels: &SessionLabels,
-    focused: bool,
     theme: Theme,
 ) {
     let now_ms = snapshot_now_ms(snap);
@@ -42,7 +44,7 @@ pub(in crate::ui) fn draw(
     let (_, open_session_count) = super::counts(snap);
     let content_width = area.width as usize;
     let mut lines = Vec::new();
-    let selected = focused.then(|| state.effective_selection(snap)).flatten();
+    let selected = state.effective_selection(snap);
 
     if open_session_count == 0 && tree_rows.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -164,11 +166,10 @@ pub(super) fn open_session_line(
         if position.selected { ">" } else { " " }
     );
     let attention_rank = attention.rank_for(session);
-    let attention_marker = match attention_rank {
-        AttentionRank::CriticalContext
-        | AttentionRank::SharedWorktreeRisk
-        | AttentionRank::WarningContext => "!",
-        AttentionRank::Idle | AttentionRank::HealthyBusy => " ",
+    let attention_marker = if attention_rank.shows_marker() {
+        "!"
+    } else {
+        " "
     };
     let attention_style = match attention_rank {
         AttentionRank::CriticalContext => Style::default()
@@ -184,7 +185,7 @@ pub(super) fn open_session_line(
         SessionState::Idle => "○",
         SessionState::Exited => unreachable!("NOW contains only Open Sessions"),
     };
-    let provider = provider_icon(session.provider);
+    let provider = provider_mark::icon(session.provider);
     let context_value = session
         .context
         .percent()
@@ -236,9 +237,12 @@ pub(super) fn open_session_line(
         .percent()
         .map(|percent| context::style(context::role(percent), theme))
         .unwrap_or_else(|| Style::default().fg(theme.muted));
-    Line::from(vec![
+    let line = Line::from(vec![
         Span::styled(prefix, cursor_style),
-        Span::styled(provider, Style::default().fg(theme.accent)),
+        Span::styled(
+            provider,
+            provider_mark::style(session.provider, theme, Style::default()),
+        ),
         Span::raw(SESSION_COLUMN_GAP),
         Span::styled(title, Style::default().fg(theme.foreground)),
         Span::raw(SESSION_COLUMN_GAP),
@@ -248,7 +252,8 @@ pub(super) fn open_session_line(
         Span::raw(SESSION_COLUMN_GAP),
         Span::styled(context_value, context_style),
         Span::styled(elapsed, Style::default().fg(theme.muted)),
-    ])
+    ]);
+    retained_selection(line, position.selected, content_width, theme)
 }
 
 fn exited_session_line(
@@ -264,7 +269,7 @@ fn exited_session_line(
         "  ".repeat(position.depth),
         if position.selected { ">" } else { " " }
     );
-    let provider = provider_icon(session.provider);
+    let provider = provider_mark::icon(session.provider);
     let elapsed = fmt_relative(session.last_activity_ms, now_ms);
     let fixed_width = UnicodeWidthStr::width(prefix.as_str())
         + UnicodeWidthStr::width(provider)
@@ -278,21 +283,18 @@ fn exited_session_line(
     } else {
         Style::default()
     };
-    Line::from(vec![
+    let line = Line::from(vec![
         Span::styled(prefix, cursor_style),
-        Span::styled(provider, Style::default().fg(theme.accent)),
+        Span::styled(
+            provider,
+            provider_mark::style(session.provider, theme, Style::default()),
+        ),
         Span::raw(" "),
         Span::styled(title, Style::default().fg(theme.exited)),
         Span::raw(" "),
         Span::styled(elapsed, Style::default().fg(theme.muted)),
-    ])
-}
-
-fn provider_icon(provider: Provider) -> &'static str {
-    match provider {
-        Provider::ClaudeCode => "✦",
-        Provider::CodexCli => "◎",
-    }
+    ]);
+    retained_selection(line, position.selected, content_width, theme)
 }
 
 fn section_line(
@@ -323,7 +325,7 @@ fn project_line(
     let label_width = width.saturating_sub(
         UnicodeWidthStr::width(prefix.as_str()) + UnicodeWidthStr::width(count.as_str()),
     );
-    Line::from(vec![
+    let line = Line::from(vec![
         Span::styled(
             prefix,
             if selected {
@@ -341,7 +343,8 @@ fn project_line(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(count, Style::default().fg(theme.muted)),
-    ])
+    ]);
+    retained_selection(line, selected, width, theme)
 }
 
 pub(super) fn worktree_line(
@@ -362,7 +365,7 @@ pub(super) fn worktree_line(
     let label_width = width.saturating_sub(
         UnicodeWidthStr::width(prefix.as_str()) + UnicodeWidthStr::width(risk.as_str()),
     );
-    Line::from(vec![
+    let line = Line::from(vec![
         Span::styled(
             prefix,
             if selected {
@@ -378,7 +381,8 @@ pub(super) fn worktree_line(
             Style::default().fg(theme.foreground),
         ),
         Span::styled(risk, Style::default().fg(theme.warning)),
-    ])
+    ]);
+    retained_selection(line, selected, width, theme)
 }
 
 fn disclosure_line(
@@ -419,7 +423,7 @@ fn group_line(
     let label_width = width.saturating_sub(
         UnicodeWidthStr::width(prefix.as_str()) + UnicodeWidthStr::width(count.as_str()),
     );
-    Line::from(vec![
+    let line = Line::from(vec![
         Span::styled(
             prefix,
             if selected {
@@ -435,7 +439,8 @@ fn group_line(
             Style::default().fg(theme.muted),
         ),
         Span::styled(count, Style::default().fg(theme.muted)),
-    ])
+    ]);
+    retained_selection(line, selected, width, theme)
 }
 
 pub(super) fn group_prefix(depth: usize, selected: bool, expanded: bool) -> String {

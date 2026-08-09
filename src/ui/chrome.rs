@@ -111,7 +111,7 @@ pub(super) fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
 pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     let compact = area.width < 100;
-    let can_edit_title = ui.labels.is_editable() && ui.selected_session(snap).is_some();
+    let can_edit_session = ui.labels.is_editable() && ui.selected_session(snap).is_some();
     let can_handoff = ui.detail_session(snap).is_some();
     let now = Instant::now();
     let status_notice = ui
@@ -141,36 +141,32 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         "d Delete | Esc | j/k | 1/2/3 | ? | q Quit"
     } else if compact && status_notice.is_some() {
         ""
-    } else if ui.copy_menu_is_open() && area.width < 100 {
-        "j/k Select | Enter Copy | Esc Cancel"
-    } else if ui.copy_menu_is_open() {
-        "Up/Down or j/k Select | Enter Copy | Esc Cancel"
-    } else if ui.detail.is_some() && compact && can_edit_title && can_handoff {
-        "Esc | j/k | c | e Edit title | h | ? | q Quit"
-    } else if ui.detail.is_some() && compact && can_edit_title {
-        "Esc | j/k | c Copy | e Edit title | ? Guide | q Quit"
+    } else if ui.detail.is_some() && compact && can_edit_session && can_handoff {
+        "Esc | j/k Fields | c Copy | e Edit | h Handoff | ? | q Quit"
+    } else if ui.detail.is_some() && compact && can_edit_session {
+        "Esc | j/k Fields | c Copy | e Edit | ? Guide | q Quit"
     } else if ui.detail.is_some() && compact {
-        "Esc Back | j/k Scroll | c Copy | ? Guide | q Quit"
-    } else if ui.detail.is_some() && can_edit_title && can_handoff {
-        "Esc | j/k | c | e Edit title | h Handoff | 1/2/3 | ? | q Quit"
-    } else if ui.detail.is_some() && can_edit_title {
-        "Esc | j/k | c Copy | e Edit title | 1/2/3 | ? Guide | q Quit"
+        "Esc Back | j/k Fields | c Copy | ? Guide | q Quit"
+    } else if ui.detail.is_some() && can_edit_session && can_handoff {
+        "Esc | j/k Fields | c Copy | e Edit session | h Handoff | 1/2/3 | ? | q Quit"
+    } else if ui.detail.is_some() && can_edit_session {
+        "Esc | j/k Fields | c Copy | e Edit session | 1/2/3 | ? Guide | q Quit"
     } else if ui.detail.is_some() {
-        "Esc | j/k Scroll | c Copy | 1/2/3 | ? Guide | q Quit"
-    } else if compact && ui.tab == Tab::All && can_edit_title {
+        "Esc | j/k Fields | c Copy | 1/2/3 | ? Guide | q Quit"
+    } else if compact && ui.tab == Tab::All && can_edit_session {
         "j/k | Left/Right | Enter | e Edit | ? | q Quit"
     } else if compact && ui.tab == Tab::All {
         "j/k | Left/Right | Enter | ? Guide | q Quit"
-    } else if compact && can_edit_title {
-        "j/k | Enter Inspect | e Edit title | ? Guide | q Quit"
+    } else if compact && can_edit_session {
+        "j/k | Enter Inspect | e Edit | ? Guide | q Quit"
     } else if compact {
         "j/k | Enter Inspect/Expand | ? Guide | q Quit"
-    } else if ui.tab == Tab::All && can_edit_title {
-        "j/k | Left/Right | Enter | e Edit title | 1/2/3 | r | ? | q Quit"
+    } else if ui.tab == Tab::All && can_edit_session {
+        "j/k | Left/Right | Enter | e Edit session | 1/2/3 | r | ? | q Quit"
     } else if ui.tab == Tab::All {
         "j/k | Left/Right | Enter | 1/2/3 | r | ? Guide | q Quit"
-    } else if can_edit_title {
-        "j/k | Enter Inspect | e Edit title | 1/2/3 | ? Guide | q Quit"
+    } else if can_edit_session {
+        "j/k | Enter Inspect | e Edit session | 1/2/3 | ? Guide | q Quit"
     } else {
         "j/k | Enter Inspect/Expand | 1/2/3 | ? Guide | q Quit"
     };

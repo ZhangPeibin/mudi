@@ -1,7 +1,7 @@
 //! 全局模态覆盖层、编辑器和终端尺寸保护。
 
 use super::{
-    guide, layout, selected_style, text, theme::Theme, CopyField, Ui, MIN_TERMINAL_HEIGHT,
+    detail, guide, layout, text, theme::Theme, SessionEditorField, Ui, MIN_TERMINAL_HEIGHT,
     MIN_TERMINAL_WIDTH,
 };
 use crate::app::Snapshot;
@@ -16,29 +16,26 @@ use unicode_width::UnicodeWidthStr;
 
 /// Whether a modal interaction layer currently owns input over page content.
 pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
-    ui.guide_open
-        || ui.edit_title.is_some()
+    ui.detail.is_some()
+        || ui.guide_open
+        || ui.edit_session.is_some()
         || ui.handoff_confirmation.is_some()
         || ui.task_cancellation_confirmation.is_some()
         || ui.task_deletion_confirmation.is_some()
         || ui.task_retry_confirmation.is_some()
 }
 
-/// 按层级绘制当前打开的菜单、Guide、编辑器和授权确认框。
+/// 按层级绘制当前打开的 Detail、Guide、编辑器和授权确认框。
 pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
-    // 后绘制的确认框覆盖前面的菜单，保证最高优先级操作始终可见。
-    if ui
-        .detail
-        .as_ref()
-        .is_some_and(|detail| detail.copy_menu_selected.is_some())
-    {
-        draw_copy_menu(f, snap, ui);
+    // 后绘制的确认框覆盖 Detail，保证授权流程始终处于最高优先级。
+    if ui.detail_session(snap).is_some() {
+        detail::draw(f, snap, ui);
     }
     if ui.guide_open {
         guide::draw(f, ui);
     }
-    if ui.edit_title.is_some() {
-        draw_title_editor(f, ui);
+    if ui.edit_session.is_some() {
+        draw_session_editor(f, ui);
     }
     if ui.handoff_confirmation.is_some() {
         draw_handoff_confirmation(f, snap, ui);
@@ -297,88 +294,37 @@ pub(super) fn draw_terminal_too_small(f: &mut Frame, theme: Theme) {
     );
 }
 
-/// 绘制详情页的本地元数据复制菜单。
-fn draw_copy_menu(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
-    let Some(session) = ui.detail_session(snap) else {
-        return;
-    };
-    let Some(selected) = ui
-        .detail
-        .as_ref()
-        .and_then(|detail| detail.copy_menu_selected)
-    else {
+/// 绘制 Session 元数据编辑器，并把终端光标放到当前字段的可见输入末尾。
+fn draw_session_editor(f: &mut Frame, ui: &Ui) {
+    const FIELD_INDICATOR_WIDTH: usize = 2;
+    const FIELD_LABEL_WIDTH: usize = 13;
+
+    let Some(editor) = &ui.edit_session else {
         return;
     };
     let theme = ui.theme.palette();
-    let area = layout::centered_rect(84, 38, f.area());
-    let mut lines = vec![Line::from(Span::styled(
-        "Choose one complete metadata value",
-        Style::default().fg(theme.muted),
-    ))];
-    for (index, field) in CopyField::ALL.iter().copied().enumerate() {
-        let value = field.value(session);
-        let text = format!(
-            "{} {:<12} {}",
-            if index == selected { ">" } else { " " },
-            field.label(),
-            value.as_deref().unwrap_or("Unavailable")
-        );
-        let style = if value.is_none() {
-            Style::default().fg(theme.muted)
-        } else if index == selected {
-            selected_style(theme)
-        } else {
-            Style::default().fg(theme.foreground)
-        };
-        lines.push(Line::from(Span::styled(text, style)));
-    }
-
-    f.render_widget(Clear, area);
-    f.render_widget(
-        Paragraph::new(lines)
-            .style(Style::default().fg(theme.foreground).bg(theme.background))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.accent))
-                    .title(Span::styled(
-                        " Copy source metadata ",
-                        Style::default()
-                            .fg(theme.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ))
-                    .title_bottom(
-                        Line::from(Span::styled(
-                            " Enter Copy | Esc Cancel ",
-                            Style::default().fg(theme.muted),
-                        ))
-                        .right_aligned(),
-                    ),
-            ),
-        area,
-    );
-}
-
-/// 绘制 Session Alias 编辑器，并把终端光标放到可见输入末尾。
-fn draw_title_editor(f: &mut Frame, ui: &Ui) {
-    const TITLE_LABEL: &str = "Title    ";
-
-    let Some(editor) = &ui.edit_title else {
-        return;
-    };
-    let theme = ui.theme.palette();
-    let area = layout::centered_rect(76, 32, f.area());
-    // 输入过长时只显示尾部，同时按 Unicode 显示宽度计算真实光标列。
-    let label_width = UnicodeWidthStr::width(TITLE_LABEL);
-    let input_width = area.width.saturating_sub(3 + label_width as u16) as usize;
-    let visible_input = text::visible_input_tail(&editor.input, input_width);
-    let visible_input_width = UnicodeWidthStr::width(visible_input.as_str()) as u16;
+    let area = layout::centered_rect(76, 42, f.area());
+    // Reserve both borders and one cell for the terminal cursor at the input end.
+    let input_width =
+        usize::from(area.width).saturating_sub(3 + FIELD_INDICATOR_WIDTH + FIELD_LABEL_WIDTH);
+    let title_input = text::visible_input_tail(&editor.title, input_width);
+    let description_input = text::visible_input_tail(&editor.description, input_width);
     let short_id = SessionLabels::short_id(&editor.session.native_id);
-    let clears_existing_alias = editor.input.trim().is_empty()
-        && ui
-            .labels
-            .alias(editor.session.provider, &editor.session.native_id)
-            .is_some();
+    let field_line = |label: &str, input: String, field: SessionEditorField| {
+        let focused = editor.field == field;
+        let label_style = if focused {
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.muted)
+        };
+        Line::from(vec![
+            Span::styled(if focused { "> " } else { "  " }, label_style),
+            Span::styled(format!("{label:<FIELD_LABEL_WIDTH$}"), label_style),
+            Span::styled(input, Style::default().fg(theme.foreground)),
+        ])
+    };
     let mut lines = vec![
         Line::from(vec![
             Span::styled("Session  ", Style::default().fg(theme.muted)),
@@ -388,10 +334,12 @@ fn draw_title_editor(f: &mut Frame, ui: &Ui) {
             ),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled(TITLE_LABEL, Style::default().fg(theme.muted)),
-            Span::styled(visible_input, Style::default().fg(theme.foreground)),
-        ]),
+        field_line("Title", title_input.clone(), SessionEditorField::Title),
+        field_line(
+            "Description",
+            description_input.clone(),
+            SessionEditorField::Description,
+        ),
     ];
     if let Some(error) = &editor.error {
         lines.push(Line::from(Span::styled(
@@ -408,18 +356,14 @@ fn draw_title_editor(f: &mut Frame, ui: &Ui) {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.accent))
                     .title(Span::styled(
-                        " Edit title ",
+                        " Edit Session ",
                         Style::default()
                             .fg(theme.accent)
                             .add_modifier(Modifier::BOLD),
                     ))
                     .title_bottom(
                         Line::from(Span::styled(
-                            if clears_existing_alias {
-                                " Enter Clear title | Esc Cancel "
-                            } else {
-                                " Enter Save | Esc Cancel "
-                            },
+                            " Tab/Shift+Tab Fields | Enter Save | Esc Cancel ",
                             Style::default().fg(theme.muted),
                         ))
                         .right_aligned(),
@@ -427,9 +371,17 @@ fn draw_title_editor(f: &mut Frame, ui: &Ui) {
             ),
         area,
     );
+    let (visible_input, row_offset) = match editor.field {
+        SessionEditorField::Title => (title_input, 3),
+        SessionEditorField::Description => (description_input, 4),
+    };
     f.set_cursor_position(Position::new(
-        area.x + 1 + label_width as u16 + visible_input_width,
-        area.y + 3,
+        area.x
+            + 1
+            + FIELD_INDICATOR_WIDTH as u16
+            + FIELD_LABEL_WIDTH as u16
+            + UnicodeWidthStr::width(visible_input.as_str()) as u16,
+        area.y + row_offset,
     ));
 }
 

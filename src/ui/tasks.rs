@@ -2,9 +2,10 @@
 //!
 //! 本模块拥有首页 Task 状态面板；调用方只需要提供当前任务列表和 UI 选择状态。
 
-use super::{selected_style, text, AllRegion, Ui};
+use super::{
+    provider_mark, region_border_style, region_title_style, retained_selection, text, AllRegion, Ui,
+};
 use crate::app::{fmt_datetime, fmt_relative, Snapshot};
-use crate::domain::Provider;
 use crate::tasks::OperationTask;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -16,6 +17,7 @@ use unicode_width::UnicodeWidthStr;
 /// 在首页状态带中绘制紧凑、可聚焦并可滚动的 Operation Task 列表。
 pub(super) fn draw_panel(f: &mut Frame, area: Rect, tasks: &[OperationTask], now_ms: i64, ui: &Ui) {
     let theme = ui.theme.palette();
+    let focused = ui.all_region == AllRegion::Tasks;
     let visible_rows = area.height.saturating_sub(2) as usize;
     let content_width = area.width.saturating_sub(2) as usize;
     // 选中项超出可见窗口时，让窗口尾部跟随选中项。
@@ -33,10 +35,7 @@ pub(super) fn draw_panel(f: &mut Frame, area: Rect, tasks: &[OperationTask], now
         .skip(offset)
         .take(visible_rows)
         .map(|(index, task)| {
-            let provider = match task.source_provider {
-                Provider::ClaudeCode => "CL",
-                Provider::CodexCli => "CX",
-            };
+            let provider = provider_mark::icon(task.source_provider);
             let unread = task.state.is_terminal() && task.acknowledged_at_ms.is_none();
             let unread_label = if unread { "NEW " } else { "    " };
             let compact_unread_label = if unread { "NEW " } else { "" };
@@ -72,38 +71,26 @@ pub(super) fn draw_panel(f: &mut Frame, area: Rect, tasks: &[OperationTask], now
             } else {
                 Style::default().fg(theme.foreground)
             };
-            let style = if ui.all_region == AllRegion::Tasks && index == ui.task_selected {
-                selected_style(theme)
-            } else {
-                base_style
-            };
+            let selected = index == ui.task_selected;
             let text = if compact {
                 format!("{compact_unread_label}{provider}:{source_label} {state} {transition_age}")
             } else {
                 format!("{unread_label}Handoff {provider}:{source_label} {state} {transition_age}")
             };
-            Line::from(Span::styled(text, style))
+            let line = provider_mark::colorize(Line::from(Span::styled(text, base_style)), theme);
+            retained_selection(line, selected, content_width, theme)
         })
         .collect::<Vec<_>>();
     f.render_widget(
         Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(if ui.all_region == AllRegion::Tasks {
-                    theme.accent
-                } else {
-                    theme.border
-                }))
+                .border_style(region_border_style(theme, focused))
                 .title(Line::from(vec![
-                    Span::styled(
-                        " TASKS ",
-                        Style::default()
-                            .fg(theme.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(" TASKS ", region_title_style(theme, focused)),
                     Span::styled(
                         format!("{} ", tasks.len()),
-                        Style::default().fg(theme.foreground),
+                        region_title_style(theme, focused),
                     ),
                 ])),
         ),
@@ -337,7 +324,7 @@ pub(super) fn draw_detail(
     let scroll = ui
         .detail
         .as_ref()
-        .map_or(0, |detail| detail.scroll.min(max_scroll));
+        .map_or(0, |detail| detail.scroll.get().min(max_scroll));
     f.render_widget(
         Paragraph::new(lines)
             .style(Style::default().fg(theme.foreground).bg(theme.background))

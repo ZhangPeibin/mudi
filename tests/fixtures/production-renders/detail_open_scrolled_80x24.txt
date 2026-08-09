@@ -1,24 +1,24 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
-┌ Session detail - Esc to go back ─────────────────────────────────────────────┐
-│Provider      Claude Code / Busy                                              │
-│Project       sessionmesh                                                     │
-│Title         critical                                                        │
-│Session ID    claude-critical                                                 │
-│Model         claude-opus-4-8                                                 │
-│Context       180.0k / 200.0k (90.0%)                                         │
-│Attention Conditions                                                          │
-│  CRITICAL Current Context 90.0% >= 85%                                       │
-│  WARNING Shared Worktree Risk x2                                             │
-│Current Run Usage                                                             │
-│in 1.2k | out 230 | cache read 3.4k | cache create 45 | API est. $0.04        │
-│Transcript Lifetime Usage                                                     │
-│in 12.3k | out 2.3k | cache read 34.6k | cache create 456 | API est. $0.42    │
-│Worktree      /Users/fixture/code/sessionmesh @ main                          │
-│cwd           /Users/fixture/code/sessionmesh                                 │
-│Source log    /Users/fixture/.claude/projects/-Users-fixture-code-sessionmesh/│
-│              claude-critical.jsonl                                           │
-│Source format JSONL                                                           │
-│Compactions (2)  1m ago  trigger=auto  pre=188.0k                             │
-│  1m ago  trigger=manual  pre=181.0k                                          │
-└──────────────────────────────────────────────────────────── lines 1-20 of 20 ┘
-Esc | j/k | c | e Edit title | h | ? | q Quit          Estimated using API rates
+                          ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
+        ┌ Session Detail ──────────────────────────────────────────────┐       │
+        │Current Run per-model Usage                                   │       │
+        │  claude-opus-4-8      in 1.2k out 230 cr 3.4k cw 45  $0.04   │       │
+        │                                                              │       │
+        │Transcript Lifetime Usage                                     │       │
+        │Input           12.3k                                         │       │
+        │Output          2.3k                                          │───────┘
+ PROJECT│Cache read      34.6k                                         │────────
+ ▾ sessi│Cache write     456                                           │n select
+   ▾ mai│Est. API cost   $0.42                                         │
+    > ✳ │                                                              │
+      ⬡ │Transcript Lifetime per-model Usage                           │
+ DETAILS│  claude-opus-4-8      in 12.3k out 2.3k cr 34.6k cw 456      │
+ Title  │$0.42                                                         │
+ Descrip│                                                              │
+ Context│Compactions (2)                                               │
+ Attenti│  11-15 06:11  trigger=auto  pre=188.0k                       │
+ Provide│  11-15 06:12  trigger=manual  pre=181.0k                     │
+ Worktre│Compaction count2                                             │
+ Model  └ Up/Down Select | c Copy | h Handoff | Esc Close fields 22/22 ┘
+───────────────────────────────┴────────────────────────────────────────────────
+Esc | j/k Fields | c Copy | e Edit | h Handoff | ? | q Quit Estimated using API

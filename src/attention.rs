@@ -16,6 +16,16 @@ pub enum AttentionRank {
     HealthyBusy,
 }
 
+impl AttentionRank {
+    /// Whether the Project Session row presents this rank with an attention marker.
+    pub fn shows_marker(self) -> bool {
+        matches!(
+            self,
+            Self::CriticalContext | Self::SharedWorktreeRisk | Self::WarningContext
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttentionSeverity {
     Warning,
@@ -40,6 +50,18 @@ pub enum AttentionCondition {
         since_ms: i64,
         transition_observed: bool,
     },
+}
+
+impl AttentionCondition {
+    /// Warning/Critical severity is what makes a condition marker-producing.
+    pub fn marker_severity(&self) -> Option<AttentionSeverity> {
+        match self {
+            Self::ContextAlert { severity, .. } | Self::SharedWorktreeRisk { severity, .. } => {
+                Some(*severity)
+            }
+            Self::Idle { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,6 +1,9 @@
 //! Guide 弹窗、主题内容和滚动测量。
 
-use super::{layout::centered_rect, selected_style, theme::Theme, GuideCategory, GuidePane, Ui};
+use super::{
+    layout::centered_rect, provider_mark, selected_style, theme::Theme, GuideCategory, GuidePane,
+    Ui,
+};
 use crate::config::{CRIT_PCT, WARN_PCT};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -118,6 +121,8 @@ fn guide_content(
     theme: Theme,
     active_theme_name: &str,
 ) -> Vec<Line<'static>> {
+    let claude_mark = provider_mark::CLAUDE;
+    let codex_mark = provider_mark::CODEX;
     let heading = |text: &'static str| {
         Line::from(Span::styled(
             text,
@@ -126,7 +131,7 @@ fn guide_content(
                 .add_modifier(Modifier::BOLD),
         ))
     };
-    match category {
+    let lines = match category {
         GuideCategory::Overview => vec![
             heading(category.label()),
             Line::from("SessionMesh is local to this Mac."),
@@ -149,7 +154,7 @@ fn guide_content(
             Line::from("Enter  Inspect or expand"),
             Line::from("Enter  View an indexed linked Successor from Task Detail"),
             Line::from("Esc  Back or close"),
-            Line::from("c  Copy source metadata in Session Detail"),
+            Line::from("c  Copy the selected Session Detail field"),
             Line::from("h  Authorize a Handoff from Session Detail"),
             Line::from("Left/Right  Choose a Successor Provider"),
             Line::from("o  Open a Ready Successor in Terminal.app"),
@@ -170,9 +175,11 @@ fn guide_content(
             Line::from("It changes only SessionMesh; Provider data is unchanged."),
             Line::from("Short Session ID  The last eight characters used when no Alias exists."),
             Line::from("Duplicate Titles include their Short Session ID."),
-            Line::from("e Edit title  Set or clear the selected Session's Alias."),
+            Line::from("e Edit session  Set or clear its local Title and Description."),
             heading("Providers"),
-            Line::from("✦ Claude Code   ◎ Codex CLI"),
+            Line::from(format!(
+                "{claude_mark} Claude Code   {codex_mark} Codex CLI"
+            )),
             heading("Open Session"),
             Line::from("● Busy   ○ Idle   no marker Exited"),
             Line::from("!  The Session currently needs attention."),
@@ -200,22 +207,34 @@ fn guide_content(
             heading(category.label()),
             Line::from("Recent Signals answer: what just changed? They are not current state."),
             heading("Session lifecycle"),
-            Line::from(
-                "CX session1 Busy -> Idle  Request ended; the Open Session is waiting for input.",
-            ),
-            Line::from("CX session1 Busy -> Exited  A running Provider process exited."),
-            Line::from("CX session1 Idle -> Exited  A waiting Provider process exited."),
-            Line::from("CX session1 Exited -> Busy  A Session resumed and is running."),
-            Line::from("CX session1 Exited -> Idle  A Session reopened and is waiting for input."),
+            Line::from(format!(
+                "{codex_mark} session1 Busy -> Idle  Request ended; the Open Session is waiting for input."
+            )),
+            Line::from(format!(
+                "{codex_mark} session1 Busy -> Exited  A running Provider process exited."
+            )),
+            Line::from(format!(
+                "{codex_mark} session1 Idle -> Exited  A waiting Provider process exited."
+            )),
+            Line::from(format!(
+                "{codex_mark} session1 Exited -> Busy  A Session resumed and is running."
+            )),
+            Line::from(format!(
+                "{codex_mark} session1 Exited -> Idle  A Session reopened and is waiting for input."
+            )),
             heading("Current Context"),
-            Line::from("CL session1 Ctx +Warning 120.0k>150.0k  Current Context entered Warning."),
-            Line::from(
-                "CL session1 Ctx +Critical 160.0k>180.0k  Current Context entered Critical.",
-            ),
-            Line::from("CL session1 Ctx -Warning 150.0k>120.0k  The Warning condition cleared."),
-            Line::from(
-                "CL session1 Ctx -Critical 180.0k>160.0k  Critical cleared to Warning or normal.",
-            ),
+            Line::from(format!(
+                "{claude_mark} session1 Ctx +Warning 120.0k>150.0k  Current Context entered Warning."
+            )),
+            Line::from(format!(
+                "{claude_mark} session1 Ctx +Critical 160.0k>180.0k  Current Context entered Critical."
+            )),
+            Line::from(format!(
+                "{claude_mark} session1 Ctx -Warning 150.0k>120.0k  The Warning condition cleared."
+            )),
+            Line::from(format!(
+                "{claude_mark} session1 Ctx -Critical 180.0k>160.0k  Critical cleared to Warning or normal."
+            )),
             Line::from("Signals show before -> after Current Context values."),
             Line::from(
                 "Only Open Sessions with a known Current Context percentage cross thresholds.",
@@ -224,21 +243,27 @@ fn guide_content(
                 "Warning starts at {WARN_PCT:.0}%; Critical starts at {CRIT_PCT:.0}%."
             )),
             heading("Compaction"),
-            Line::from("CL session1 Cmp auto 188.0k>100.0k  Compaction observed."),
-            Line::from("CL session1 Cmp auto 188.0k>100.0k -Critical  Also cleared Critical."),
+            Line::from(format!(
+                "{claude_mark} session1 Cmp auto 188.0k>100.0k  Compaction observed."
+            )),
+            Line::from(format!(
+                "{claude_mark} session1 Cmp auto 188.0k>100.0k -Critical  Also cleared Critical."
+            )),
             heading("Worktree"),
             Line::from(
                 "WT /project  Risk detected  Two or more Open Sessions share a writable Worktree.",
             ),
             Line::from("WT /project  Risk cleared  Fewer than two Open Sessions remain there."),
-            Line::from("Before 1: CL:session1"),
-            Line::from("After 2: CL:session1, CX:session2"),
+            Line::from(format!("Before 1: {claude_mark}:session1")),
+            Line::from(format!(
+                "After 2: {claude_mark}:session1, {codex_mark}:session2"
+            )),
             Line::from("Two Open Sessions trigger Shared Worktree Risk."),
             Line::from("Evidence shows Open Session membership before -> after."),
             Line::from("This is not proof of a file-level or Git conflict."),
-            heading("Prefixes"),
-            Line::from("CL  Claude Code"),
-            Line::from("CX  Codex CLI"),
+            heading("Marks"),
+            Line::from(format!("{claude_mark}  Claude Code")),
+            Line::from(format!("{codex_mark}  Codex CLI")),
             Line::from("WT  Worktree"),
             Line::from("Ctx Current Context"),
             Line::from("Cmp Compaction"),
@@ -257,7 +282,11 @@ fn guide_content(
             Line::from("Recent Signals never include:"),
             Line::from("prompt, response, tool, or source-code content"),
         ],
-    }
+    };
+    lines
+        .into_iter()
+        .map(|line| provider_mark::colorize(line, theme))
+        .collect()
 }
 
 #[cfg(test)]

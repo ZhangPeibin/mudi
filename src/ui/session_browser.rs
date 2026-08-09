@@ -1,6 +1,8 @@
 //! All-page left pane composition for navigation and selected-session facts.
 
-use super::{project_tree, selected_session, Ui};
+use super::{
+    project_tree, region_border_style, region_title_style, selected_session, AllRegion, Ui,
+};
 use crate::app::Snapshot;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -8,9 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 
-const MIN_TREE_HEIGHT: u16 = 4;
-const DETAILS_HEIGHT_NUMERATOR: u32 = 2;
-const DETAILS_HEIGHT_DENOMINATOR: u32 = 5;
+const MIN_TREE_HEIGHT: u16 = 3;
 
 #[derive(Clone, Copy)]
 struct Areas {
@@ -25,10 +25,7 @@ fn areas(area: Rect, snap: &Snapshot, ui: &Ui) -> Areas {
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
     let inner = pane[1];
-    let proportional_details_height = (u32::from(area.height) * DETAILS_HEIGHT_NUMERATOR)
-        .div_ceil(DETAILS_HEIGHT_DENOMINATOR) as u16;
     let details_height = selected_session::preferred_height(snap, ui, inner.width)
-        .max(proportional_details_height)
         .min(inner.height.saturating_sub(MIN_TREE_HEIGHT));
     let sections = Layout::default()
         .direction(Direction::Vertical)
@@ -111,6 +108,7 @@ fn compact_count(count: usize) -> String {
 /// Draw the Project Tree above Selected Session Details in one unframed pane.
 pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
+    let focused = ui.all_region == AllRegion::Now;
     let (project_count, open_session_count) = project_tree::counts(snap);
     let areas = areas(area, snap, ui);
     let full_project_count = project_count.to_string();
@@ -134,22 +132,18 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     f.render_widget(
         Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(theme.border))
+            .border_style(region_border_style(theme, focused))
             .title(Line::from(vec![
                 Span::styled(
                     header_format.project_heading,
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
+                    region_title_style(theme, focused),
                 ),
                 Span::styled(
                     format!(
                         "{}{project_count}{}",
                         header_format.project_count_prefix, header_format.project_count_suffix
                     ),
-                    Style::default()
-                        .fg(theme.foreground)
-                        .add_modifier(Modifier::BOLD),
+                    region_title_style(theme, focused),
                 ),
             ]))
             .title(
@@ -173,7 +167,6 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         snap,
         &ui.project_tree,
         &ui.labels,
-        ui.all_region == super::AllRegion::Now,
         theme,
     );
     selected_session::draw(f, areas.details, snap, ui);

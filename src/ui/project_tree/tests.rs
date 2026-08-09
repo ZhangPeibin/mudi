@@ -62,7 +62,7 @@ fn empty_tree_content_explains_that_no_open_sessions_exist() {
     let theme = ThemeName::SessionMesh.palette();
 
     terminal
-        .draw(|frame| draw(frame, frame.area(), &snapshot, &state, &labels, true, theme))
+        .draw(|frame| draw(frame, frame.area(), &snapshot, &state, &labels, theme))
         .unwrap();
     let rendered = terminal
         .backend()
@@ -140,6 +140,7 @@ fn tree_rows_use_disclosure_triangles_and_provider_icons() {
     assert_eq!(group_prefix(0, false, false), " ▸ ");
 
     let session = unresolved_open_session(Provider::ClaudeCode, "one");
+    let theme = ThemeName::SessionMesh.palette();
     let line = open_session_line(
         &session,
         "one",
@@ -150,11 +151,13 @@ fn tree_rows_use_disclosure_triangles_and_provider_icons() {
             depth: 1,
             selected: true,
         },
-        ThemeName::SessionMesh.palette(),
-    )
-    .to_string();
+        theme,
+    );
+    let mark = line.spans.iter().find(|span| span.content == "✳").unwrap();
+    assert_eq!(mark.style.fg, Some(theme.provider_claude));
+    let line = line.to_string();
 
-    assert!(line.contains("✦"));
+    assert!(line.contains("✳"));
     assert!(line.contains("●"));
     assert!(!line.contains("Claude"));
 }
@@ -200,6 +203,10 @@ fn open_session_operational_evidence_uses_stable_columns() {
     for marker in ['!', '●', '%'] {
         assert_eq!(column(&warning, marker), column(&critical, marker));
     }
+    assert!(warning.contains("75%"));
+    assert!(critical.contains("100%"));
+    assert!(!warning.contains('['));
+    assert!(!critical.contains('['));
 }
 
 #[test]

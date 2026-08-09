@@ -42,9 +42,9 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let workspace = ui.workspace_split.layout(workspace_area);
     session_browser::draw(f, workspace.left, snap, ui);
     editor::draw_workspace(f, workspace.right, snap, ui);
-    split_pane::draw_divider(
+    split_pane::draw_frame(
         f,
-        workspace.divider,
+        workspace,
         ui.workspace_split.is_dragging(),
         ui.theme.palette(),
     );

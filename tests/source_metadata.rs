@@ -189,132 +189,39 @@ fn detail_displays_complete_local_source_metadata_without_shortening() {
 }
 
 #[test]
-fn detail_copy_menu_shows_all_fields_and_marks_unavailable_values() {
-    let snapshot = Snapshot {
-        sessions: vec![session_with_metadata(
-            "/logs/native-session-123.jsonl",
-            None,
-            None,
-            "native-session-123",
-        )],
-        ready: true,
-        ..Snapshot::default()
-    };
-    let mut ui = open_detail(&snapshot);
-
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-
-    let rendered = render(&ui, &snapshot, 80, 30);
-    for expected in [
-        "Copy source metadata",
-        "Source log",
-        "Worktree",
-        "cwd",
-        "Session ID",
-    ] {
-        assert!(
-            rendered.contains(expected),
-            "Copy menu should show {expected:?}"
-        );
-    }
-    assert_eq!(rendered.matches("Unavailable").count(), 2);
-}
-
-#[test]
-fn copy_menu_navigation_skips_unavailable_fields_and_escape_returns_to_detail() {
-    let snapshot = Snapshot {
-        sessions: vec![session_with_metadata(
-            "/logs/native-session-123.jsonl",
-            None,
-            None,
-            "native-session-123",
-        )],
-        ready: true,
-        ..Snapshot::default()
-    };
-    let mut ui = open_detail(&snapshot);
-    for code in [KeyCode::Char('c'), KeyCode::Down] {
-        ui.handle_key(KeyEvent::new(code, KeyModifiers::NONE), &snapshot)
-            .unwrap();
-    }
-
-    let is_selected = |ui: &Ui, text: &str| {
-        rendered_style_at(ui, &snapshot, text)
-            .add_modifier
-            .contains(Modifier::BOLD)
-    };
-    assert!(is_selected(&ui, "Session ID"));
-    for (key, selected) in [
-        (KeyCode::Up, "Source log"),
-        (KeyCode::Char('j'), "Session ID"),
-        (KeyCode::Char('k'), "Source log"),
-        (KeyCode::Down, "Session ID"),
-    ] {
-        ui.handle_key(KeyEvent::new(key, KeyModifiers::NONE), &snapshot)
-            .unwrap();
-        assert!(is_selected(&ui, selected));
-    }
-
-    ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    let rendered = render(&ui, &snapshot, 80, 30);
-    assert!(!rendered.contains("Copy source metadata"));
-    assert!(rendered.contains("Session detail"));
-}
-
-#[test]
-fn copy_menu_requests_the_exact_selected_value_and_returns_to_detail() {
-    let source_path = "/logs/a-very-long/native-session-123.jsonl";
-    let worktree_path = "/worktrees/a-very-long-feature";
-    let cwd = "/worktrees/a-very-long-feature/crates/sessionmesh-ui";
-    let native_id = "native-session-123";
+fn detail_selects_real_fields_and_copies_the_complete_selected_value_directly() {
+    let source_path = "/logs/native-session-123.jsonl";
     let snapshot = Snapshot {
         sessions: vec![session_with_metadata(
             source_path,
-            Some(worktree_path),
-            Some(cwd),
-            native_id,
+            None,
+            None,
+            "native-session-123",
         )],
         ready: true,
         ..Snapshot::default()
     };
+    let mut ui = open_detail(&snapshot);
 
-    for (down_count, field, expected_value) in [
-        (0, "Source log", source_path),
-        (1, "Worktree", worktree_path),
-        (2, "cwd", cwd),
-        (3, "Session ID", native_id),
-    ] {
-        let mut ui = open_detail(&snapshot);
+    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+    assert!(rendered_style_at(&ui, &snapshot, source_path)
+        .add_modifier
+        .contains(Modifier::BOLD));
+
+    assert_eq!(
         ui.handle_key(
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
-            &snapshot,
+            &snapshot
         )
-        .unwrap();
-        for _ in 0..down_count {
-            ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
-                .unwrap();
+        .unwrap(),
+        UiAction::Copy {
+            field: "Source log",
+            value: source_path.into(),
         }
-
-        let action = ui
-            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-            .unwrap();
-
-        assert_eq!(
-            action,
-            UiAction::Copy {
-                field,
-                value: expected_value.to_string(),
-            }
-        );
-        let rendered = render(&ui, &snapshot, 80, 30);
-        assert!(!rendered.contains("Copy source metadata"));
-        assert!(rendered.contains("Session detail"));
-    }
+    );
+    let rendered = render(&ui, &snapshot, 120, 30);
+    assert!(rendered.contains("Session Detail"));
 }
 
 #[test]
@@ -331,27 +238,42 @@ fn clipboard_success_and_failure_are_reported_without_propagating_errors() {
         ..Snapshot::default()
     };
     let mut ui = open_detail(&snapshot);
-    let before = snapshot.sessions[0].clone();
+    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
+        .unwrap();
     let mut clipboard = RecordingClipboard {
         writes: vec![],
         error: None,
     };
 
+    let action = ui
+        .handle_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+            &snapshot,
+        )
+        .unwrap();
+    assert_eq!(
+        action,
+        UiAction::Copy {
+            field: "Source log",
+            value: source_path.into(),
+        }
+    );
     ui.copy_to_clipboard(&mut clipboard, "Source log", source_path);
 
     assert_eq!(clipboard.writes, vec![source_path]);
     assert!(render(&ui, &snapshot, 80, 30).contains("Copied Source log"));
 
     clipboard.error = Some("clipboard unavailable");
-    ui.copy_to_clipboard(&mut clipboard, "cwd", "/worktrees/sessionmesh");
+    ui.copy_to_clipboard(&mut clipboard, "Source log", source_path);
 
     assert!(render(&ui, &snapshot, 80, 30).contains("Copy failed: clipboard unavailable"));
-    assert_eq!(snapshot.sessions[0].id, before.id);
-    assert_eq!(snapshot.sessions[0].source, before.source);
+    assert!(rendered_style_at(&ui, &snapshot, source_path)
+        .add_modifier
+        .contains(Modifier::BOLD));
 }
 
 #[test]
-fn detail_and_copy_expose_source_metadata_without_source_log_contents() {
+fn detail_and_direct_copy_expose_source_metadata_without_source_log_contents() {
     let source_path = std::env::temp_dir().join(format!(
         "sessionmesh-private-source-{}.jsonl",
         std::process::id()
@@ -375,18 +297,16 @@ fn detail_and_copy_expose_source_metadata_without_source_log_contents() {
     };
     let mut ui = open_detail(&snapshot);
     let detail = render(&ui, &snapshot, 120, 30);
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    let menu = render(&ui, &snapshot, 120, 30);
+    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
+        .unwrap();
     let action = ui
-        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+        .handle_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+            &snapshot,
+        )
         .unwrap();
 
     assert!(!detail.contains(private_content));
-    assert!(!menu.contains(private_content));
     assert_eq!(
         action,
         UiAction::Copy {
@@ -396,33 +316,4 @@ fn detail_and_copy_expose_source_metadata_without_source_log_contents() {
     );
 
     std::fs::remove_file(source_path).unwrap();
-}
-
-#[test]
-fn a_value_that_becomes_unavailable_cannot_be_copied() {
-    let mut snapshot = Snapshot {
-        sessions: vec![session_with_metadata(
-            "/logs/native-session-123.jsonl",
-            Some("/worktrees/sessionmesh"),
-            Some("/worktrees/sessionmesh/crates/ui"),
-            "native-session-123",
-        )],
-        ready: true,
-        ..Snapshot::default()
-    };
-    let mut ui = open_detail(&snapshot);
-    for code in [KeyCode::Char('c'), KeyCode::Down] {
-        ui.handle_key(KeyEvent::new(code, KeyModifiers::NONE), &snapshot)
-            .unwrap();
-    }
-    snapshot.sessions[0].worktree = None;
-
-    let action = ui
-        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-
-    assert_eq!(action, UiAction::None);
-    let rendered = render(&ui, &snapshot, 80, 30);
-    assert!(rendered.contains("Copy source metadata"));
-    assert!(rendered.contains("Unavailable"));
 }

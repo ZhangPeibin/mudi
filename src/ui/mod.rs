@@ -3,8 +3,9 @@
 //! 本模块使用 Ratatui 构建紧凑的三页式界面。渲染过程只读取业务快照
 //! [`Snapshot`] 和界面状态 [`Ui`]：前者提供会话、任务和信号等事实，后者保存
 //! 当前页签、选中项、弹窗与滚动位置。提供方特有字段由适配器负责归一化，
-//! UI 自己只持久化 Profile 偏好与用户显式设置的会话标题。
+//! UI 自己只持久化 Profile 偏好与用户显式设置的会话元数据。
 
+mod attention_summary;
 mod chrome;
 mod context;
 mod detail;
@@ -17,6 +18,7 @@ mod overview;
 mod path_display;
 mod project_tree;
 mod provider;
+mod provider_mark;
 mod selected_session;
 mod session_browser;
 mod signals;
@@ -34,6 +36,7 @@ use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
 use chrono::Local;
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::Frame;
 use serde::{Deserialize, Serialize};
@@ -58,6 +61,38 @@ fn selected_style(theme: Theme) -> Style {
         .fg(theme.selected_foreground)
         .bg(theme.selected_background)
         .add_modifier(Modifier::BOLD)
+}
+
+/// Return the shared title treatment that distinguishes Overview keyboard focus.
+fn region_title_style(theme: Theme, focused: bool) -> Style {
+    if focused {
+        Style::default()
+            .fg(theme.selected_foreground)
+            .bg(theme.selected_background)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.muted)
+    }
+}
+
+/// Return the shared border treatment for a focusable Overview region.
+fn region_border_style(theme: Theme, focused: bool) -> Style {
+    Style::default().fg(if focused { theme.accent } else { theme.border })
+}
+
+/// Keep a region's selected row visible without replacing its semantic foreground roles.
+fn retained_selection<'a>(
+    mut line: Line<'a>,
+    selected: bool,
+    width: usize,
+    theme: Theme,
+) -> Line<'a> {
+    if !selected {
+        return line;
+    }
+
+    line.push_span(" ".repeat(width.saturating_sub(line.width())));
+    line.patch_style(Style::default().bg(theme.selected_background))
 }
 
 /// 创建 Handoff 前的确认弹窗状态。
@@ -91,64 +126,51 @@ struct TaskRetryConfirmation {
     end_current_run: bool,
 }
 
-/// 详情页的来源、滚动位置及其子菜单状态。
+/// Session Detail 的来源、字段选择和滚动状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DetailView {
     session: SessionIdentity,
     task_id: Option<String>,
-    scroll: usize,
+    scroll: StateCell<usize>,
+    selected_field: usize,
     origin_signal: Option<RecentSignal>,
-    copy_menu_selected: Option<usize>,
 }
 
-/// 会话标题编辑器的草稿和校验错误。
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TitleEditor {
-    session: SessionIdentity,
-    input: String,
-    error: Option<String>,
-}
-
-/// 会话详情中允许显式复制的本地元数据字段。
+/// `Edit Session` 当前聚焦的元数据字段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CopyField {
-    SourceLog,
-    Worktree,
-    Cwd,
-    SessionId,
+enum SessionEditorField {
+    Title,
+    Description,
 }
 
-impl CopyField {
-    /// 复制菜单中的固定字段顺序。
-    const ALL: [Self; 4] = [Self::SourceLog, Self::Worktree, Self::Cwd, Self::SessionId];
-
-    /// 返回字段在界面上的英文标签。
-    fn label(self) -> &'static str {
+impl SessionEditorField {
+    fn next(self) -> Self {
         match self {
-            Self::SourceLog => "Source log",
-            Self::Worktree => "Worktree",
-            Self::Cwd => "cwd",
-            Self::SessionId => "Session ID",
+            Self::Title => Self::Description,
+            Self::Description => Self::Title,
         }
     }
 
-    /// 从会话中提取字段值；不可用字段返回 `None`，菜单会跳过它。
-    fn value(self, session: &Session) -> Option<Cow<'_, str>> {
-        match self {
-            Self::SourceLog => (!session.source.path.as_os_str().is_empty())
-                .then(|| session.source.path.to_string_lossy()),
-            Self::Worktree => session
-                .worktree
-                .as_ref()
-                .map(|worktree| worktree.root.to_string_lossy()),
-            Self::Cwd => session
-                .cwd
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .map(Cow::Borrowed),
-            Self::SessionId => {
-                (!session.id.is_empty()).then_some(Cow::Borrowed(session.id.as_str()))
-            }
+    fn previous(self) -> Self {
+        self.next()
+    }
+}
+
+/// 会话元数据编辑器的草稿、字段焦点和校验错误。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionEditor {
+    session: SessionIdentity,
+    title: String,
+    description: String,
+    field: SessionEditorField,
+    error: Option<String>,
+}
+
+impl SessionEditor {
+    fn active_input_mut(&mut self) -> &mut String {
+        match self.field {
+            SessionEditorField::Title => &mut self.title,
+            SessionEditorField::Description => &mut self.description,
         }
     }
 }
@@ -308,12 +330,12 @@ pub struct Ui {
     // 文本换行取决于实际视口，所以绘制阶段会回写最近一次测得的最大滚动位置。
     guide_max_scroll: StateCell<usize>,
     /// 编辑器及所有需要显式确认的模态状态。
-    edit_title: Option<TitleEditor>,
+    edit_session: Option<SessionEditor>,
     handoff_confirmation: Option<HandoffConfirmation>,
     task_cancellation_confirmation: Option<TaskCancellationConfirmation>,
     task_deletion_confirmation: Option<TaskDeletionConfirmation>,
     task_retry_confirmation: Option<TaskRetryConfirmation>,
-    /// UI 自己拥有的标题、Profile、主题和短期状态提示。
+    /// UI 自己拥有的 Session 元数据、Profile、主题和短期状态提示。
     labels: SessionLabels,
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
@@ -392,7 +414,7 @@ impl Default for Ui {
             guide_pane: GuidePane::Categories,
             guide_scroll: 0,
             guide_max_scroll: StateCell::new(UNMEASURED_GUIDE_MAX_SCROLL),
-            edit_title: None,
+            edit_session: None,
             handoff_confirmation: None,
             task_cancellation_confirmation: None,
             task_deletion_confirmation: None,
@@ -561,9 +583,9 @@ impl Ui {
     ) -> std::io::Result<UiAction> {
         // 快照可能在两次按键之间变化，先把所有选择位置收回到有效范围。
         self.clamp_selections(snap);
-        // 标题编辑器是最高优先级模态状态，打开时不会泄漏全局快捷键。
-        if self.edit_title.is_some() {
-            self.handle_title_editor_key(key);
+        // Session 编辑器是最高优先级模态状态，打开时不会泄漏全局快捷键。
+        if self.edit_session.is_some() {
+            self.handle_session_editor_key(key);
             return Ok(UiAction::None);
         }
         // 每一种确认框都只接受自身声明的按键，确保一次授权只对应一次操作。
@@ -693,7 +715,7 @@ impl Ui {
             self.handle_guide_key(key)?;
             return Ok(UiAction::None);
         }
-        // 下面按上下文分派普通页面、详情和复制菜单的导航动作。
+        // 下面按上下文分派普通页面和详情的导航动作。
         match key.code {
             crossterm::event::KeyCode::Char('r') => {
                 self.labels.reload();
@@ -709,7 +731,7 @@ impl Ui {
                 self.guide_open = true;
             }
             crossterm::event::KeyCode::Char('e') if self.labels.is_editable() => {
-                self.open_title_editor(snap);
+                self.open_session_editor(snap);
             }
             crossterm::event::KeyCode::Char('h') if self.detail_session(snap).is_some() => {
                 let session = self.detail_session(snap).expect("checked above");
@@ -776,48 +798,18 @@ impl Ui {
                     AllRegion::Tasks => AllRegion::RecentSignals,
                 };
             }
-            crossterm::event::KeyCode::Char('c') if self.detail.is_some() => {
-                let selected = self.detail_session(snap).and_then(|session| {
-                    CopyField::ALL
-                        .iter()
-                        .position(|field| field.value(session).is_some())
-                });
-                if let Some(detail) = self.detail.as_mut() {
-                    detail.copy_menu_selected = selected;
-                }
-            }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.copy_menu_is_open() =>
+                if self.detail_session(snap).is_some() =>
             {
-                self.move_copy_menu_selection(snap, true);
+                detail::move_selected_field(self, snap, true);
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.copy_menu_is_open() =>
+                if self.detail_session(snap).is_some() =>
             {
-                self.move_copy_menu_selection(snap, false);
+                detail::move_selected_field(self, snap, false);
             }
-            crossterm::event::KeyCode::Esc if self.copy_menu_is_open() => {
-                if let Some(detail) = self.detail.as_mut() {
-                    detail.copy_menu_selected = None;
-                }
-            }
-            crossterm::event::KeyCode::Enter if self.copy_menu_is_open() => {
-                let request = self
-                    .detail
-                    .as_ref()
-                    .and_then(|detail| detail.copy_menu_selected)
-                    .and_then(|selected| CopyField::ALL.get(selected).copied())
-                    .and_then(|field| {
-                        self.detail_session(snap).and_then(|session| {
-                            field
-                                .value(session)
-                                .map(|value| (field.label(), value.into_owned()))
-                        })
-                    });
-                if let Some((field, value)) = request {
-                    if let Some(detail) = self.detail.as_mut() {
-                        detail.copy_menu_selected = None;
-                    }
+            crossterm::event::KeyCode::Char('c') if self.detail_session(snap).is_some() => {
+                if let Some((field, value)) = detail::selected_copy_request(snap, self) {
                     return Ok(UiAction::Copy { field, value });
                 }
             }
@@ -924,24 +916,24 @@ impl Ui {
                             native_id: successor.id.clone(),
                         },
                         task_id: None,
-                        scroll: 0,
+                        scroll: StateCell::new(0),
+                        selected_field: 0,
                         origin_signal: None,
-                        copy_menu_selected: None,
                     });
                 }
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail.is_some() =>
+                if self.detail_task(snap).is_some() =>
             {
-                if let Some(detail) = self.detail.as_mut() {
-                    detail.scroll = detail.scroll.saturating_add(1);
+                if let Some(detail) = self.detail.as_ref() {
+                    detail.scroll.set(detail.scroll.get().saturating_add(1));
                 }
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail.is_some() =>
+                if self.detail_task(snap).is_some() =>
             {
-                if let Some(detail) = self.detail.as_mut() {
-                    detail.scroll = detail.scroll.saturating_sub(1);
+                if let Some(detail) = self.detail.as_ref() {
+                    detail.scroll.set(detail.scroll.get().saturating_sub(1));
                 }
             }
             crossterm::event::KeyCode::Esc => {
@@ -1034,46 +1026,6 @@ impl Ui {
             GuideCategory::Signals
         } else {
             GuideCategory::Overview
-        }
-    }
-
-    /// 判断详情页复制菜单当前是否打开。
-    fn copy_menu_is_open(&self) -> bool {
-        self.detail
-            .as_ref()
-            .is_some_and(|detail| detail.copy_menu_selected.is_some())
-    }
-
-    /// 在复制菜单中移动到下一个实际有值的字段。
-    fn move_copy_menu_selection(&mut self, snap: &Snapshot, forward: bool) {
-        let Some(current) = self
-            .detail
-            .as_ref()
-            .and_then(|detail| detail.copy_menu_selected)
-        else {
-            return;
-        };
-        let Some(session) = self.detail_session(snap) else {
-            return;
-        };
-        let next = if forward {
-            CopyField::ALL
-                .iter()
-                .enumerate()
-                .skip(current + 1)
-                .find(|(_, field)| field.value(session).is_some())
-                .map(|(index, _)| index)
-        } else {
-            CopyField::ALL
-                .iter()
-                .enumerate()
-                .take(current)
-                .rev()
-                .find(|(_, field)| field.value(session).is_some())
-                .map(|(index, _)| index)
-        };
-        if let (Some(next), Some(detail)) = (next, self.detail.as_mut()) {
-            detail.copy_menu_selected = Some(next);
         }
     }
 
@@ -1225,8 +1177,8 @@ impl Ui {
         self.project_tree.selected_session(snap)
     }
 
-    /// 为当前 Session 打开标题编辑器，并预填已有 Alias。
-    fn open_title_editor(&mut self, snap: &Snapshot) {
+    /// 为当前 Session 打开元数据编辑器，并预填已有 Alias 和 Description。
+    fn open_session_editor(&mut self, snap: &Snapshot) {
         let Some(session) = self.selected_session(snap) else {
             return;
         };
@@ -1234,25 +1186,44 @@ impl Ui {
             provider: session.provider,
             native_id: session.id.clone(),
         };
-        let input = self
+        let title = self
             .labels
             .alias(session.provider, &session.id)
             .unwrap_or("")
             .to_string();
-        self.edit_title = Some(TitleEditor {
+        let description = self
+            .labels
+            .description(session.provider, &session.id)
+            .unwrap_or("")
+            .to_string();
+        self.edit_session = Some(SessionEditor {
             session: identity,
-            input,
+            title,
+            description,
+            field: SessionEditorField::Title,
             error: None,
         });
     }
 
-    /// 处理标题编辑器的输入、删除、保存和取消。
-    fn handle_title_editor_key(&mut self, key: crossterm::event::KeyEvent) {
+    /// 处理 Session 编辑器的字段切换、输入、保存和取消。
+    fn handle_session_editor_key(&mut self, key: crossterm::event::KeyEvent) {
         match key.code {
-            crossterm::event::KeyCode::Esc => self.edit_title = None,
+            crossterm::event::KeyCode::Esc => self.edit_session = None,
+            crossterm::event::KeyCode::Tab => {
+                if let Some(editor) = self.edit_session.as_mut() {
+                    editor.field = editor.field.next();
+                    editor.error = None;
+                }
+            }
+            crossterm::event::KeyCode::BackTab => {
+                if let Some(editor) = self.edit_session.as_mut() {
+                    editor.field = editor.field.previous();
+                    editor.error = None;
+                }
+            }
             crossterm::event::KeyCode::Backspace => {
-                if let Some(editor) = self.edit_title.as_mut() {
-                    editor.input.pop();
+                if let Some(editor) = self.edit_session.as_mut() {
+                    editor.active_input_mut().pop();
                     editor.error = None;
                 }
             }
@@ -1263,44 +1234,32 @@ impl Ui {
                             | crossterm::event::KeyModifiers::ALT,
                     ) =>
             {
-                if let Some(editor) = self.edit_title.as_mut() {
-                    editor.input.push(character);
+                if let Some(editor) = self.edit_session.as_mut() {
+                    editor.active_input_mut().push(character);
                     editor.error = None;
                 }
             }
             crossterm::event::KeyCode::Enter => {
-                let Some(editor) = self.edit_title.as_ref() else {
+                let Some(editor) = self.edit_session.as_ref() else {
                     return;
                 };
                 let provider = editor.session.provider;
                 let native_id = editor.session.native_id.clone();
-                let alias = editor.input.trim().to_string();
-                let clearing =
-                    alias.is_empty() && self.labels.alias(provider, &native_id).is_some();
-                let result = if clearing {
-                    self.labels.clear_title(provider, &native_id)
-                } else if alias.is_empty() {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Title cannot be empty",
-                    ))
-                } else {
-                    self.labels.set_alias(provider, &native_id, &alias)
-                };
+                let title = editor.title.clone();
+                let description = editor.description.clone();
+                let result = self
+                    .labels
+                    .set_metadata(provider, &native_id, &title, &description);
                 match result {
                     Ok(()) => {
-                        self.edit_title = None;
+                        self.edit_session = None;
                         self.status_notice = Some((
-                            if clearing {
-                                "Title cleared".into()
-                            } else {
-                                "Title saved".into()
-                            },
+                            "Session metadata saved".into(),
                             Instant::now() + Duration::from_secs(2),
                         ));
                     }
                     Err(error) => {
-                        if let Some(editor) = self.edit_title.as_mut() {
+                        if let Some(editor) = self.edit_session.as_mut() {
                             editor.error = Some(error.to_string());
                         }
                     }
@@ -1340,9 +1299,9 @@ impl Ui {
                 native_id: task.source_session_id.clone(),
             },
             task_id: Some(task.id.clone()),
-            scroll: 0,
+            scroll: StateCell::new(0),
+            selected_field: 0,
             origin_signal: None,
-            copy_menu_selected: None,
         });
         (task.state.is_terminal() && task.acknowledged_at_ms.is_none() && !task.is_being_deleted())
             .then(|| UiAction::AcknowledgeTask {
@@ -1361,9 +1320,9 @@ impl Ui {
                             native_id: session.id.clone(),
                         },
                         task_id: None,
-                        scroll: 0,
+                        scroll: StateCell::new(0),
+                        selected_field: 0,
                         origin_signal: None,
-                        copy_menu_selected: None,
                     });
                 }
                 Some(ProviderTarget::Disclosure(disclosure)) => {
@@ -1382,9 +1341,9 @@ impl Ui {
                         native_id: session.id.clone(),
                     },
                     task_id: None,
-                    scroll: 0,
+                    scroll: StateCell::new(0),
+                    selected_field: 0,
                     origin_signal: None,
-                    copy_menu_selected: None,
                 });
             }
             return;
@@ -1411,9 +1370,9 @@ impl Ui {
                                 native_id: session_id.clone(),
                             },
                             task_id: None,
-                            scroll: 0,
+                            scroll: StateCell::new(0),
+                            selected_field: 0,
                             origin_signal: Some(signal.clone()),
-                            copy_menu_selected: None,
                         });
                     }
                 }
@@ -1455,8 +1414,8 @@ impl Ui {
 
 /// 绘制完整终端画面。
 ///
-/// 先处理最小尺寸保护，再划分页头、主内容和页脚；详情页替换主内容，Guide、
-/// 编辑器和确认框按照模态优先级覆盖在最上层。
+/// 先处理最小尺寸保护，再划分页头、主内容和页脚；Session Detail、Guide、
+/// 编辑器和确认框按照模态优先级覆盖在原始页面之上。
 pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     f.render_widget(
@@ -1467,16 +1426,15 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
         modals::draw_terminal_too_small(f, theme);
         return;
     }
-    // 顶层始终保留一行页头和一行页脚，中间区域交给当前页面或详情页。
+    // 顶层始终保留一行页头和一行页脚，中间区域交给当前页面或 Task Detail。
     let screen = layout::screen(f.area());
 
     chrome::draw_header(f, screen.header, snap, ui);
 
-    // 详情页会完整替换当前页签的主内容，但不会遮住全局页头和页脚。
+    // Task Detail stays a full page. Session Detail is drawn later as a modal so its
+    // origin remains visible and can be restored without reconstructing it.
     if let Some(task) = ui.detail_task(snap) {
         tasks::draw_detail(f, screen.content, task, snap, ui);
-    } else if ui.detail.is_some() {
-        detail::draw(f, screen.content, snap, ui);
     } else {
         match ui.tab {
             Tab::All => overview::draw(f, screen.content, snap, ui),

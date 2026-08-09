@@ -10,15 +10,15 @@
  PROJECT│              │Pages                                          │────────
  ▾ sessi│              │1  All                                         │
    ▾ mai│              │2  Claude Code                                 │
-    > ✦ │              │3  Codex CLI                                   │
-      ◎ │              │Current and recent                             │
-   ▾ war│              │NOW shows current conditions.                  │
-      ✦ │              │Recent Signals show transitions.               │
-   ▾ idl│              │                                               │
- DETAILS│              │                                               │
-        │              │                                               │
+    > ✳ │              │3  Codex CLI                                   │
+      ⬡ │              │Current and recent                             │
+ DETAILS│              │NOW shows current conditions.                  │
+ Title  │              │Recent Signals show transitions.               │
+ Descrip│              │                                               │
+ Context│              │                                               │
+ Attenti│              │                                               │
  Provide│              │                                               │
  Worktre└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘
- Model      claude-opus-4-8    │
-                               │
+ Model       claude-opus-4-8   │
+───────────────────────────────┴────────────────────────────────────────────────
 j/k | Left/Right | Enter | e Edit | ? | q Quit                     fixture ready

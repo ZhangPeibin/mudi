@@ -1,6 +1,9 @@
 use super::*;
+use crate::domain::Provider;
 use crate::tasks::OperationTaskState;
+use crate::ui::theme::ThemeName;
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 use std::path::PathBuf;
 
@@ -43,16 +46,18 @@ fn task(state: OperationTaskState) -> OperationTask {
     }
 }
 
-fn render(width: u16, tasks: &[OperationTask]) -> String {
+fn render_buffer(width: u16, tasks: &[OperationTask]) -> Buffer {
     let backend = TestBackend::new(width, 8);
     let mut terminal = Terminal::new(backend).unwrap();
     let ui = Ui::default();
     terminal
         .draw(|frame| draw_panel(frame, frame.area(), tasks, 3_000, &ui))
         .unwrap();
-    terminal
-        .backend()
-        .buffer()
+    terminal.backend().buffer().clone()
+}
+
+fn render(width: u16, tasks: &[OperationTask]) -> String {
+    render_buffer(width, tasks)
         .content()
         .iter()
         .map(|cell| cell.symbol())
@@ -63,7 +68,7 @@ fn render(width: u16, tasks: &[OperationTask]) -> String {
 fn compact_panel_prioritizes_task_identity_and_state() {
     let rendered = render(27, &[task(OperationTaskState::Queued)]);
 
-    assert!(rendered.contains("CL:"));
+    assert!(rendered.contains("✳:"));
     assert!(rendered.contains("Queued"));
     assert!(!rendered.contains("Handoff"));
 }
@@ -72,6 +77,21 @@ fn compact_panel_prioritizes_task_identity_and_state() {
 fn wide_panel_keeps_the_handoff_label() {
     let rendered = render(40, &[task(OperationTaskState::Ready)]);
 
-    assert!(rendered.contains("NEW Handoff CL:"));
+    assert!(rendered.contains("NEW Handoff ✳:"));
     assert!(rendered.contains("Ready"));
+}
+
+#[test]
+fn task_provider_mark_uses_its_brand_color() {
+    let buffer = render_buffer(40, &[task(OperationTaskState::Queued)]);
+    let mark = buffer
+        .content()
+        .iter()
+        .find(|cell| cell.symbol() == provider_mark::CLAUDE)
+        .unwrap();
+
+    assert_eq!(
+        mark.style().fg,
+        Some(ThemeName::SessionMesh.palette().provider_claude)
+    );
 }
