@@ -61,9 +61,9 @@ _Avoid:_ Provider title, Project label, Current Task.
 
 ## Session Description
 
-Stable, user-authored metadata explaining why a Managed Session was created. It remains
-associated with that Session across Current Runs, is not live status, and is not inherited
-by a distinct Successor Session.
+Stable, user-authored local metadata explaining why a Session exists. It may be attached to
+any observed or Managed Session, remains associated with that Session across Current Runs,
+is not live status, and is not inherited by a distinct Successor Session.
 
 _Avoid:_ Current Task, latest prompt, generated summary.
 

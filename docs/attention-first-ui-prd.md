@@ -7,7 +7,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Last updated | 2026-08-02 |
+| Last updated | 2026-08-09 |
 | Product phase | Post-v1 exploration |
 | Related baseline | `docs/spec.md` |
 | Assisted Handoff | `docs/assisted-handoff-prd.md` |
@@ -228,18 +228,22 @@ existing regions, and the explicitly authorized control extension adds a third:
 
 | Region | Status | Responsibility |
 |---|---|---|
-| `NOW` | Confirmed | Open Sessions, grouped by Project |
+| `NOW` | Confirmed | Open Sessions grouped by Project, with compact facts for the selected Session |
 | `RECENT SIGNALS` | Confirmed | A short list of meaningful recent metadata changes |
 | `TASKS` | Confirmed | Time-ordered Operation Tasks and their current execution states |
 | Reserved upper-left region | Confirmed empty | Remains unlabelled and unassigned |
 
-The page has a compact upper status strip and a full-width lower `PROJECTS` (`NOW`)
-region. The status strip remains eight rows high at the supported full and compact target
-sizes. Its left third stays empty by design; the remaining right side places
-`RECENT SIGNALS` and `TASKS` next to each other with equal widths. Neither status panel
-expands leftward merely because it has more items. `PROJECTS` owns all remaining height
-and the complete page width.
-Compact-width degradation and Task navigation are specified separately.
+The page has a compact upper status strip and a lower workspace that owns all remaining
+height and the complete page width. The status strip remains eight rows high at the
+supported full and compact target sizes. Its left third stays empty by design; the
+remaining right side places `RECENT SIGNALS` and `TASKS` next to each other with equal
+widths. Neither status panel expands leftward merely because it has more items.
+
+One vertical divider splits the lower workspace into a left inventory and the Session
+Workspace. The left inventory places `PROJECT` above the compact selected-session
+`DETAILS`, separated by one horizontal rule. `DETAILS` sizes to its content at roughly the
+lower third of the inventory, and `PROJECT` receives the remaining height. Compact-width
+degradation and Task navigation are specified separately.
 
 ### 8.3 Operation Task state model
 
@@ -586,7 +590,37 @@ already reached.
 input, and it carries a neutral Attention Condition. A transition from Busy to Idle is a
 Recent Signal; repeated observations of an unchanged Idle Session are not new signals.
 
-### 8.19 Main-screen acceptance criteria
+### 8.19 Selected Session Details
+
+**Status: Confirmed**
+
+The left inventory keeps a compact `DETAILS` section below `PROJECT` for the currently
+selected Open Session. It complements the Tree row instead of becoming a second Session
+Detail view.
+
+- Size the section from its configured content at roughly one third of the left inventory
+  height. Give the remaining height to `PROJECT`, but do not remove configured detail rows
+  merely to preserve the approximate ratio.
+- Put the first field immediately below the titled top rule; do not reserve a blank row
+  below `DETAILS`.
+- Render field labels and values at the terminal's normal text size and weight. The title
+  may remain emphasized; field labels are not bold.
+- Keep Provider, Worktree or Directory, model, eligible Current Run Usage, and active Task
+  facts where available. Long horizontal values may use predictable truncation because
+  their complete values remain available in Session Detail.
+- When the selected Session's Tree row displays `!`, add an `Attention` row that explains
+  the highest-priority Warning or Critical condition that produced the marker. Use the
+  confirmed Attention ordering rather than a separate display-only priority.
+- Format the primary cause compactly, for example `Critical Context · 90%` or
+  `Shared Worktree Risk · 2 Sessions`. When more Warning or Critical causes exist, append
+  `+N`, where `N` counts the remaining causes. Session Detail lists every current Attention
+  Condition with its evidence.
+- Render Current Context with the compact shared progress component from `UI-008`.
+
+The `!` marker and its explanation are informational. Neither authorizes a Control
+Operation or changes the explicit authorization boundary.
+
+### 8.20 Main-screen acceptance criteria
 
 - `NOW` does not consume the entire terminal when sufficient width and height are
   available for multiple regions.
@@ -612,7 +646,7 @@ Recent Signal; repeated observations of an unchanged Idle Session are not new si
 - `Tab` and `Shift+Tab` move focus among `TASKS`, `NOW`, and `RECENT SIGNALS`; the focused
   region is visibly identified and each list retains its own selected row.
 - `Enter` on a Task row opens its Task detail and state-appropriate actions.
-- `Enter` on a Session-scoped Recent Signal opens that Session's full-page Detail.
+- `Enter` on a Session-scoped Recent Signal opens that Session's Detail modal.
 - `Enter` on a Shared Worktree Risk Signal switches to page `1` and focuses the matching
   Worktree in `NOW`. If the risk has cleared and the Worktree no longer contains an Open
   Session, SessionMesh stays on the Signal and briefly reports
@@ -694,22 +728,31 @@ Session Detail does not repeat `RECENT SIGNALS`, add a Recent Transitions list, 
 a Signal timeline. Compactions remain because they are provider-recorded transcript
 metadata that can be rebuilt independently of SessionMesh's process-lifetime Signals.
 
-### UI-013 - Full-page Session Detail
+### UI-013 - Session Detail modal
 
 **Status: Confirmed**
 
-`Inspect` opens Session Detail as a full-page child view in the content area, not a modal
-or centered overlay. The persistent `[1] [2] [3]` navigation remains visible and does not
-gain a fourth target.
+`Inspect` opens Session Detail as a centered modal over the originating page. The modal is
+approximately 80% of the terminal width and height, with a maximum width of about 100
+columns. The originating page remains visible behind a visually dimmed backdrop so the
+user retains location context.
 
 - `Enter` from a Session row in `NOW`, a Session-scoped Recent Signal, or either Provider
   page opens the same Session Detail identified by Provider plus native Session ID.
 - `Esc` returns to the originating page with its selection, scroll position, and expanded
   `OLDER SESSIONS` disclosures restored.
 - `1`, `2`, or `3` leaves Detail and navigates directly to that top-level page.
-- Detail scrolls vertically with `Up/Down` or `j/k` when its content exceeds the viewport.
-- The content identifies the Provider, Project, and Session so the user retains location
-  context without relying on a modal backdrop.
+- `Up/Down` or `j/k` selects value-bearing fields and automatically scrolls to keep the
+  selected field visible. This selection stays within the current modal and never switches
+  Session. Section headings, separators, progress visuals, and narrative text are not
+  selectable.
+- `c` copies only the selected field's complete underlying value. It does not include the
+  field label or a trailing newline and does not open another modal or menu.
+- `Enter` has no action inside Session Detail.
+- `h` starts the separately specified explicit Handoff authorization flow for the Session;
+  opening Detail or selecting a field never authorizes that operation.
+- The content identifies the Provider, Project, and Session and renders all current
+  Attention Conditions with their evidence.
 
 ### UI-009 - Current-run and transcript-lifetime usage
 
@@ -757,12 +800,15 @@ normalized UI `Session` does not retain the source path. Session Detail displays
 paths even when compact lists truncate them. SessionMesh must not read or display raw JSONL
 contents, prompt/response content, tool content, or source-code content through this view.
 
-Pressing `c` in Session Detail opens a Copy menu containing available values for source-log
-path, Worktree path, `cwd`, and native Session ID. `Up/Down` or `j/k` selects a field,
-`Enter` writes its complete untruncated value to the macOS clipboard, and `Esc` cancels.
-Unavailable values are disabled. The copied value contains no field label or trailing
-newline; success or failure appears briefly in the status line. The Copy command never
-reads or copies raw JSONL or source-code content.
+Source-log path, Worktree path, `cwd`, and native Session ID are value-bearing fields in
+Session Detail when available. `Up/Down` or `j/k` includes them in the normal field
+selection order, and `c` writes the selected field's complete untruncated value directly
+to the macOS clipboard. Unavailable values are not selectable. The copied value contains
+no field label or trailing newline; success or failure appears briefly in the status line.
+The Copy command never reads or copies raw JSONL or source-code content.
+
+Session Detail has no Copy menu, Copy-menu state, nested Copy overlay, or Enter-to-copy
+interaction.
 
 ## 11. Visual language
 
@@ -812,7 +858,9 @@ the only evidence.
 - Prefer rows, tables, lanes, and inspectors over a card-heavy dashboard.
 - Use indentation, compact headings, and aligned columns for the
   `Project -> Worktree -> Session` hierarchy. Borders frame major regions such as `NOW`,
-  `RECENT SIGNALS`, and Session Detail, not each Project, Worktree, or Session.
+  `RECENT SIGNALS`, `TASKS`, and the Session Detail modal, not each Project, Worktree, or
+  Session. One horizontal rule separates `PROJECT` from inline `DETAILS`; one vertical
+  divider separates the lower inventory from the Session Workspace.
 - Keep headings compact and optimized for scanning.
 - Do not hide required evidence behind color alone.
 - Truncate long project/model/session values predictably and expose full values in detail.
@@ -825,9 +873,10 @@ the only evidence.
 
 Use `120x30` as the full-layout target and `80x24` as the hard minimum. At both targets,
 the compact upper status strip keeps its left third empty. The right two-thirds are split
-equally between `RECENT SIGNALS` on the left and `TASKS` on the right. The full-width lower
-`PROJECTS` region owns the remaining height. Narrow layouts degrade fields in this order:
-shorten Worktree path, hide model, hide last activity, replace the Context bar with its
+equally between `RECENT SIGNALS` on the left and `TASKS` on the right. The lower workspace
+owns the remaining height and places `PROJECT` plus inline `DETAILS` to the left of the
+Session Workspace. Narrow layouts degrade fields in this order: shorten Worktree path,
+hide model, hide last activity, reduce the applicable Context presentation to its text
 percentage, then shorten status-row evidence.
 
 Attention kind and severity, Project and Worktree identity, Session State, Provider,
@@ -840,34 +889,60 @@ dimensions plus Quit; do not attempt the normal layout.
 The bounds are locked by deterministic production Ratatui renders under
 `tests/fixtures/production-renders/`, asserted through the public production UI in
 `tests/production_renders.rs`. Both sizes preserve the required hierarchy, state, Context
-percentage, selection, and primary action without overlap; compact Detail uses vertical
-scrolling only for lower-priority Compaction rows after identity, Usage, and complete
-wrapped source metadata remain available.
+percentage, selection, and primary action without overlap. Session Detail keeps identity,
+Usage, and complete wrapped source metadata reachable through selected-field navigation
+and automatic scrolling.
 
 ### UI-008 - Context progress bar
 
 **Status: Confirmed**
 
-Each Session row shows Current Context occupancy as a stable-width progress bar plus a
-text percentage. The bar represents `ContextState.tokens / ContextState.window`; it must
-never represent cumulative processed Usage.
+One shared component renders Current Context occupancy from
+`ContextState.tokens / ContextState.window`; it must never represent cumulative processed
+Usage. It has two progress-bar forms:
+
+- inline `DETAILS` uses a compact bar plus percentage;
+- the Session Detail modal uses a wider bar plus token count, context window, and
+  percentage.
+
+The `PROJECT` Tree keeps its existing aligned text percentage so the hierarchy remains
+dense. It uses the same threshold semantics and truthful percentage as the shared
+component.
 
 Theme roles for Open Sessions follow the Context thresholds:
 
 - below 70% - Context normal;
-- 70% through 84% - Context Warning;
+- 70% or above but below 85% - Context Warning;
 - 85% and above - Context Critical.
 
 The default `sessionmesh` Theme maps these roles to green, amber/yellow, and red. Other
 Themes may use different accessible colors without changing the thresholds or labels.
 
-The percentage remains visible so color is not the only signal. When the context window
-is unknown, the UI renders a neutral/gray `N/A` state and does not invent a bar ratio. An
-Exited session retains its last known percentage but uses neutral/gray presentation so
-historical context does not look like a current alert.
+The percentage remains visible so color is not the only signal. Values above 100% render a
+full bar while retaining the truthful percentage. When the context window is unknown, the
+UI renders a neutral empty bar with `N/A` and does not invent a ratio; if the token count is
+known, the Session Detail modal still displays it. An Exited session retains its last
+known percentage but uses neutral/gray presentation so historical context does not look
+like a current alert.
 
-On terminals too narrow for the stable-width bar, the Context column may degrade to the
-text percentage or `N/A` while preserving the same threshold semantics.
+When inline `DETAILS` or the modal is too narrow for its stable-width bar, that Context
+presentation may degrade to the text percentage or `N/A` while preserving the same
+threshold semantics.
+
+### UI-014 - Explicit region focus
+
+**Status: Confirmed**
+
+`PROJECT`, `RECENT SIGNALS`, and `TASKS` use one shared focus presentation:
+
+- the focused region title uses the selected background, highlighted foreground, and bold
+  text, and its top rule or border uses the accent color;
+- an unfocused region title uses muted text with no title background;
+- each region retains its own selected row, whose shared dark selection background does
+  not change merely because the region gains or loses focus.
+
+The same rules apply to all three regions so `Tab` and `Shift+Tab` always produce a clear,
+consistent focus change.
 
 ## 12. Keyboard model
 
@@ -882,7 +957,8 @@ Global commands:
 - `?` - open the contextual Guide;
 - `r` - refresh;
 - `q` - quit;
-- `Esc` - return from Session Detail or close the current inspector/Guide layer.
+- `Esc` - close Session Detail and restore its origin state, or close the current
+  inspector/Guide layer.
 
 List and timeline commands:
 
@@ -892,16 +968,14 @@ List and timeline commands:
 
 Session Detail commands:
 
-- `Up/Down` or `j/k` - scroll vertically;
-- `c` - open the source-metadata Copy menu;
+- `Up/Down` or `j/k` - select the previous/next value-bearing field and automatically
+  scroll it into view;
+- `c` - copy the selected field's complete value directly, without its label or a trailing
+  newline;
+- `h` - start the explicit Handoff authorization flow;
+- `Enter` - no action;
 - `1/2/3` - leave Detail for a top-level page;
 - `Esc` - return to the originating page and restore its view state.
-
-Copy menu commands:
-
-- `Up/Down` or `j/k` - select an available metadata field;
-- `Enter` - copy its complete value to the macOS clipboard;
-- `Esc` - close the menu without copying.
 
 ## 13. Privacy and action boundaries
 
@@ -931,8 +1005,9 @@ These are product dependencies, not an implementation plan:
 2. **State transitions** - current snapshots show latest state; Recent Signals require
    de-duplicated transition events or equivalent temporal metadata.
 3. **Detail navigation** - `NOW`, `RECENT SIGNALS`, and Provider pages need a stable
-   Provider-plus-native-Session-ID route into the same full-page Detail, plus restoration
-   of the originating view state on return.
+   Provider-plus-native-Session-ID route into the same centered Detail modal, selected-field
+   navigation with automatic scrolling, and restoration of the originating view state on
+   return.
 4. **Clipboard integration** - Session Detail needs an explicit user-triggered macOS
    clipboard write for selected source metadata, including status feedback on failure.
 5. **Run boundaries** - Current Run Usage needs a provider-native live invocation
@@ -1030,8 +1105,8 @@ and direct usability observation.
 | 2026-08-01 | Replace small Help with one global, contextual, two-pane Guide. | Confirmed | Every category remains available while the initial selection follows the user's current page or region. |
 | 2026-08-01 | Remove runtime `t` Theme cycling while preserving Theme loading and `--theme`. | Confirmed | Theme changes are low-frequency settings; removing the shortcut prevents accidental changes and frees footer space. |
 | 2026-08-02 | Expose the selected item's primary action in the persistent contextual Footer without repeating it on every Session row. | Confirmed | The selection cursor identifies the target and `Enter Inspect` teaches the command without consuming row width with repeated action text. |
-| 2026-07-30 | Render Session Detail as a full-page child view instead of a centered overlay. | Confirmed | Detail needs room for evidence, source metadata, scoped Usage, and Compactions; persistent numeric navigation and origin-state restoration keep it connected to the three top-level pages. |
-| 2026-07-30 | Add a `c` Copy menu for source paths and native Session ID in Session Detail. | Confirmed | Explicit field selection copies complete metadata values without exposing raw JSONL or modifying Provider Sessions. |
+| 2026-07-30 | Render Session Detail as a full-page child view instead of a centered overlay. | Superseded | Replaced on 2026-08-09 by a centered modal that preserves origin context while keeping complete evidence reachable through selected-field navigation and scrolling. |
+| 2026-07-30 | Add a `c` Copy menu for source paths and native Session ID in Session Detail. | Superseded | Replaced on 2026-08-09 by direct copy of the selected value-bearing field; the extra menu and Enter-to-copy interaction are removed. |
 | 2026-07-30 | Reserve `1/2/3` for top-level pages and use `Tab`/`Shift+Tab` for focus within the current page. | Confirmed | Numeric page navigation is already direct; local focus traversal makes the independent `NOW` and `RECENT SIGNALS` selections reachable without duplicating page navigation. |
 | 2026-07-30 | Show condition-specific evidence directly in `NOW`, including a Context progress bar plus percentage. | Confirmed | Users should be able to trust Context, Shared Worktree Risk, Idle, and healthy Busy classifications before opening Detail; compact layouts may degrade the bar to percentage text. |
 | 2026-07-30 | Use compact hierarchical rows and reserve borders for major regions. | Confirmed | Dense alignment keeps multiple concurrent Sessions comparable in one terminal viewport without turning Projects, Worktrees, and Sessions into nested cards. |
@@ -1041,7 +1116,7 @@ and direct usability observation.
 | 2026-08-02 | Order one unified Task timeline by its most recent execution-state transition. | Confirmed | Meaningful transitions, especially new terminal outcomes, become immediately visible without heartbeats causing row movement or state grouping fragmenting time order. |
 | 2026-08-02 | Record Task Acknowledgement only after deliberate user interaction. | Confirmed | Notification delivery, panel rendering, and startup loading cannot prove that the user saw a terminal outcome; unread presentation must not alter execution truth. |
 | 2026-08-02 | Keep every retained Task in the scrollable `TASKS` panel after acknowledgement. | Confirmed | `Close for Later` must leave the result discoverable without creating a separate history surface; only retention or explicit deletion removes a Task. |
-| 2026-08-04 | Rebalance the home page into side-by-side Signals and Tasks in a compact upper-right status area above a full-width `PROJECTS` region. | Confirmed | Recent Signals and Operation Tasks are supporting status metadata, while the current Project inventory is the core surface; the upper-left region remains reserved and empty. |
+| 2026-08-04 | Rebalance the home page into side-by-side Signals and Tasks in a compact upper-right status area above a full-width `PROJECTS` region. | Superseded | The upper status layout remains, but the lower area was replaced by the split inventory and Session Workspace confirmed on 2026-08-09. |
 | 2026-08-02 | Apply fixed deadlines of 30 seconds in `Queued`, 2 hours in `Waiting`, and 30 minutes in `Running`. | Confirmed | Startup failures should surface quickly, stale control authorization must expire, and runaway Provider execution must begin graceful termination without force killing or automatic retry. |
 | 2026-08-02 | Treat Task cancellation as an intent whose outcome is determined by reconciliation evidence. | Confirmed | A valid result, verified cancellation, and uncertain outcome must remain distinguishable; cancellation must not force-kill processes, close the user's shell, or conceal uncertainty. |
 | 2026-08-02 | Implement manual retry as a newly authorized Task linked to an immutable terminal predecessor. | Confirmed | Reopening or overwriting the original would erase evidence, reuse stale assumptions, and risk duplicate execution while an Interrupted Provider might still be live. |
@@ -1051,6 +1126,11 @@ and direct usability observation.
 | 2026-08-02 | Link every Successor Session through launched-process evidence rather than a preassigned or guessed ID. | Confirmed | One external contract keeps Provider differences inside adapters, records only Sessions that actually start, and avoids false association when several Sessions share a working directory. |
 | 2026-08-02 | Retain Tasks and Artifacts until the user explicitly deletes a terminal Task. | Confirmed | Automatic expiry would violate `Close for Later`; explicit irreversible deletion provides privacy control without touching source or Successor Sessions. |
 | 2026-08-02 | Keep Handoff execution, terminal launch, and Successor linkage as independent outcomes. | Confirmed | Worker interruption must not fabricate an Artifact, and launch or linkage failure after `Ready` must not invalidate an already verified Handoff Result. |
+| 2026-08-09 | Keep compact selected-session `DETAILS` below `PROJECT`, size it from content, and explain the Tree's `!` marker with the highest-priority Attention cause plus an additional-cause count. | Confirmed | The inline facts remain compact while making warning and critical markers understandable without opening the complete Detail surface. |
+| 2026-08-09 | Split the lower workspace with one vertical divider, placing `PROJECT` and inline `DETAILS` in the left inventory and the Session Workspace on the right. | Confirmed | One structural divider and one internal Details rule preserve functional grouping without presenting the workspace as two unrelated framed cards. |
+| 2026-08-09 | Reuse one Current Context progress component in compact inline `DETAILS` and the wider Session Detail modal while keeping the Project Tree's aligned percentage. | Confirmed | The two evidence surfaces share thresholds and unknown/overflow behavior without widening the dense hierarchy. |
+| 2026-08-09 | Open Session Detail as a centered, dimmed-backdrop modal whose value-bearing fields are selected with vertical keys and copied directly with `c`. | Confirmed | The modal preserves page context; direct value copy removes an unnecessary nested menu while retaining complete untruncated metadata access. |
+| 2026-08-09 | Apply one explicit focused-region style to `PROJECT`, `RECENT SIGNALS`, and `TASKS`. | Confirmed | A highlighted title and accent top rule make `Tab` movement visible while the shared row-selection background remains stable. |
 
 ## 18. Adding the next requirement
 
