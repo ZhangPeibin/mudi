@@ -1,4 +1,4 @@
-//! Persistent, SessionMesh-owned names for provider-native Sessions.
+//! Persistent, SessionMesh-owned metadata for provider-native Sessions.
 
 use crate::domain::Provider;
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
+const LEGACY_SCHEMA_VERSION: u32 = 1;
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -24,6 +25,8 @@ struct SessionKey {
 struct LabelFile {
     version: u32,
     aliases: Vec<AliasRecord>,
+    #[serde(default)]
+    descriptions: Vec<DescriptionRecord>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,11 +36,25 @@ struct AliasRecord {
     alias: String,
 }
 
-/// Authoritative local Session Alias storage.
+#[derive(Debug, Serialize, Deserialize)]
+struct DescriptionRecord {
+    provider: String,
+    session_id: String,
+    description: String,
+}
+
+#[derive(Debug, Default)]
+struct SessionMetadata {
+    aliases: HashMap<SessionKey, String>,
+    descriptions: HashMap<SessionKey, String>,
+}
+
+/// Authoritative local Session Alias and Description storage.
 #[derive(Debug, Default)]
 pub struct SessionLabels {
     path: Option<PathBuf>,
     aliases: HashMap<SessionKey, String>,
+    descriptions: HashMap<SessionKey, String>,
     load_error: Option<String>,
 }
 
@@ -45,28 +62,31 @@ impl SessionLabels {
     /// Load a Label Store. A missing file is an empty store.
     pub fn load(path: impl AsRef<Path>) -> Self {
         let path = path.as_ref().to_path_buf();
-        let (aliases, load_error) = match fs::read(&path) {
+        let (metadata, load_error) = match fs::read(&path) {
             Ok(contents) => match decode(&contents) {
-                Ok(aliases) => (aliases, None),
+                Ok(metadata) => (metadata, None),
                 Err(error) => (
-                    HashMap::new(),
+                    SessionMetadata::default(),
                     Some(format!("Label Store error at {}: {error}", path.display())),
                 ),
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (HashMap::new(), None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                (SessionMetadata::default(), None)
+            }
             Err(error) => (
-                HashMap::new(),
+                SessionMetadata::default(),
                 Some(format!("Label Store error at {}: {error}", path.display())),
             ),
         };
         Self {
             path: Some(path),
-            aliases,
+            aliases: metadata.aliases,
+            descriptions: metadata.descriptions,
             load_error,
         }
     }
 
-    /// Whether persistent Alias edits are currently safe.
+    /// Whether persistent Session metadata edits are currently safe.
     pub fn is_editable(&self) -> bool {
         self.load_error.is_none()
     }
@@ -86,6 +106,16 @@ impl SessionLabels {
     /// Return the user-authored Alias for one Session.
     pub fn alias(&self, provider: Provider, native_id: &str) -> Option<&str> {
         self.aliases
+            .get(&SessionKey {
+                provider,
+                native_id: native_id.to_string(),
+            })
+            .map(String::as_str)
+    }
+
+    /// Return the user-authored Description for one Session.
+    pub fn description(&self, provider: Provider, native_id: &str) -> Option<&str> {
+        self.descriptions
             .get(&SessionKey {
                 provider,
                 native_id: native_id.to_string(),
@@ -148,8 +178,8 @@ impl SessionLabels {
             return Err(std::io::Error::other(error.clone()));
         }
         let alias = validate_alias(alias)?;
-        let mut next = self.latest_aliases()?;
-        next.insert(
+        let mut next = self.latest_metadata()?;
+        next.aliases.insert(
             SessionKey {
                 provider,
                 native_id: native_id.to_string(),
@@ -157,44 +187,76 @@ impl SessionLabels {
             alias,
         );
         self.save(&next)?;
-        self.aliases = next;
+        self.publish(next);
         Ok(())
     }
 
-    /// Remove all SessionMesh-owned Labels for one Session.
+    /// Remove the user-authored Alias for one Session without changing its Description.
     pub fn clear_title(&mut self, provider: Provider, native_id: &str) -> std::io::Result<()> {
         if let Some(error) = &self.load_error {
             return Err(std::io::Error::other(error.clone()));
         }
-        let mut next = self.latest_aliases()?;
-        next.remove(&SessionKey {
+        let mut next = self.latest_metadata()?;
+        next.aliases.remove(&SessionKey {
             provider,
             native_id: native_id.to_string(),
         });
         self.save(&next)?;
-        self.aliases = next;
+        self.publish(next);
         Ok(())
     }
 
-    fn latest_aliases(&self) -> std::io::Result<HashMap<SessionKey, String>> {
+    /// Atomically replace the user-authored Title and Description for one Session.
+    /// Empty values remove the corresponding local metadata.
+    pub fn set_metadata(
+        &mut self,
+        provider: Provider,
+        native_id: &str,
+        title: &str,
+        description: &str,
+    ) -> std::io::Result<()> {
+        if let Some(error) = &self.load_error {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        let title = validate_optional_alias(title)?;
+        let description = validate_description(description)?;
+        let key = SessionKey {
+            provider,
+            native_id: native_id.to_string(),
+        };
+        let mut next = self.latest_metadata()?;
+        replace_optional(&mut next.aliases, key.clone(), title);
+        replace_optional(&mut next.descriptions, key, description);
+        self.save(&next)?;
+        self.publish(next);
+        Ok(())
+    }
+
+    fn latest_metadata(&self) -> std::io::Result<SessionMetadata> {
         let Some(path) = &self.path else {
-            return Ok(self.aliases.clone());
+            return Ok(SessionMetadata {
+                aliases: self.aliases.clone(),
+                descriptions: self.descriptions.clone(),
+            });
         };
         match fs::read(path) {
             Ok(contents) => decode(&contents).map_err(std::io::Error::other),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(SessionMetadata::default())
+            }
             Err(error) => Err(error),
         }
     }
 
-    fn save(&self, aliases_by_session: &HashMap<SessionKey, String>) -> std::io::Result<()> {
+    fn save(&self, metadata: &SessionMetadata) -> std::io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };
         if let Some(parent) = path.parent() {
             create_private_dir(parent)?;
         }
-        let mut aliases = aliases_by_session
+        let mut aliases = metadata
+            .aliases
             .iter()
             .map(|(key, alias)| AliasRecord {
                 provider: key.provider.as_str().to_string(),
@@ -207,12 +269,32 @@ impl SessionLabels {
                 .cmp(&right.provider)
                 .then_with(|| left.session_id.cmp(&right.session_id))
         });
+        let mut descriptions = metadata
+            .descriptions
+            .iter()
+            .map(|(key, description)| DescriptionRecord {
+                provider: key.provider.as_str().to_string(),
+                session_id: key.native_id.clone(),
+                description: description.clone(),
+            })
+            .collect::<Vec<_>>();
+        descriptions.sort_by(|left, right| {
+            left.provider
+                .cmp(&right.provider)
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
         let contents = serde_json::to_vec_pretty(&LabelFile {
             version: SCHEMA_VERSION,
             aliases,
+            descriptions,
         })
         .map_err(std::io::Error::other)?;
         atomic_write_private_file(path, &contents)
+    }
+
+    fn publish(&mut self, metadata: SessionMetadata) {
+        self.aliases = metadata.aliases;
+        self.descriptions = metadata.descriptions;
     }
 }
 
@@ -243,6 +325,46 @@ fn validate_alias(alias: &str) -> std::io::Result<String> {
         ));
     }
     Ok(alias.to_string())
+}
+
+fn validate_optional_alias(alias: &str) -> std::io::Result<Option<String>> {
+    if alias.trim().is_empty() {
+        Ok(None)
+    } else {
+        validate_alias(alias).map(Some)
+    }
+}
+
+fn validate_description(description: &str) -> std::io::Result<Option<String>> {
+    let description = description.trim();
+    if description.is_empty() {
+        return Ok(None);
+    }
+    if description.chars().any(char::is_control) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Description must be one line without control characters",
+        ));
+    }
+    if description.chars().count() > 240 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Description must be 240 characters or fewer",
+        ));
+    }
+    Ok(Some(description.to_string()))
+}
+
+fn replace_optional(
+    values: &mut HashMap<SessionKey, String>,
+    key: SessionKey,
+    value: Option<String>,
+) {
+    if let Some(value) = value {
+        values.insert(key, value);
+    } else {
+        values.remove(&key);
+    }
 }
 
 fn unique_short_session_ids(sessions: &[(Provider, &str)]) -> Vec<String> {
@@ -331,15 +453,16 @@ fn atomic_write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()
     result
 }
 
-fn decode(contents: &[u8]) -> Result<HashMap<SessionKey, String>, String> {
+fn decode(contents: &[u8]) -> Result<SessionMetadata, String> {
     let file = serde_json::from_slice::<LabelFile>(contents).map_err(|error| error.to_string())?;
-    if file.version != SCHEMA_VERSION {
+    if !matches!(file.version, LEGACY_SCHEMA_VERSION | SCHEMA_VERSION) {
         return Err(format!(
-            "unsupported schema version {} (expected {SCHEMA_VERSION})",
+            "unsupported schema version {} (expected {LEGACY_SCHEMA_VERSION} or {SCHEMA_VERSION})",
             file.version
         ));
     }
-    file.aliases
+    let aliases = file
+        .aliases
         .into_iter()
         .map(|record| {
             let provider = Provider::parse(&record.provider)
@@ -353,5 +476,27 @@ fn decode(contents: &[u8]) -> Result<HashMap<SessionKey, String>, String> {
                 alias,
             ))
         })
-        .collect()
+        .collect::<Result<HashMap<_, _>, String>>()?;
+    let descriptions = file
+        .descriptions
+        .into_iter()
+        .map(|record| {
+            let provider = Provider::parse(&record.provider)
+                .ok_or_else(|| format!("unknown Provider {:?}", record.provider))?;
+            let description = validate_description(&record.description)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "Description cannot be empty in the Label Store".to_string())?;
+            Ok((
+                SessionKey {
+                    provider,
+                    native_id: record.session_id,
+                },
+                description,
+            ))
+        })
+        .collect::<Result<HashMap<_, _>, String>>()?;
+    Ok(SessionMetadata {
+        aliases,
+        descriptions,
+    })
 }

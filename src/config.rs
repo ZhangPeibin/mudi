@@ -96,7 +96,7 @@ impl Config {
         self.data_dir.join("profile.json")
     }
 
-    /// Authoritative local Session Alias store, separate from the disposable index.
+    /// Authoritative local Session metadata store, separate from the disposable index.
     pub fn label_store_path(&self) -> PathBuf {
         self.data_dir.join("session-labels.json")
     }

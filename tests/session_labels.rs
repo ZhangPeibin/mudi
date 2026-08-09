@@ -40,6 +40,194 @@ fn user_alias_survives_a_label_store_reload() {
 }
 
 #[test]
+fn version_one_store_migrates_when_description_is_saved() {
+    let (directory, path) = temp_label_store("v1-description-migration");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        &path,
+        br#"{
+  "version": 1,
+  "aliases": [
+    {"provider": "claude", "session_id": "claude-session", "alias": "Existing title"}
+  ]
+}"#,
+    )
+    .unwrap();
+    let mut labels = SessionLabels::load(&path);
+
+    assert_eq!(
+        labels.alias(Provider::ClaudeCode, "claude-session"),
+        Some("Existing title")
+    );
+    assert_eq!(
+        labels.description(Provider::ClaudeCode, "claude-session"),
+        None
+    );
+    labels
+        .set_metadata(
+            Provider::ClaudeCode,
+            "claude-session",
+            "Existing title",
+            "Why this Session exists",
+        )
+        .unwrap();
+
+    let reloaded = SessionLabels::load(&path);
+    assert_eq!(
+        reloaded.alias(Provider::ClaudeCode, "claude-session"),
+        Some("Existing title")
+    );
+    assert_eq!(
+        reloaded.description(Provider::ClaudeCode, "claude-session"),
+        Some("Why this Session exists")
+    );
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(written["version"], 2);
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn session_metadata_round_trips_unicode_and_empty_values_clear_both_fields() {
+    let (directory, path) = temp_label_store("metadata-round-trip");
+    let mut labels = SessionLabels::load(&path);
+
+    labels
+        .set_metadata(
+            Provider::CodexCli,
+            "codex-session",
+            "登录修复",
+            "解释为什么需要这个会话",
+        )
+        .unwrap();
+    let reloaded = SessionLabels::load(&path);
+    assert_eq!(
+        reloaded.alias(Provider::CodexCli, "codex-session"),
+        Some("登录修复")
+    );
+    assert_eq!(
+        reloaded.description(Provider::CodexCli, "codex-session"),
+        Some("解释为什么需要这个会话")
+    );
+
+    labels
+        .set_metadata(Provider::CodexCli, "codex-session", "", "")
+        .unwrap();
+    let cleared = SessionLabels::load(&path);
+    assert_eq!(cleared.alias(Provider::CodexCli, "codex-session"), None);
+    assert_eq!(
+        cleared.description(Provider::CodexCli, "codex-session"),
+        None
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn empty_metadata_fields_clear_independently() {
+    let (directory, path) = temp_label_store("metadata-independent-clear");
+    let mut labels = SessionLabels::load(&path);
+    labels
+        .set_metadata(
+            Provider::ClaudeCode,
+            "claude-session",
+            "Initial title",
+            "Initial description",
+        )
+        .unwrap();
+
+    labels
+        .set_metadata(
+            Provider::ClaudeCode,
+            "claude-session",
+            "",
+            "Initial description",
+        )
+        .unwrap();
+    assert_eq!(labels.alias(Provider::ClaudeCode, "claude-session"), None);
+    assert_eq!(
+        labels.description(Provider::ClaudeCode, "claude-session"),
+        Some("Initial description")
+    );
+
+    labels
+        .set_metadata(Provider::ClaudeCode, "claude-session", "Restored title", "")
+        .unwrap();
+    assert_eq!(
+        labels.alias(Provider::ClaudeCode, "claude-session"),
+        Some("Restored title")
+    );
+    assert_eq!(
+        labels.description(Provider::ClaudeCode, "claude-session"),
+        None
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn description_rejects_control_characters_and_more_than_240_characters() {
+    let (directory, path) = temp_label_store("invalid-description");
+    let mut labels = SessionLabels::load(&path);
+
+    for description in ["line\nbreak".to_string(), "a".repeat(241)] {
+        assert!(labels
+            .set_metadata(
+                Provider::ClaudeCode,
+                "claude-session",
+                "Valid title",
+                &description,
+            )
+            .is_err());
+    }
+    labels
+        .set_metadata(
+            Provider::ClaudeCode,
+            "claude-session",
+            "Valid title",
+            &"界".repeat(240),
+        )
+        .unwrap();
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn failed_metadata_save_publishes_neither_draft_in_memory() {
+    let (directory, path) = temp_label_store("metadata-atomic-failure");
+    let mut labels = SessionLabels::load(&path);
+    labels
+        .set_metadata(
+            Provider::ClaudeCode,
+            "claude-session",
+            "Original title",
+            "Original description",
+        )
+        .unwrap();
+    std::fs::write(&path, b"broken during edit").unwrap();
+
+    assert!(labels
+        .set_metadata(
+            Provider::ClaudeCode,
+            "claude-session",
+            "Draft title",
+            "Draft description",
+        )
+        .is_err());
+    assert_eq!(
+        labels.alias(Provider::ClaudeCode, "claude-session"),
+        Some("Original title")
+    );
+    assert_eq!(
+        labels.description(Provider::ClaudeCode, "claude-session"),
+        Some("Original description")
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn malformed_label_store_is_preserved_and_disables_editing() {
     let (directory, path) = temp_label_store("malformed");
     std::fs::create_dir_all(&directory).unwrap();
@@ -62,7 +250,7 @@ fn malformed_label_store_is_preserved_and_disables_editing() {
 fn unsupported_label_store_version_is_preserved_and_disables_editing() {
     let (directory, path) = temp_label_store("unsupported-version");
     std::fs::create_dir_all(&directory).unwrap();
-    let original = br#"{"version":2,"aliases":[]}"#;
+    let original = br#"{"version":3,"aliases":[],"descriptions":[]}"#;
     std::fs::write(&path, original).unwrap();
 
     let labels = SessionLabels::load(&path);
@@ -71,7 +259,7 @@ fn unsupported_label_store_version_is_preserved_and_disables_editing() {
     assert!(labels
         .error()
         .unwrap()
-        .contains("unsupported schema version 2"));
+        .contains("unsupported schema version 3"));
     assert_eq!(std::fs::read(&path).unwrap(), original);
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -133,6 +321,42 @@ fn sequential_process_saves_merge_the_latest_aliases() {
     assert_eq!(
         reloaded.alias(Provider::CodexCli, "codex-session"),
         Some("Codex work")
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn sequential_process_saves_merge_metadata_for_distinct_sessions() {
+    let (directory, path) = temp_label_store("merge-latest-metadata");
+    let mut first_process = SessionLabels::load(&path);
+    let mut second_process = SessionLabels::load(&path);
+
+    first_process
+        .set_metadata(
+            Provider::ClaudeCode,
+            "claude-session",
+            "Claude work",
+            "Investigate Claude behavior",
+        )
+        .unwrap();
+    second_process
+        .set_metadata(
+            Provider::CodexCli,
+            "codex-session",
+            "Codex work",
+            "Investigate Codex behavior",
+        )
+        .unwrap();
+
+    let reloaded = SessionLabels::load(&path);
+    assert_eq!(
+        reloaded.description(Provider::ClaudeCode, "claude-session"),
+        Some("Investigate Claude behavior")
+    );
+    assert_eq!(
+        reloaded.description(Provider::CodexCli, "codex-session"),
+        Some("Investigate Codex behavior")
     );
 
     std::fs::remove_dir_all(directory).unwrap();
@@ -268,7 +492,7 @@ fn title_falls_back_to_the_last_eight_native_session_id_characters() {
 }
 
 #[test]
-fn rebuilding_the_disposable_index_preserves_session_aliases() {
+fn rebuilding_the_disposable_index_preserves_session_metadata() {
     let (directory, _) = temp_label_store("index-rebuild");
     let config = Config {
         claude_dir: directory.join("claude"),
@@ -278,7 +502,12 @@ fn rebuilding_the_disposable_index_preserves_session_aliases() {
     };
     let mut labels = SessionLabels::load(config.label_store_path());
     labels
-        .set_alias(Provider::ClaudeCode, "claude-session", "Persistent title")
+        .set_metadata(
+            Provider::ClaudeCode,
+            "claude-session",
+            "Persistent title",
+            "Persistent description",
+        )
         .unwrap();
 
     drop(Index::open(&config.index_path()).unwrap());
@@ -289,6 +518,11 @@ fn rebuilding_the_disposable_index_preserves_session_aliases() {
         SessionLabels::load(config.label_store_path())
             .alias(Provider::ClaudeCode, "claude-session"),
         Some("Persistent title")
+    );
+    assert_eq!(
+        SessionLabels::load(config.label_store_path())
+            .description(Provider::ClaudeCode, "claude-session"),
+        Some("Persistent description")
     );
     std::fs::remove_dir_all(directory).unwrap();
 }
