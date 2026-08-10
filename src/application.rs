@@ -252,6 +252,72 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
                 let _ = rescan_tx.send(());
                 false
             }
+            UiIntent::CancelManagedStart { registration_id } => {
+                let message = match self.managed_sessions.cancel_start(&registration_id) {
+                    Ok(()) => format!(
+                        "Cancelled Managed Start {}",
+                        short_registration_id(&registration_id)
+                    ),
+                    Err(error) => format!("Cancel Start failed: {error}"),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::OpenManagedTerminal { registration_id } => {
+                let message = match self
+                    .managed_sessions
+                    .open_terminal(&registration_id, chrono::Local::now().timestamp_millis())
+                {
+                    Ok(outcome) if outcome.opened => {
+                        "Opened Managed launch in Terminal.app".to_string()
+                    }
+                    Ok(outcome) => format!(
+                        "Open Terminal failed: {}",
+                        outcome
+                            .registration
+                            .terminal_error
+                            .as_deref()
+                            .unwrap_or("unknown error")
+                    ),
+                    Err(error) => format!("Open Terminal failed: {error}"),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::RetryManagedTerminal { registration_id } => {
+                let message = match self
+                    .managed_sessions
+                    .retry_open_terminal(&registration_id, chrono::Local::now().timestamp_millis())
+                {
+                    Ok(outcome) if outcome.opened => {
+                        "Reopened Managed launch in Terminal.app".to_string()
+                    }
+                    Ok(outcome) => format!(
+                        "Retry Open Terminal failed: {}",
+                        outcome
+                            .registration
+                            .terminal_error
+                            .as_deref()
+                            .unwrap_or("unknown error")
+                    ),
+                    Err(error) => format!("Retry Open Terminal failed: {error}"),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::CopyManagedLaunchDiagnostics { registration_id } => {
+                match self.managed_sessions.copy_diagnostics(&registration_id) {
+                    Ok(diagnostics) => {
+                        ui.copy_to_clipboard(clipboard, "Managed Launch Diagnostics", &diagnostics)
+                    }
+                    Err(error) => ui.show_notice(format!("Copy Diagnostics failed: {error}")),
+                }
+                let _ = rescan_tx.send(());
+                false
+            }
             UiIntent::Quit => true,
         }
     }

@@ -11,8 +11,9 @@ use sessionmesh::domain::{
 use sessionmesh::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
 use sessionmesh::managed_sessions::{
     MacosManagedTerminalAccess, ManagedLaunchBroker, ManagedLaunchEvidence,
-    ManagedLaunchRegistration, ManagedLaunchStore, ManagedLaunchTarget, ManagedNewRequest,
-    ManagedSessionService, ManagedTerminalAccess, TmuxLaunchBroker,
+    ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget,
+    ManagedNewRequest, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
+    ProviderNewCommand, TmuxLaunchBroker,
 };
 use sessionmesh::providers::state::ProcessIdentity;
 use sessionmesh::providers::ProviderExecutables;
@@ -394,6 +395,50 @@ impl Clipboard for NoopClipboard {
     }
 }
 
+struct RecordingClipboard {
+    values: Arc<Mutex<Vec<String>>>,
+}
+
+impl Clipboard for RecordingClipboard {
+    fn write_text(&mut self, value: &str) -> std::io::Result<()> {
+        self.values.lock().unwrap().push(value.to_string());
+        Ok(())
+    }
+}
+
+struct RecoveryLaunchBroker {
+    cancelled: Arc<Mutex<Vec<String>>>,
+}
+
+impl ManagedLaunchBroker for RecoveryLaunchBroker {
+    fn launch(
+        &mut self,
+        _registration: &ManagedLaunchRegistration,
+    ) -> Result<ManagedLaunchEvidence> {
+        panic!("Managed launch recovery must not replay the Provider launch")
+    }
+
+    fn cancel(&mut self, registration: &ManagedLaunchRegistration) -> Result<()> {
+        self.cancelled.lock().unwrap().push(registration.id.clone());
+        Ok(())
+    }
+}
+
+struct RecordingRecoveryTerminal {
+    opened: Arc<Mutex<Vec<String>>>,
+    error: Option<&'static str>,
+}
+
+impl ManagedTerminalAccess for RecordingRecoveryTerminal {
+    fn open(&mut self, registration: &ManagedLaunchRegistration) -> Result<()> {
+        self.opened.lock().unwrap().push(registration.id.clone());
+        if let Some(error) = self.error {
+            anyhow::bail!(error);
+        }
+        Ok(())
+    }
+}
+
 struct FakeDirectoryPicker {
     selected: VecDeque<PathBuf>,
 }
@@ -613,6 +658,176 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
     assert!(registration.terminal_opened_at_ms.is_some());
 }
 
+#[test]
+fn application_routes_managed_launch_recovery_without_replaying_provider_launch() {
+    let temp = TempDir::new("managed-recovery-actions");
+    let working_directory = temp.path().canonicalize().unwrap();
+    let store_path = temp.path().join("managed-launches.db");
+    let store = ManagedLaunchStore::open(&store_path).unwrap();
+    let binding = recovery_registration(
+        "R-CANCEL",
+        ManagedLaunchStatus::Binding,
+        &working_directory,
+        None,
+    );
+    let review_open = recovery_registration(
+        "R-OPEN",
+        ManagedLaunchStatus::NeedsReview,
+        &working_directory,
+        None,
+    );
+    let review_retry = recovery_registration(
+        "R-RETRY",
+        ManagedLaunchStatus::NeedsReview,
+        &working_directory,
+        Some("previous Terminal error"),
+    );
+    let diagnostics = recovery_registration(
+        "R-DIAGNOSTICS",
+        ManagedLaunchStatus::NeedsReview,
+        &working_directory,
+        None,
+    );
+    for registration in [&binding, &review_open, &review_retry, &diagnostics] {
+        store.insert(registration).unwrap();
+    }
+    let executables = ProviderExecutables::new(
+        executable(temp.path(), "claude-recovery"),
+        executable(temp.path(), "codex-recovery"),
+    );
+    let cancelled = Arc::new(Mutex::new(Vec::new()));
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let managed_sessions = ManagedSessionService::new(
+        store,
+        executables.clone(),
+        Box::new(RecoveryLaunchBroker {
+            cancelled: cancelled.clone(),
+        }),
+        Box::new(RecordingRecoveryTerminal {
+            opened: opened.clone(),
+            error: None,
+        }),
+    );
+    let handoff = HandoffService::open(
+        HandoffPaths {
+            task_store: temp.path().join("tasks.db"),
+            artifact_root: temp.path().join("artifacts"),
+        },
+        executables,
+        NeverLaunchHandoff,
+    )
+    .unwrap();
+    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions);
+    let mut ui = Ui::default();
+    let copied = Arc::new(Mutex::new(Vec::new()));
+    let mut clipboard = RecordingClipboard {
+        values: copied.clone(),
+    };
+    let snapshot = Snapshot::default();
+    let (rescan_tx, mut rescan_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    for action in [
+        UiAction::CancelManagedStart {
+            registration_id: binding.id.clone(),
+        },
+        UiAction::OpenManagedTerminal {
+            registration_id: review_open.id.clone(),
+        },
+        UiAction::RetryManagedTerminal {
+            registration_id: review_retry.id.clone(),
+        },
+        UiAction::CopyManagedLaunchDiagnostics {
+            registration_id: diagnostics.id.clone(),
+        },
+    ] {
+        assert!(!controller.handle(action, &snapshot, &mut ui, &mut clipboard, &rescan_tx,));
+        assert!(
+            rescan_rx.try_recv().is_ok(),
+            "recovery action missed rescan"
+        );
+    }
+
+    assert_eq!(*cancelled.lock().unwrap(), vec![binding.id]);
+    assert_eq!(
+        *opened.lock().unwrap(),
+        vec![review_open.id, review_retry.id]
+    );
+    let copied = copied.lock().unwrap();
+    assert_eq!(copied.len(), 1);
+    assert!(copied[0].contains("Managed Launch Registration: R-DIAGNOSTICS"));
+    assert!(!copied[0].contains("private initializer"));
+    let retained_retry = ManagedLaunchStore::open(&store_path)
+        .unwrap()
+        .get("R-RETRY")
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained_retry.status, ManagedLaunchStatus::NeedsReview);
+    assert_eq!(
+        retained_retry.provider_command.arguments,
+        vec!["private initializer"]
+    );
+    assert_eq!(retained_retry.launch_evidence, review_retry.launch_evidence);
+}
+
+#[test]
+fn failed_managed_terminal_recovery_shows_notice_and_still_rescans() {
+    let temp = TempDir::new("managed-recovery-failure");
+    let working_directory = temp.path().canonicalize().unwrap();
+    let store = ManagedLaunchStore::open(temp.path().join("managed-launches.db")).unwrap();
+    let review = recovery_registration(
+        "R-OPEN-FAIL",
+        ManagedLaunchStatus::NeedsReview,
+        &working_directory,
+        None,
+    );
+    store.insert(&review).unwrap();
+    let executables = ProviderExecutables::new(
+        executable(temp.path(), "claude-failure"),
+        executable(temp.path(), "codex-failure"),
+    );
+    let managed_sessions = ManagedSessionService::new(
+        store,
+        executables.clone(),
+        Box::new(RecoveryLaunchBroker {
+            cancelled: Arc::new(Mutex::new(Vec::new())),
+        }),
+        Box::new(RecordingRecoveryTerminal {
+            opened: Arc::new(Mutex::new(Vec::new())),
+            error: Some("Terminal automation denied"),
+        }),
+    );
+    let handoff = HandoffService::open(
+        HandoffPaths {
+            task_store: temp.path().join("tasks.db"),
+            artifact_root: temp.path().join("artifacts"),
+        },
+        executables,
+        NeverLaunchHandoff,
+    )
+    .unwrap();
+    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions);
+    let snapshot = Snapshot::default();
+    let mut ui = Ui::default();
+    let (rescan_tx, mut rescan_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    assert!(!controller.handle(
+        UiAction::OpenManagedTerminal {
+            registration_id: review.id,
+        },
+        &snapshot,
+        &mut ui,
+        &mut NoopClipboard,
+        &rescan_tx,
+    ));
+
+    assert!(rescan_rx.try_recv().is_ok());
+    let rendered = render_ui(&ui, &snapshot);
+    assert!(
+        rendered.contains("Open Terminal failed: Terminal automation denied"),
+        "failure notice missing:\n{rendered}"
+    );
+}
+
 fn render_ui(ui: &Ui, snapshot: &Snapshot) -> String {
     let backend = TestBackend::new(120, 36);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -647,6 +862,49 @@ fn session_in_project(project_root: &Path) -> Session {
         compactions: Vec::new(),
         last_activity_ms: 1_000,
         cost: None,
+    }
+}
+
+fn recovery_registration(
+    id: &str,
+    status: ManagedLaunchStatus,
+    working_directory: &Path,
+    terminal_error: Option<&str>,
+) -> ManagedLaunchRegistration {
+    ManagedLaunchRegistration {
+        id: id.into(),
+        status,
+        provider: Provider::CodexCli,
+        target: ManagedLaunchTarget {
+            project: ProjectIdentity::CanonicalCwd(working_directory.to_path_buf()),
+            project_label: "sessionMesh".into(),
+            worktree_root: None,
+            working_directory: working_directory.to_path_buf(),
+        },
+        session_alias: "Recover launch".into(),
+        description: Some("private description".into()),
+        binding_initializer: true,
+        provider_command: ProviderNewCommand {
+            executable: PathBuf::from("/usr/bin/true"),
+            arguments: vec!["private initializer".into()],
+        },
+        tmux: PrivateTmuxEnvironment {
+            socket_name: format!("sessionmesh-{id}"),
+            session_name: "managed".into(),
+        },
+        created_at_ms: 40_000,
+        launched_at_ms: Some(41_000),
+        launch_evidence: Some(ManagedLaunchEvidence {
+            tmux_pane_id: "%42".into(),
+            provider_process: ProcessIdentity {
+                pid: 42,
+                started_at_ms: 41_000,
+            },
+        }),
+        terminal_opened_at_ms: terminal_error.is_none().then_some(42_000),
+        terminal_error: terminal_error.map(str::to_string),
+        binding_error: (status == ManagedLaunchStatus::NeedsReview)
+            .then(|| "native Session evidence conflicts".into()),
     }
 }
 

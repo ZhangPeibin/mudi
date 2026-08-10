@@ -248,6 +248,32 @@ fn registration_state_machine_exposes_only_explicitly_permitted_actions() {
 }
 
 #[test]
+fn registration_listing_prioritizes_recoverable_states_then_orders_newest_first() {
+    let temp = TempDir::new("registration-order");
+    let store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut binding = registration("R-BINDING", temp.path());
+    binding.created_at_ms = 30_000;
+    let mut review = registration("R-REVIEW", temp.path());
+    review.status = ManagedLaunchStatus::NeedsReview;
+    review.created_at_ms = 40_000;
+    let mut failed = registration("R-FAILED", temp.path());
+    failed.status = ManagedLaunchStatus::Failed;
+    failed.created_at_ms = 50_000;
+    for registration in [&failed, &binding, &review] {
+        store.insert(registration).unwrap();
+    }
+
+    let ids = store
+        .registrations()
+        .unwrap()
+        .into_iter()
+        .map(|registration| registration.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(ids, ["R-REVIEW", "R-BINDING", "R-FAILED"]);
+}
+
+#[test]
 fn retry_open_terminal_only_reuses_the_preserved_launch_scene() {
     let temp = TempDir::new("retry-terminal");
     let store_path = temp.path().join("managed.db");

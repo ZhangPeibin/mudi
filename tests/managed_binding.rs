@@ -4,20 +4,21 @@ use ratatui::Terminal;
 use sessionmesh::app::Snapshot;
 use sessionmesh::config::Config;
 use sessionmesh::domain::{
-    ContextState, Provider, Session, SessionProvenance, SessionState, SourceFormat, SourceMetadata,
-    Usage,
+    ContextState, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
+    SourceFormat, SourceMetadata, Usage,
 };
 use sessionmesh::managed_sessions::{
-    BindingOutcome, EvidenceBinder, ManagedLaunchCleanup, ManagedLaunchEvidence,
-    ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget,
-    PrivateTmuxEnvironment, ProcessEvidence, ProviderNewCommand, ProviderProcessObservation,
-    SystemProcessEvidence,
+    BindingOutcome, EvidenceBinder, ManagedLaunchAction, ManagedLaunchCleanup,
+    ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore,
+    ManagedLaunchTarget, PrivateTmuxEnvironment, ProcessEvidence, ProviderNewCommand,
+    ProviderProcessObservation, SystemProcessEvidence,
 };
 use sessionmesh::providers::state::ProcessIdentity;
 use sessionmesh::providers::{registry, ProviderBindingEvidence};
+use sessionmesh::read_model::{ManagedLaunchSummary, ManagedTerminalState};
 use sessionmesh::refresh::RefreshService;
 use sessionmesh::session_labels::SessionLabels;
-use sessionmesh::ui::{draw, Ui};
+use sessionmesh::ui::{draw, Ui, UiAction};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -370,6 +371,361 @@ fn codex_adapter_normalizes_the_rollout_held_by_the_exact_process() {
     assert_eq!(evidence.source.path, source_path.canonicalize().unwrap());
     assert_eq!(evidence.working_directory, worktree);
     assert_eq!(evidence.provider_process, process);
+}
+
+#[test]
+fn refresh_publishes_metadata_only_managed_launch_recovery_state() {
+    let temp = TempDir::new("managed-launch-read-model");
+    let worktree = temp.directory("worktree");
+    let config = Config {
+        claude_dir: temp.path().join("claude"),
+        codex_dir: temp.path().join("codex"),
+        data_dir: temp.path().join("data"),
+        extra_dirs: Vec::new(),
+    };
+    let mut registration = registration(
+        "launch-needs-review",
+        Provider::CodexCli,
+        &worktree,
+        process(42, 41_000),
+    );
+    registration.status = ManagedLaunchStatus::NeedsReview;
+    registration.session_alias = "Recover payment tests".into();
+    registration.description = Some("private launch description".into());
+    registration.binding_initializer = true;
+    registration.provider_command.arguments = vec!["private initializer content".into()];
+    registration.terminal_opened_at_ms = None;
+    registration.terminal_error = Some("Terminal.app denied automation".into());
+    registration.binding_error = Some("native Session evidence conflicts".into());
+    ManagedLaunchStore::open(config.managed_launch_store_path())
+        .unwrap()
+        .insert(&registration)
+        .unwrap();
+
+    let snapshot = RefreshService::new(config).refresh();
+
+    assert_eq!(snapshot.managed_launches.len(), 1);
+    let launch = &snapshot.managed_launches[0];
+    assert_eq!(launch.id, "launch-needs-review");
+    assert_eq!(launch.status, ManagedLaunchStatus::NeedsReview);
+    assert_eq!(launch.provider, Provider::CodexCli);
+    assert_eq!(launch.project_label, registration.target.project_label);
+    assert_eq!(launch.worktree_root, registration.target.worktree_root);
+    assert_eq!(launch.working_directory, worktree);
+    assert_eq!(launch.title, "Recover payment tests");
+    assert_eq!(launch.created_at_ms, 40_000);
+    assert_eq!(launch.terminal_state, ManagedTerminalState::Error);
+    assert_eq!(
+        launch.terminal_error.as_deref(),
+        Some("Terminal.app denied automation")
+    );
+    assert_eq!(
+        launch.binding_error.as_deref(),
+        Some("native Session evidence conflicts")
+    );
+    assert_eq!(
+        launch.available_actions,
+        vec![
+            ManagedLaunchAction::RetryOpenTerminal,
+            ManagedLaunchAction::CopyDiagnostics,
+        ]
+    );
+    let debug_projection = format!("{launch:?}");
+    for private in [
+        "private launch description",
+        "private initializer content",
+        "/usr/bin/true",
+        "%42",
+    ] {
+        assert!(!debug_projection.contains(private), "leaked {private:?}");
+    }
+}
+
+#[test]
+fn managed_start_region_renders_each_state_with_only_legal_actions() {
+    let cases = [
+        (
+            launch_summary(
+                "R-BIND",
+                ManagedLaunchStatus::Binding,
+                ManagedTerminalState::Opened,
+                None,
+                None,
+                vec![ManagedLaunchAction::CancelStart],
+                30_000,
+            ),
+            ["BINDING", "x Cancel Start", "Terminal open"].as_slice(),
+            ["Retry Terminal", "c Copy Diagnostics", "o Open Terminal"].as_slice(),
+        ),
+        (
+            launch_summary(
+                "R-REVIEW",
+                ManagedLaunchStatus::NeedsReview,
+                ManagedTerminalState::Opened,
+                None,
+                Some("native evidence conflicts"),
+                vec![
+                    ManagedLaunchAction::OpenTerminal,
+                    ManagedLaunchAction::CopyDiagnostics,
+                ],
+                20_000,
+            ),
+            ["NEEDS REVIEW", "o Open Terminal", "c Copy Diagnostics"].as_slice(),
+            ["x Cancel Start", "Retry Binding", "Resume", "Adopt"].as_slice(),
+        ),
+        (
+            launch_summary(
+                "R-FAILED",
+                ManagedLaunchStatus::Failed,
+                ManagedTerminalState::Pending,
+                None,
+                Some("Provider process absent"),
+                Vec::new(),
+                10_000,
+            ),
+            ["FAILED", "Provider process absent", "No recovery action"].as_slice(),
+            ["x Cancel Start", "Retry Terminal", "c Copy Diagnostics"].as_slice(),
+        ),
+    ];
+
+    for (launch, expected, forbidden) in cases {
+        let snapshot = Snapshot {
+            managed_launches: vec![launch],
+            ready: true,
+            ..Snapshot::default()
+        };
+        let rendered = render_ui(&Ui::default(), &snapshot);
+        assert!(
+            rendered.contains("MANAGED START"),
+            "missing region:\n{rendered}"
+        );
+        for expected in expected {
+            assert!(
+                rendered.contains(expected),
+                "missing {expected:?}:\n{rendered}"
+            );
+        }
+        for forbidden in forbidden {
+            assert!(
+                !rendered.contains(forbidden),
+                "rendered forbidden {forbidden:?}:\n{rendered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn compact_managed_start_region_preserves_navigation_actions_and_neighbor_panels() {
+    let snapshot = Snapshot {
+        managed_launches: vec![
+            launch_summary(
+                "R-REVIEW",
+                ManagedLaunchStatus::NeedsReview,
+                ManagedTerminalState::Error,
+                Some("denied"),
+                Some("conflicting evidence"),
+                vec![
+                    ManagedLaunchAction::RetryOpenTerminal,
+                    ManagedLaunchAction::CopyDiagnostics,
+                ],
+                30_000,
+            ),
+            launch_summary(
+                "R-FAILED",
+                ManagedLaunchStatus::Failed,
+                ManagedTerminalState::Pending,
+                None,
+                Some("absent"),
+                Vec::new(),
+                20_000,
+            ),
+        ],
+        ready: true,
+        ..Snapshot::default()
+    };
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &snapshot, &Ui::default()))
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    for expected in [
+        "MANAGED START [/]",
+        "o Retry Terminal",
+        "c Copy Diagnostics",
+        "RECENT SIGNALS",
+        "TASKS",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "compact status band lost {expected:?}:\n{rendered}"
+        );
+    }
+}
+
+#[test]
+fn managed_start_selection_stays_on_registration_identity_across_refresh_ordering() {
+    let first = launch_summary(
+        "R-FIRST",
+        ManagedLaunchStatus::Binding,
+        ManagedTerminalState::Opened,
+        None,
+        None,
+        vec![ManagedLaunchAction::CancelStart],
+        30_000,
+    );
+    let second = launch_summary(
+        "R-SECOND",
+        ManagedLaunchStatus::NeedsReview,
+        ManagedTerminalState::Opened,
+        None,
+        Some("review"),
+        vec![
+            ManagedLaunchAction::OpenTerminal,
+            ManagedLaunchAction::CopyDiagnostics,
+        ],
+        20_000,
+    );
+    let mut snapshot = Snapshot {
+        managed_launches: vec![first.clone(), second.clone()],
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    ui.clamp_selections(&snapshot);
+
+    assert_eq!(ui.handle_key(key(']'), &snapshot).unwrap(), UiAction::None);
+    let selected_second = render_ui(&ui, &snapshot);
+    assert!(selected_second.contains("R-SECOND"));
+    assert!(selected_second.contains("2/2"));
+
+    snapshot.revision = 2;
+    snapshot.managed_launches = vec![second, first];
+    ui.clamp_selections(&snapshot);
+    let reordered = render_ui(&ui, &snapshot);
+    assert!(reordered.contains("R-SECOND"));
+    assert!(reordered.contains("1/2"));
+}
+
+#[test]
+fn managed_start_keys_emit_only_actions_allowed_by_the_selected_registration() {
+    let mut ui = Ui::default();
+    let binding = Snapshot {
+        managed_launches: vec![launch_summary(
+            "R-BIND",
+            ManagedLaunchStatus::Binding,
+            ManagedTerminalState::Error,
+            Some("denied"),
+            None,
+            vec![
+                ManagedLaunchAction::CancelStart,
+                ManagedLaunchAction::RetryOpenTerminal,
+            ],
+            30_000,
+        )],
+        ready: true,
+        ..Snapshot::default()
+    };
+    assert_eq!(
+        ui.handle_key(key('x'), &binding).unwrap(),
+        UiAction::CancelManagedStart {
+            registration_id: "R-BIND".into()
+        }
+    );
+    assert_eq!(
+        ui.handle_key(key('o'), &binding).unwrap(),
+        UiAction::RetryManagedTerminal {
+            registration_id: "R-BIND".into()
+        }
+    );
+    assert_eq!(ui.handle_key(key('c'), &binding).unwrap(), UiAction::None);
+
+    let review = Snapshot {
+        managed_launches: vec![launch_summary(
+            "R-REVIEW",
+            ManagedLaunchStatus::NeedsReview,
+            ManagedTerminalState::Opened,
+            None,
+            Some("review"),
+            vec![
+                ManagedLaunchAction::OpenTerminal,
+                ManagedLaunchAction::CopyDiagnostics,
+            ],
+            20_000,
+        )],
+        ready: true,
+        ..Snapshot::default()
+    };
+    assert_eq!(ui.handle_key(key('x'), &review).unwrap(), UiAction::None);
+    assert_eq!(
+        ui.handle_key(key('o'), &review).unwrap(),
+        UiAction::OpenManagedTerminal {
+            registration_id: "R-REVIEW".into()
+        }
+    );
+    assert_eq!(
+        ui.handle_key(key('c'), &review).unwrap(),
+        UiAction::CopyManagedLaunchDiagnostics {
+            registration_id: "R-REVIEW".into()
+        }
+    );
+
+    let failed = Snapshot {
+        managed_launches: vec![launch_summary(
+            "R-FAILED",
+            ManagedLaunchStatus::Failed,
+            ManagedTerminalState::Pending,
+            None,
+            Some("absent"),
+            Vec::new(),
+            10_000,
+        )],
+        ready: true,
+        ..Snapshot::default()
+    };
+    for character in ['x', 'o', 'c'] {
+        assert_eq!(
+            ui.handle_key(key(character), &failed).unwrap(),
+            UiAction::None
+        );
+    }
+}
+
+fn key(character: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE)
+}
+
+fn launch_summary(
+    id: &str,
+    status: ManagedLaunchStatus,
+    terminal_state: ManagedTerminalState,
+    terminal_error: Option<&str>,
+    binding_error: Option<&str>,
+    available_actions: Vec<ManagedLaunchAction>,
+    created_at_ms: i64,
+) -> ManagedLaunchSummary {
+    ManagedLaunchSummary {
+        id: id.into(),
+        status,
+        provider: Provider::CodexCli,
+        project: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/sessionmesh")),
+        project_label: "sessionMesh".into(),
+        worktree_root: Some(PathBuf::from("/workspace/sessionmesh/main")),
+        working_directory: PathBuf::from("/workspace/sessionmesh/main"),
+        title: "Work Continuity".into(),
+        created_at_ms,
+        terminal_state,
+        terminal_error: terminal_error.map(str::to_string),
+        binding_error: binding_error.map(str::to_string),
+        available_actions,
+    }
 }
 
 #[test]

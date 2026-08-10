@@ -1,6 +1,8 @@
 //! 总览页布局组合。
 
-use super::{editor, session_browser, signals, snapshot_now_ms, split_pane, tasks, Ui};
+use super::{
+    editor, managed_start, session_browser, signals, snapshot_now_ms, split_pane, tasks, Ui,
+};
 use crate::app::Snapshot;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::Frame;
@@ -25,12 +27,13 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let now_ms = snapshot_now_ms(snap);
     // First split the fixed status band from the editor workspace.
     let (status_area, workspace_area) = row_areas(area);
-    // 状态带左侧三分之一是产品约定的保留空白，不绘制任何面板。
+    // 状态带左侧三分之一保留给 Managed Start，右侧 Signals/Tasks 几何保持不变。
     let reserved_width = area.width / 3;
     let status_columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(reserved_width), Constraint::Min(0)])
         .split(status_area);
+    managed_start::draw(f, status_columns[0], snap, ui);
     // 剩余右侧空间等分：Signals 在左，Tasks 在右。
     let status_panels = Layout::default()
         .direction(Direction::Horizontal)

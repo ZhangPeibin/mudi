@@ -980,6 +980,28 @@ impl ManagedLaunchStore {
             .collect()
     }
 
+    pub fn registrations(&self) -> Result<Vec<ManagedLaunchRegistration>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT registration_id
+            FROM managed_launch_registrations
+            ORDER BY CASE status WHEN 'failed' THEN 1 ELSE 0 END,
+                     created_at_ms DESC,
+                     registration_id DESC
+            "#,
+        )?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        ids.into_iter()
+            .map(|id| {
+                self.get(&id)?
+                    .ok_or_else(|| anyhow!("Managed Launch Registration {id} disappeared"))
+            })
+            .collect()
+    }
+
     pub fn binding_receipt(&self, registration_id: &str) -> Result<Option<BindingReceipt>> {
         let mut statement = self.conn.prepare(
             "SELECT receipt_id, provider, native_session_id, source_path, source_format, provider_pid, provider_started_at_ms, issued_at_ms FROM binding_receipts WHERE registration_id = ?1",

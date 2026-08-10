@@ -13,6 +13,7 @@ mod editor;
 mod field;
 mod guide;
 mod layout;
+mod managed_start;
 mod modals;
 mod overview;
 mod path_display;
@@ -32,7 +33,7 @@ use crate::app::{Snapshot, Tab};
 use crate::attention::{AttentionEngine, AttentionSnapshot};
 use crate::clipboard::Clipboard;
 use crate::domain::{Project, ProjectIdentity, Provider, Session, SessionIdentity, SessionState};
-use crate::managed_sessions::{ManagedLaunchTarget, ManagedNewRequest};
+use crate::managed_sessions::{ManagedLaunchAction, ManagedLaunchTarget, ManagedNewRequest};
 use crate::session_labels::SessionLabels;
 use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
@@ -432,6 +433,8 @@ pub struct Ui {
     task_cancellation_confirmation: Option<TaskCancellationConfirmation>,
     task_deletion_confirmation: Option<TaskDeletionConfirmation>,
     task_retry_confirmation: Option<TaskRetryConfirmation>,
+    /// Stable selection for the independent Managed Start status region.
+    managed_launch_id: Option<String>,
     /// UI 自己拥有的 Session 元数据、Profile、主题和短期状态提示。
     labels: SessionLabels,
     labels_snapshot_revision: u64,
@@ -495,6 +498,18 @@ pub enum UiAction {
     StartManagedNew {
         request: ManagedNewRequest,
     },
+    CancelManagedStart {
+        registration_id: String,
+    },
+    OpenManagedTerminal {
+        registration_id: String,
+    },
+    RetryManagedTerminal {
+        registration_id: String,
+    },
+    CopyManagedLaunchDiagnostics {
+        registration_id: String,
+    },
     Quit,
 }
 
@@ -525,6 +540,7 @@ impl Default for Ui {
             task_cancellation_confirmation: None,
             task_deletion_confirmation: None,
             task_retry_confirmation: None,
+            managed_launch_id: None,
             labels: SessionLabels::default(),
             labels_snapshot_revision: 0,
             profile_path: None,
@@ -863,6 +879,9 @@ impl Ui {
         if self.guide_open {
             self.handle_guide_key(key)?;
             return Ok(UiAction::None);
+        }
+        if let Some(action) = self.handle_managed_launch_key(key, snap) {
+            return Ok(action);
         }
         // 下面按上下文分派普通页面和详情的导航动作。
         match key.code {
@@ -1372,6 +1391,92 @@ impl Ui {
             self.task_selected = 0;
         } else if self.task_selected >= snap.tasks.len() {
             self.task_selected = snap.tasks.len() - 1;
+        }
+        if self
+            .managed_launch_id
+            .as_ref()
+            .is_none_or(|id| !snap.managed_launches.iter().any(|launch| &launch.id == id))
+        {
+            self.managed_launch_id = snap
+                .managed_launches
+                .first()
+                .map(|launch| launch.id.clone());
+        }
+    }
+
+    fn selected_managed_launch<'a>(
+        &self,
+        snap: &'a Snapshot,
+    ) -> Option<&'a crate::read_model::ManagedLaunchSummary> {
+        self.managed_launch_id
+            .as_ref()
+            .and_then(|id| snap.managed_launches.iter().find(|launch| &launch.id == id))
+            .or_else(|| snap.managed_launches.first())
+    }
+
+    fn handle_managed_launch_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        snap: &Snapshot,
+    ) -> Option<UiAction> {
+        if self.tab != Tab::All || self.detail.is_some() || snap.managed_launches.is_empty() {
+            return None;
+        }
+        if matches!(key.code, crossterm::event::KeyCode::Char('[' | ']')) {
+            let selected = self
+                .selected_managed_launch(snap)
+                .and_then(|launch| {
+                    snap.managed_launches
+                        .iter()
+                        .position(|candidate| candidate.id == launch.id)
+                })
+                .unwrap_or(0);
+            let next = match key.code {
+                crossterm::event::KeyCode::Char('[') => selected
+                    .checked_sub(1)
+                    .unwrap_or(snap.managed_launches.len() - 1),
+                crossterm::event::KeyCode::Char(']') => {
+                    (selected + 1) % snap.managed_launches.len()
+                }
+                _ => unreachable!("guarded by Managed Start navigation keys"),
+            };
+            self.managed_launch_id = Some(snap.managed_launches[next].id.clone());
+            return Some(UiAction::None);
+        }
+
+        let launch = self.selected_managed_launch(snap)?;
+        let registration_id = launch.id.clone();
+        match key.code {
+            crossterm::event::KeyCode::Char('x')
+                if launch
+                    .available_actions
+                    .contains(&ManagedLaunchAction::CancelStart) =>
+            {
+                Some(UiAction::CancelManagedStart { registration_id })
+            }
+            crossterm::event::KeyCode::Char('o')
+                if launch
+                    .available_actions
+                    .contains(&ManagedLaunchAction::RetryOpenTerminal) =>
+            {
+                Some(UiAction::RetryManagedTerminal { registration_id })
+            }
+            crossterm::event::KeyCode::Char('o')
+                if launch
+                    .available_actions
+                    .contains(&ManagedLaunchAction::OpenTerminal) =>
+            {
+                Some(UiAction::OpenManagedTerminal { registration_id })
+            }
+            crossterm::event::KeyCode::Char('c')
+                if launch
+                    .available_actions
+                    .contains(&ManagedLaunchAction::CopyDiagnostics) =>
+            {
+                Some(UiAction::CopyManagedLaunchDiagnostics { registration_id })
+            }
+            crossterm::event::KeyCode::Char('x' | 'o' | 'c') => Some(UiAction::None),
+            _ => None,
         }
     }
 

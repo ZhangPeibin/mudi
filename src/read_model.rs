@@ -4,8 +4,13 @@ use crate::alerts::AlertCounts;
 use crate::attention::AttentionSnapshot;
 use crate::collector::ScanStats;
 use crate::domain::Session;
+use crate::domain::{ProjectIdentity, Provider};
+use crate::managed_sessions::{
+    ManagedLaunchAction, ManagedLaunchRegistration, ManagedLaunchStatus,
+};
 use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 /// A component-scoped explanation of why the current projection is degraded.
@@ -48,6 +53,58 @@ impl RefreshHealth {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedTerminalState {
+    Pending,
+    Opened,
+    Error,
+}
+
+/// Metadata-only recovery view of an incomplete Managed launch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedLaunchSummary {
+    pub id: String,
+    pub status: ManagedLaunchStatus,
+    pub provider: Provider,
+    pub project: ProjectIdentity,
+    pub project_label: String,
+    pub worktree_root: Option<PathBuf>,
+    pub working_directory: PathBuf,
+    pub title: String,
+    pub created_at_ms: i64,
+    pub terminal_state: ManagedTerminalState,
+    pub terminal_error: Option<String>,
+    pub binding_error: Option<String>,
+    pub available_actions: Vec<ManagedLaunchAction>,
+}
+
+impl From<&ManagedLaunchRegistration> for ManagedLaunchSummary {
+    fn from(registration: &ManagedLaunchRegistration) -> Self {
+        let terminal_state = if registration.terminal_error.is_some() {
+            ManagedTerminalState::Error
+        } else if registration.terminal_opened_at_ms.is_some() {
+            ManagedTerminalState::Opened
+        } else {
+            ManagedTerminalState::Pending
+        };
+        Self {
+            id: registration.id.clone(),
+            status: registration.status,
+            provider: registration.provider,
+            project: registration.target.project.clone(),
+            project_label: registration.target.project_label.clone(),
+            worktree_root: registration.target.worktree_root.clone(),
+            working_directory: registration.target.working_directory.clone(),
+            title: registration.session_alias.clone(),
+            created_at_ms: registration.created_at_ms,
+            terminal_state,
+            terminal_error: registration.terminal_error.clone(),
+            binding_error: registration.binding_error.clone(),
+            available_actions: registration.available_actions(),
+        }
+    }
+}
+
 /// The read-only projection of the latest observed local state.
 ///
 /// It intentionally contains only normalized metadata. Provider conversation content,
@@ -60,6 +117,7 @@ pub struct RefreshSnapshot {
     pub health: RefreshHealth,
     pub sessions: Vec<Session>,
     pub tasks: Vec<OperationTask>,
+    pub managed_launches: Vec<ManagedLaunchSummary>,
     pub recent_signals: Vec<RecentSignal>,
     pub attention: Option<AttentionSnapshot>,
     pub stats: ScanStats,

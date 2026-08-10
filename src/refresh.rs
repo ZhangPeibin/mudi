@@ -57,6 +57,7 @@ impl RefreshService {
         let mut diagnostics = Vec::new();
         let mut stats = ScanStats::default();
         let mut sessions = Vec::new();
+        let mut managed_launches = Vec::new();
 
         match self.index.as_mut() {
             Ok(index) => match collector::refresh_checked(&self.cfg, index) {
@@ -139,6 +140,18 @@ impl RefreshService {
                         error.to_string(),
                     ));
                 }
+                match store.registrations() {
+                    Ok(registrations) => {
+                        managed_launches = registrations
+                            .iter()
+                            .map(crate::read_model::ManagedLaunchSummary::from)
+                            .collect();
+                    }
+                    Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Registration Store",
+                        error.to_string(),
+                    )),
+                }
             }
             Err(error) => diagnostics.push(RefreshDiagnostic::new(
                 "Managed Session Registry",
@@ -171,6 +184,7 @@ impl RefreshService {
             health,
             sessions,
             tasks,
+            managed_launches,
             recent_signals,
             attention: Some(attention),
             stats,
