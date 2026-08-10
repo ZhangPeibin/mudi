@@ -23,7 +23,6 @@ fn main() -> anyhow::Result<()> {
     let snap = Snapshot {
         sessions,
         alerts,
-        status: "watching".into(),
         generated_ms: chrono::Local::now().timestamp_millis(),
         ready: true,
         ..Default::default()

@@ -10,9 +10,12 @@
 //!   id (last occurrence wins — it carries the final counts).
 //! - Compaction = `type:system` / `subtype:compact_boundary`.
 
-use super::{iso_to_ms, ParsedSession, ParsedUsage, PerModel, ProviderAdapter};
+use super::{
+    iso_to_ms, ObservationPort, ParsedSession, ParsedUsage, PerModel, ProviderExecutables,
+    RuntimeControlPort, SkillTransportPort,
+};
 use crate::config::Config;
-use crate::domain::{Compaction, ContextState, Provider, SessionState, Usage};
+use crate::domain::{Compaction, ContextState, Provider, Usage};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,7 +23,7 @@ use std::path::{Path, PathBuf};
 /// The Claude Code provider adapter.
 pub struct ClaudeAdapter;
 
-impl ProviderAdapter for ClaudeAdapter {
+impl ObservationPort for ClaudeAdapter {
     fn provider(&self) -> Provider {
         Provider::ClaudeCode
     }
@@ -40,22 +43,26 @@ impl ProviderAdapter for ClaudeAdapter {
     fn live_state(
         &self,
         probe: &super::state::StateDetector,
+        source_session_id: &str,
         source_path: &Path,
     ) -> super::state::LiveState {
-        // A Claude session's id is its transcript filename stem.
-        match source_path.file_stem().and_then(|s| s.to_str()) {
-            Some(id) => probe.claude_state(id),
-            None => super::state::LiveState {
-                state: SessionState::Exited,
-                current_run_started_at_ms: None,
-                process_identity: None,
-            },
-        }
+        self.observe_current_run(probe, source_session_id, source_path)
     }
 
     fn current_run_usage(&self, source_path: &Path, started_at_ms: i64) -> Option<ParsedUsage> {
         let text = std::fs::read_to_string(source_path).ok()?;
         Some(parse_current_run_str(&text, started_at_ms))
+    }
+}
+
+impl RuntimeControlPort for ClaudeAdapter {
+    fn observe_current_run(
+        &self,
+        probe: &super::state::StateDetector,
+        source_session_id: &str,
+        _source_path: &Path,
+    ) -> super::state::LiveState {
+        probe.claude_state(source_session_id)
     }
 
     fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String> {
@@ -75,10 +82,6 @@ impl ProviderAdapter for ClaudeAdapter {
         .collect()
     }
 
-    fn handoff_skill_invocation(&self) -> &'static str {
-        "/sessionmesh-handoff"
-    }
-
     fn resolve_successor_session(
         &self,
         cfg: &Config,
@@ -86,6 +89,37 @@ impl ProviderAdapter for ClaudeAdapter {
     ) -> Option<String> {
         resolve_successor_session(cfg, process)
     }
+
+    fn successor_launch_arguments(&self, artifact_path: &Path) -> Vec<String> {
+        successor_arguments("Claude Code", artifact_path)
+    }
+
+    fn executable<'a>(&self, executables: &'a ProviderExecutables) -> Option<&'a Path> {
+        let path = executables.claude_path();
+        super::is_executable(path).then_some(path)
+    }
+}
+
+impl SkillTransportPort for ClaudeAdapter {
+    fn handoff_skill_invocation(&self) -> &'static str {
+        "/sessionmesh-handoff"
+    }
+}
+
+fn successor_arguments(provider_name: &str, artifact_path: &Path) -> Vec<String> {
+    let artifact_directory = artifact_path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .to_string_lossy()
+        .into_owned();
+    vec![
+        "--add-dir".into(),
+        artifact_directory,
+        format!(
+            "Read the Handoff Artifact at {} and continue the work in this new {provider_name} Session.",
+            artifact_path.to_string_lossy()
+        ),
+    ]
 }
 
 fn resolve_successor_session(

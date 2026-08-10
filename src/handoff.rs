@@ -2,12 +2,13 @@
 
 use crate::domain::{Provider, Session, SessionState};
 use crate::providers::state::{ProcessIdentity, StateDetector};
+pub use crate::providers::ProviderExecutables;
+use crate::skills::{ManagedSkillCatalog, SkillInstaller};
 use crate::tasks::{OperationTask, OperationTaskState, TaskStore};
 use anyhow::{anyhow, Result};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
-use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -16,64 +17,16 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::PermissionsExt;
 
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(0);
-static NEXT_ARTIFACT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandoffPaths {
     pub task_store: PathBuf,
     pub artifact_root: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderExecutables {
-    claude: PathBuf,
-    codex: PathBuf,
-}
-
-impl ProviderExecutables {
-    pub fn new(claude: PathBuf, codex: PathBuf) -> Self {
-        Self { claude, codex }
-    }
-
-    fn for_provider(&self, provider: Provider) -> &Path {
-        match provider {
-            Provider::ClaudeCode => &self.claude,
-            Provider::CodexCli => &self.codex,
-        }
-    }
-
-    pub fn discover() -> Self {
-        let search = std::env::var_os("PATH")
-            .as_deref()
-            .map(std::env::split_paths)
-            .map(Iterator::collect::<Vec<_>>)
-            .unwrap_or_default();
-        let mut discovered = Self::discover_in(&search);
-        if let Some(path) = std::env::var_os("SESSIONMESH_CLAUDE_EXECUTABLE") {
-            discovered.claude = PathBuf::from(path);
-        }
-        if let Some(path) = std::env::var_os("SESSIONMESH_CODEX_EXECUTABLE") {
-            discovered.codex = PathBuf::from(path);
-        }
-        discovered
-    }
-
-    pub fn discover_in(search_directories: &[PathBuf]) -> Self {
-        Self {
-            claude: find_executable(search_directories, "claude").unwrap_or_default(),
-            codex: find_executable(search_directories, "codex").unwrap_or_default(),
-        }
-    }
-
-    pub fn executable_for(&self, provider: Provider) -> Option<&Path> {
-        let path = self.for_provider(provider);
-        is_executable(path).then_some(path)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,13 +113,9 @@ impl CurrentRunControl for MacosCurrentRunControl {
         source_record_path: &Path,
     ) -> Result<CurrentRunObservation> {
         let detector = StateDetector::gather(&self.claude_sessions_dir);
-        let live = match provider {
-            Provider::ClaudeCode => detector.claude_state(source_session_id),
-            Provider::CodexCli => detector.codex_state(
-                source_record_path,
-                crate::providers::codex::latest_task_boundary(source_record_path),
-            ),
-        };
+        let live = crate::providers::registry()
+            .runtime_control(provider)?
+            .observe_current_run(&detector, source_session_id, source_record_path);
         match (live.state, live.process_identity) {
             (SessionState::Busy, Some(process)) => Ok(CurrentRunObservation::Busy(process)),
             (SessionState::Idle, Some(process)) => Ok(CurrentRunObservation::Idle(process)),
@@ -197,7 +146,7 @@ pub struct DetachedWorkerLauncher {
     executables: ProviderExecutables,
     claude_sessions_dir: PathBuf,
     notifications: bool,
-    managed_handoff_skills: Option<crate::handoff_skill::ManagedHandoffSkills>,
+    skill_installer: Option<Arc<dyn SkillInstaller>>,
 }
 
 impl DetachedWorkerLauncher {
@@ -213,7 +162,7 @@ impl DetachedWorkerLauncher {
             executables,
             claude_sessions_dir,
             notifications: false,
-            managed_handoff_skills: None,
+            skill_installer: None,
         }
     }
 
@@ -221,7 +170,14 @@ impl DetachedWorkerLauncher {
         mut self,
         managed_handoff_skills: crate::handoff_skill::ManagedHandoffSkills,
     ) -> Self {
-        self.managed_handoff_skills = Some(managed_handoff_skills);
+        self.skill_installer = Some(Arc::new(ManagedSkillCatalog::handoff(
+            managed_handoff_skills,
+        )));
+        self
+    }
+
+    pub fn with_skill_installer(mut self, skill_installer: Arc<dyn SkillInstaller>) -> Self {
+        self.skill_installer = Some(skill_installer);
         self
     }
 
@@ -241,15 +197,18 @@ impl WorkerLauncher for DetachedWorkerLauncher {
             .arg("--artifact-root")
             .arg(&self.paths.artifact_root)
             .arg("--claude-executable")
-            .arg(&self.executables.claude)
+            .arg(self.executables.claude_path())
             .arg("--codex-executable")
-            .arg(&self.executables.codex)
+            .arg(self.executables.codex_path())
             .arg("--claude-sessions-dir")
             .arg(&self.claude_sessions_dir)
             .arg("--task-id")
             .arg(&launch.task_id);
-        if let Some(skills) = self.managed_handoff_skills.as_ref() {
-            let (codex_root, claude_root) = skills.roots();
+        if let Some((codex_root, claude_root)) = self
+            .skill_installer
+            .as_ref()
+            .and_then(|installer| installer.worker_roots())
+        {
             command
                 .arg("--codex-skills-root")
                 .arg(codex_root)
@@ -349,7 +308,7 @@ pub struct HandoffService<L> {
     launcher: L,
     store: TaskStore,
     current_run_control: Arc<dyn CurrentRunControl>,
-    managed_handoff_skills: Option<crate::handoff_skill::ManagedHandoffSkills>,
+    skill_installer: Option<Arc<dyn SkillInstaller>>,
 }
 
 impl<L: WorkerLauncher> HandoffService<L> {
@@ -365,7 +324,7 @@ impl<L: WorkerLauncher> HandoffService<L> {
             launcher,
             store,
             current_run_control: Arc::new(NoopCurrentRunControl),
-            managed_handoff_skills: None,
+            skill_installer: None,
         })
     }
 
@@ -382,7 +341,7 @@ impl<L: WorkerLauncher> HandoffService<L> {
             launcher,
             store,
             current_run_control,
-            managed_handoff_skills: None,
+            skill_installer: None,
         })
     }
 
@@ -390,7 +349,14 @@ impl<L: WorkerLauncher> HandoffService<L> {
         mut self,
         managed_handoff_skills: crate::handoff_skill::ManagedHandoffSkills,
     ) -> Self {
-        self.managed_handoff_skills = Some(managed_handoff_skills);
+        self.skill_installer = Some(Arc::new(ManagedSkillCatalog::handoff(
+            managed_handoff_skills,
+        )));
+        self
+    }
+
+    pub fn with_skill_installer(mut self, skill_installer: Arc<dyn SkillInstaller>) -> Self {
+        self.skill_installer = Some(skill_installer);
         self
     }
 
@@ -429,7 +395,8 @@ impl<L: WorkerLauncher> HandoffService<L> {
             successor_provider,
             successor_executable: self
                 .executables
-                .for_provider(successor_provider)
+                .executable_for(successor_provider)
+                .expect("preflight validates the Successor Provider executable")
                 .to_path_buf(),
             created_at_ms: now_ms,
             state_changed_at_ms: now_ms,
@@ -537,7 +504,8 @@ impl<L: WorkerLauncher> HandoffService<L> {
             successor_provider,
             successor_executable: self
                 .executables
-                .for_provider(successor_provider)
+                .executable_for(successor_provider)
+                .expect("preflight validates the Successor Provider executable")
                 .to_path_buf(),
             created_at_ms: now_ms,
             state_changed_at_ms: now_ms,
@@ -868,12 +836,16 @@ impl<L: WorkerLauncher> HandoffService<L> {
                 "source Session already has a non-terminal Operation Task",
             ));
         }
-        if !is_executable(self.executables.for_provider(session.provider)) {
+        if self.executables.executable_for(session.provider).is_none() {
             return Err(HandoffStartError::Ineligible(
                 "source Provider CLI is unavailable",
             ));
         }
-        if !is_executable(self.executables.for_provider(successor_provider)) {
+        if self
+            .executables
+            .executable_for(successor_provider)
+            .is_none()
+        {
             return Err(HandoffStartError::Ineligible(
                 "selected Successor Provider CLI is unavailable",
             ));
@@ -893,8 +865,8 @@ impl<L: WorkerLauncher> HandoffService<L> {
                 "source working directory is unreadable",
             ));
         }
-        if let Some(skills) = self.managed_handoff_skills.as_ref() {
-            skills
+        if let Some(skill_installer) = self.skill_installer.as_ref() {
+            skill_installer
                 .install_for_first_use()
                 .map_err(HandoffStartError::ManagedSkill)?;
         }
@@ -1111,10 +1083,10 @@ fn reconcile_declared_result(
     let Ok(candidate) = fs::read_to_string(&artifact_path) else {
         return Ok(false);
     };
-    if validate_handoff_artifact(&candidate).is_err() {
+    if crate::handoff_artifact::validate(&candidate).is_err() {
         return Ok(false);
     }
-    let plan = crate::successor::build_launch_plan(task, artifact_path.clone());
+    let plan = crate::successor::build_launch_plan(task, artifact_path.clone())?;
     store.mark_ready(&task.id, now_ms, &artifact_path, &plan)?;
     Ok(true)
 }
@@ -1123,7 +1095,7 @@ pub struct HandoffWorker {
     paths: HandoffPaths,
     executables: ProviderExecutables,
     current_run_control: Arc<dyn CurrentRunControl>,
-    managed_handoff_skills: Option<crate::handoff_skill::ManagedHandoffSkills>,
+    skill_installer: Option<Arc<dyn SkillInstaller>>,
 }
 
 impl HandoffWorker {
@@ -1132,7 +1104,7 @@ impl HandoffWorker {
             paths,
             executables,
             current_run_control: Arc::new(NoopCurrentRunControl),
-            managed_handoff_skills: None,
+            skill_installer: None,
         }
     }
 
@@ -1145,7 +1117,7 @@ impl HandoffWorker {
             paths,
             executables,
             current_run_control,
-            managed_handoff_skills: None,
+            skill_installer: None,
         }
     }
 
@@ -1153,7 +1125,14 @@ impl HandoffWorker {
         mut self,
         managed_handoff_skills: crate::handoff_skill::ManagedHandoffSkills,
     ) -> Self {
-        self.managed_handoff_skills = Some(managed_handoff_skills);
+        self.skill_installer = Some(Arc::new(ManagedSkillCatalog::handoff(
+            managed_handoff_skills,
+        )));
+        self
+    }
+
+    pub fn with_skill_installer(mut self, skill_installer: Arc<dyn SkillInstaller>) -> Self {
+        self.skill_installer = Some(skill_installer);
         self
     }
 
@@ -1306,9 +1285,9 @@ impl HandoffWorker {
             store.mark_running(task_id, transition_now_ms(), worker_process)?;
         }
 
-        if let Some(skills) = self.managed_handoff_skills.as_ref() {
-            if let Err(status) = skills.verify(task.source_provider) {
-                store.mark_failed(task_id, transition_now_ms(), status.failure_code())?;
+        if let Some(skill_installer) = self.skill_installer.as_ref() {
+            if let Err(failure_code) = skill_installer.verify(task.source_provider) {
+                store.mark_failed(task_id, transition_now_ms(), &failure_code)?;
                 return completed_task(&store, task_id, notifier);
             }
         }
@@ -1320,63 +1299,67 @@ impl HandoffWorker {
             return Err(anyhow!("Task became terminal before Provider startup"));
         }
 
-        let candidate = match run_source_provider(
-            self.executables.for_provider(task.source_provider),
-            &task,
-            &store,
-            transition_now_ms(),
-        ) {
-            Ok(candidate) => candidate,
-            Err(ProviderRunError::Failed(candidate)) => {
-                if let Some(candidate) =
-                    candidate.filter(|candidate| validate_handoff_artifact(candidate).is_ok())
-                {
-                    return complete_valid_candidate(
-                        &store,
-                        &self.paths,
-                        &task,
-                        &candidate,
-                        transition_now_ms(),
-                        notifier,
-                    );
-                }
-                if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
-                    return completed_task(&store, task_id, notifier);
-                }
-                if finish_deadline_terminated_provider(&store, task_id, transition_now_ms())? {
-                    return completed_task(&store, task_id, notifier);
-                }
-                store.mark_failed(task_id, transition_now_ms(), "provider_invocation_failed")?;
-                return completed_task(&store, task_id, notifier);
-            }
-            Err(ProviderRunError::Interrupted(candidate)) => {
-                if let Some(candidate) =
-                    candidate.filter(|candidate| validate_handoff_artifact(candidate).is_ok())
-                {
-                    return complete_valid_candidate(
-                        &store,
-                        &self.paths,
-                        &task,
-                        &candidate,
-                        transition_now_ms(),
-                        notifier,
-                    );
-                }
-                if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
-                    return completed_task(&store, task_id, notifier);
-                }
-                if finish_deadline_terminated_provider(&store, task_id, transition_now_ms())? {
-                    return completed_task(&store, task_id, notifier);
-                }
-                store.mark_interrupted(
-                    task_id,
-                    transition_now_ms(),
-                    "provider_outcome_uncertain",
-                )?;
-                return completed_task(&store, task_id, notifier);
-            }
+        let Some(source_executable) = self.executables.executable_for(task.source_provider) else {
+            store.mark_failed(task_id, transition_now_ms(), "source_provider_unavailable")?;
+            return completed_task(&store, task_id, notifier);
         };
-        if validate_handoff_artifact(&candidate).is_err() {
+        let candidate =
+            match run_source_provider(source_executable, &task, &store, transition_now_ms()) {
+                Ok(candidate) => candidate,
+                Err(ProviderRunError::Failed(candidate)) => {
+                    if let Some(candidate) = candidate
+                        .filter(|candidate| crate::handoff_artifact::validate(candidate).is_ok())
+                    {
+                        return complete_valid_candidate(
+                            &store,
+                            &self.paths,
+                            &task,
+                            &candidate,
+                            transition_now_ms(),
+                            notifier,
+                        );
+                    }
+                    if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
+                        return completed_task(&store, task_id, notifier);
+                    }
+                    if finish_deadline_terminated_provider(&store, task_id, transition_now_ms())? {
+                        return completed_task(&store, task_id, notifier);
+                    }
+                    store.mark_failed(
+                        task_id,
+                        transition_now_ms(),
+                        "provider_invocation_failed",
+                    )?;
+                    return completed_task(&store, task_id, notifier);
+                }
+                Err(ProviderRunError::Interrupted(candidate)) => {
+                    if let Some(candidate) = candidate
+                        .filter(|candidate| crate::handoff_artifact::validate(candidate).is_ok())
+                    {
+                        return complete_valid_candidate(
+                            &store,
+                            &self.paths,
+                            &task,
+                            &candidate,
+                            transition_now_ms(),
+                            notifier,
+                        );
+                    }
+                    if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
+                        return completed_task(&store, task_id, notifier);
+                    }
+                    if finish_deadline_terminated_provider(&store, task_id, transition_now_ms())? {
+                        return completed_task(&store, task_id, notifier);
+                    }
+                    store.mark_interrupted(
+                        task_id,
+                        transition_now_ms(),
+                        "provider_outcome_uncertain",
+                    )?;
+                    return completed_task(&store, task_id, notifier);
+                }
+            };
+        if crate::handoff_artifact::validate(&candidate).is_err() {
             if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
                 return completed_task(&store, task_id, notifier);
             }
@@ -1405,15 +1388,24 @@ fn complete_valid_candidate(
     now_ms: i64,
     notifier: &dyn CompletionNotifier,
 ) -> Result<OperationTask> {
-    let artifact_path = match publish_artifact(&paths.artifact_root, &task.id, candidate.as_bytes())
-    {
+    let artifact_path = match crate::handoff_artifact::publish(
+        &paths.artifact_root,
+        &task.id,
+        candidate.as_bytes(),
+    ) {
         Ok(path) => path,
         Err(_) => {
             store.mark_failed(&task.id, now_ms, "artifact_publish_failed")?;
             return completed_task(store, &task.id, notifier);
         }
     };
-    let plan = crate::successor::build_launch_plan(task, artifact_path.clone());
+    let plan = match crate::successor::build_launch_plan(task, artifact_path.clone()) {
+        Ok(plan) => plan,
+        Err(_) => {
+            store.mark_failed(&task.id, now_ms, "successor_launch_plan_invalid")?;
+            return completed_task(store, &task.id, notifier);
+        }
+    };
     store.mark_ready(&task.id, now_ms, &artifact_path, &plan)?;
     completed_task(store, &task.id, notifier)
 }
@@ -1597,10 +1589,10 @@ fn run_source_provider(
     now_ms: i64,
 ) -> std::result::Result<String, ProviderRunError> {
     let mut command = Command::new(executable);
-    command.args(
-        crate::providers::adapter_for(task.source_provider)
-            .handoff_resume_args(&task.source_session_id),
-    );
+    let runtime = crate::providers::registry()
+        .runtime_control(task.source_provider)
+        .map_err(|_| ProviderRunError::Failed(None))?;
+    command.args(runtime.handoff_resume_args(&task.source_session_id));
     let mut child = command
         .current_dir(&task.source_working_directory)
         .stdin(Stdio::piped())
@@ -1617,7 +1609,10 @@ fn run_source_provider(
     store
         .mark_provider_started(&task.id, provider_process)
         .map_err(|_| ProviderRunError::Interrupted(None))?;
-    let invocation = crate::providers::adapter_for(task.source_provider).handoff_skill_invocation();
+    let invocation = crate::providers::registry()
+        .skill_transport(task.source_provider)
+        .map_err(|_| ProviderRunError::Failed(None))?
+        .handoff_skill_invocation();
     let mut stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => return record_provider_exit_before_prompt(child, task, store, now_ms),
@@ -1668,148 +1663,6 @@ fn record_provider_exit_before_prompt(
     } else {
         ProviderRunError::Interrupted(candidate)
     })
-}
-
-pub(crate) fn validate_handoff_artifact(candidate: &str) -> Result<()> {
-    if candidate.trim().is_empty() {
-        return Err(anyhow!("Handoff Artifact is empty"));
-    }
-    if candidate.contains("-----BEGIN PRIVATE KEY-----")
-        || candidate.contains("-----BEGIN RSA PRIVATE KEY-----")
-        || candidate.contains("-----BEGIN OPENSSH PRIVATE KEY-----")
-    {
-        return Err(anyhow!("Handoff Artifact contains secret material"));
-    }
-    let lines = candidate.lines().collect::<Vec<_>>();
-    if contains_heading(&lines, "transcript") {
-        return Err(anyhow!("Handoff Artifact contains a Transcript section"));
-    }
-    if contains_heading(&lines, "tool output") {
-        return Err(anyhow!("Handoff Artifact contains a Tool Output section"));
-    }
-    let required_headings = required_handoff_headings();
-    let contract_headings = lines
-        .iter()
-        .copied()
-        .filter(|line| line.starts_with("# ") || line.starts_with("## "))
-        .collect::<Vec<_>>();
-    if contract_headings.as_slice() != required_headings {
-        return Err(anyhow!(
-            "Handoff Artifact headings do not match the contract"
-        ));
-    }
-    let mut positions = Vec::with_capacity(required_headings.len());
-    let mut search_from = 0;
-    for heading in required_headings {
-        let relative = lines[search_from..]
-            .iter()
-            .position(|line| *line == heading)
-            .ok_or_else(|| anyhow!("Handoff Artifact is missing {heading:?}"))?;
-        let position = search_from + relative;
-        positions.push(position);
-        search_from = position + 1;
-    }
-    for heading_index in [1, 2, 5, 9] {
-        let start = positions[heading_index] + 1;
-        let end = positions
-            .get(heading_index + 1)
-            .copied()
-            .unwrap_or(lines.len());
-        if !lines[start..end].iter().any(|line| !line.trim().is_empty()) {
-            return Err(anyhow!(
-                "Handoff Artifact section {:?} is empty",
-                required_headings[heading_index]
-            ));
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn required_handoff_headings() -> [&'static str; 10] {
-    crate::handoff_skill::artifact_headings()
-}
-
-fn contains_heading(lines: &[&str], needle: &str) -> bool {
-    lines.iter().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with('#')
-            && trimmed
-                .trim_start_matches('#')
-                .trim()
-                .to_ascii_lowercase()
-                .contains(needle)
-    })
-}
-
-fn publish_artifact(root: &Path, task_id: &str, contents: &[u8]) -> Result<PathBuf> {
-    create_private_dir(root)?;
-    let task_dir = root.join(task_id);
-    create_private_dir(&task_dir)?;
-    let final_path = task_dir.join("handoff.md");
-    let sequence = NEXT_ARTIFACT_TEMP.fetch_add(1, Ordering::Relaxed);
-    let temporary_path =
-        task_dir.join(format!(".handoff.md.tmp-{}-{sequence}", std::process::id()));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut temporary = options.open(&temporary_path)?;
-    temporary.write_all(contents)?;
-    temporary.sync_all()?;
-    fs::rename(&temporary_path, &final_path)?;
-    #[cfg(unix)]
-    fs::set_permissions(&final_path, fs::Permissions::from_mode(0o600))?;
-    fs::File::open(&task_dir)?.sync_all()?;
-    Ok(final_path)
-}
-
-fn create_private_dir(path: &Path) -> std::io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "private directory is not a real directory: {}",
-                    path.display()
-                ),
-            ));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = fs::DirBuilder::new();
-            #[cfg(unix)]
-            builder.mode(0o700);
-            builder.create(path)?;
-        }
-        Err(error) => return Err(error),
-    }
-    #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    Ok(())
-}
-
-fn is_executable(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-fn find_executable(search_directories: &[PathBuf], name: &str) -> Option<PathBuf> {
-    search_directories
-        .iter()
-        .map(|directory| directory.join(name))
-        .find(|candidate| is_executable(candidate))
 }
 
 fn new_task_id() -> String {

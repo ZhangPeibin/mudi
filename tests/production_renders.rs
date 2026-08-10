@@ -450,7 +450,6 @@ fn production_snapshot() -> Snapshot {
         sessions,
         recent_signals,
         attention: Some(attention),
-        status: "fixture ready".into(),
         generated_ms: NOW,
         ready: true,
         ..Snapshot::default()
@@ -2108,13 +2107,13 @@ fn selected_session_details_start_immediately_and_use_content_height() {
     let left_pane = |row: usize| lines[row].split_once('│').unwrap().0;
 
     assert!(left_pane(details_row + 1).starts_with(" Title"));
-    assert_eq!(rendered.height as usize - 1 - details_row, 10);
+    assert_eq!(rendered.height as usize - 1 - details_row, 9);
     assert!(!rendered
-        .style_at_in_row("Provider    Claude Code", "Provider")
+        .style_at_in_row("Provider    Claude Code -> claude-opus-4-8", "Provider")
         .add_modifier
         .contains(Modifier::BOLD));
     assert!(!rendered
-        .style_at_in_row("Provider    Claude Code", "Claude Code")
+        .style_at_in_row("Provider    Claude Code -> claude-opus-4-8", "Claude Code")
         .add_modifier
         .contains(Modifier::BOLD));
 }
@@ -2832,8 +2831,7 @@ fn selecting_an_exited_session_targets_the_inspector_and_workspace() {
 
     for required in [
         "⬡ recent",
-        "Provider   Codex CLI",
-        "Model      recent-model",
+        "Provider    Codex CLI -> recent-model",
         "Session Codex CLI / recent",
         "Conversation unavailable.",
     ] {
@@ -2977,10 +2975,11 @@ fn historical_tree_selection_survives_refresh_by_provider_and_native_id() {
     .unwrap();
     let refreshed = render(&snapshot, &ui, 120, 30);
 
-    assert!(refreshed.text.contains("Provider   Codex CLI"));
-    assert!(refreshed.text.contains("Model      codex-model"));
+    assert!(refreshed
+        .text
+        .contains("Provider    Codex CLI -> codex-model"));
     assert!(refreshed.text.contains("Session Codex CLI /"));
-    assert!(!refreshed.text.contains("Model      claude-model"));
+    assert!(!refreshed.text.contains("Claude Code -> claude-model"));
 }
 
 #[test]
@@ -3084,8 +3083,7 @@ fn session_tree_selection_drives_the_inspector_and_workspace_after_refresh() {
     let selected = render(&snapshot, &ui, 120, 30);
     for required in [
         "⬡ x-shared",
-        "Provider    Codex CLI",
-        "Model       gpt-5-codex",
+        "Provider    Codex CLI -> gpt-5-codex",
         "40%",
         "Session Codex CLI / x-shared",
         "Conversation unavailable.",
@@ -3104,7 +3102,7 @@ fn session_tree_selection_drives_the_inspector_and_workspace_after_refresh() {
     .unwrap();
     let refreshed = render(&snapshot, &ui, 120, 30);
     for required in [
-        "Provider    Codex CLI",
+        "Provider    Codex CLI -> gpt-5-codex",
         "Session Codex CLI / x-shared",
         "Conversation unavailable.",
     ] {
@@ -3843,7 +3841,7 @@ fn full_open_detail_matches_the_reviewed_production_fixture() {
         "Shared Worktree Risk",
         "Source log",
         "Session ID",
-        "fields 1/22",
+        "fields 1/17",
     ] {
         assert!(
             rendered.text.contains(required),

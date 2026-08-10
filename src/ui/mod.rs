@@ -396,6 +396,9 @@ pub enum UiAction {
     Quit,
 }
 
+/// Declarative request emitted by the UI. The application controller owns its effects.
+pub type UiIntent = UiAction;
+
 impl Default for Ui {
     /// 构造首次启动时的默认界面状态。
     fn default() -> Self {

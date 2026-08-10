@@ -10,7 +10,7 @@
 use crate::domain::{Compaction, ContextState, Provider, Usage};
 use crate::providers::ParsedSession;
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -114,6 +114,12 @@ impl Index {
 
     /// Fingerprint of a previously-indexed source file, if present.
     pub fn fingerprint(&self, source_path: &Path) -> Option<Fingerprint> {
+        self.fingerprint_checked(source_path).ok().flatten()
+    }
+
+    /// Fallible form of [`Self::fingerprint`] for refresh callers that must not
+    /// hide an unavailable disposable index behind an empty projection.
+    pub fn fingerprint_checked(&self, source_path: &Path) -> Result<Option<Fingerprint>> {
         self.conn
             .query_row(
                 "SELECT source_mtime_ns, source_size FROM sessions WHERE source_path = ?1",
@@ -125,7 +131,8 @@ impl Index {
                     })
                 },
             )
-            .ok()
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Insert or replace a parsed session and its child rows.
@@ -218,7 +225,7 @@ impl Index {
                     r.get::<_, String>(2)?,
                 ))
             })?;
-            rows.filter_map(Result::ok).collect()
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
 
         let mut pruned = 0;
@@ -285,8 +292,7 @@ impl Index {
                     },
                 })
             })?
-            .filter_map(Result::ok)
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         // Attach child rows.
         let mut out = Vec::with_capacity(base.len());
@@ -310,8 +316,7 @@ impl Index {
                         },
                     ))
                 })?
-                .filter_map(Result::ok)
-                .collect();
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             let mut cp = self.conn.prepare(
                 "SELECT at_ms, trigger, pre_tokens FROM compactions
@@ -325,8 +330,7 @@ impl Index {
                         pre_tokens: r.get::<_, Option<i64>>(2)?.map(|t| t as u64),
                     })
                 })?
-                .filter_map(Result::ok)
-                .collect();
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             out.push(s);
         }

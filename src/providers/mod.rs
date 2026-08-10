@@ -7,13 +7,13 @@ pub mod state;
 
 use crate::config::Config;
 use crate::domain::{Compaction, ContextState, Provider, SourceFormat, Usage};
+use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// A provider adapter owns everything that differs between providers: where its
-/// logs live and how to parse them. One impl per provider means adding a provider
-/// is a pure addition — no `match provider` sites elsewhere.
-pub trait ProviderAdapter {
+/// Source discovery, parsing, live observation, and Current Run usage for one Provider.
+pub trait ObservationPort: Sync {
     /// Which provider this adapter speaks for.
     fn provider(&self) -> Provider;
     /// Encoding used by this provider's discovered source logs.
@@ -26,14 +26,28 @@ pub trait ProviderAdapter {
     /// Live lifecycle state for a session, given the shared once-per-scan process
     /// probe and the session's source path. The path is sufficient: Claude derives
     /// its session id from the transcript filename; Codex keys on the path itself.
-    fn live_state(&self, probe: &state::StateDetector, source_path: &Path) -> state::LiveState;
+    fn live_state(
+        &self,
+        probe: &state::StateDetector,
+        source_session_id: &str,
+        source_path: &Path,
+    ) -> state::LiveState;
     /// Usage observed at or after a validated Current Run start. `None` means
     /// the source cannot be read; an empty successful Run returns zero Usage.
     fn current_run_usage(&self, source_path: &Path, started_at_ms: i64) -> Option<ParsedUsage>;
+}
+
+/// Provider-native process and invocation behavior used by authorized workflows.
+pub trait RuntimeControlPort: Sync {
+    /// Observe the exact Current Run named by source evidence.
+    fn observe_current_run(
+        &self,
+        probe: &state::StateDetector,
+        source_session_id: &str,
+        source_path: &Path,
+    ) -> state::LiveState;
     /// Provider-native arguments for read-only, noninteractive Handoff generation.
     fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String>;
-    /// Explicit Provider-native invocation for the managed Handoff Skill.
-    fn handoff_skill_invocation(&self) -> &'static str;
     /// Resolve one exact launched process to a Provider-native Successor Session.
     /// `None` means the available source evidence is not conclusive.
     fn resolve_successor_session(
@@ -41,18 +55,214 @@ pub trait ProviderAdapter {
         cfg: &Config,
         process: state::ProcessIdentity,
     ) -> Option<String>;
+    /// Build a provider-native launch plan for a validated Handoff Artifact.
+    fn successor_launch_arguments(&self, artifact_path: &Path) -> Vec<String>;
+    /// Resolve this Provider's configured executable when it is usable.
+    fn executable<'a>(&self, executables: &'a ProviderExecutables) -> Option<&'a Path>;
+}
+
+/// Provider-native transport for a declared managed Skill.
+pub trait SkillTransportPort: Sync {
+    /// Explicit Provider-native invocation for the managed Handoff Skill.
+    fn handoff_skill_invocation(&self) -> &'static str;
+}
+
+/// Backwards-compatible aggregate used only by registry compatibility helpers.
+pub trait ProviderAdapter: ObservationPort + RuntimeControlPort + SkillTransportPort {}
+
+impl<T> ProviderAdapter for T where T: ObservationPort + RuntimeControlPort + SkillTransportPort {}
+
+/// A requested capability is not available for the selected Provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilityUnavailable {
+    provider: Provider,
+    capability: &'static str,
+}
+
+impl CapabilityUnavailable {
+    fn new(provider: Provider, capability: &'static str) -> Self {
+        Self {
+            provider,
+            capability,
+        }
+    }
+}
+
+impl fmt::Display for CapabilityUnavailable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} does not support {}",
+            self.provider.label(),
+            self.capability
+        )
+    }
+}
+
+impl std::error::Error for CapabilityUnavailable {}
+
+struct ProviderCapabilities {
+    provider: Provider,
+    adapter: &'static dyn ProviderAdapter,
+    observation: &'static dyn ObservationPort,
+    runtime_control: &'static dyn RuntimeControlPort,
+    skill_transport: &'static dyn SkillTransportPort,
+}
+
+/// The sole owner of Provider capability dispatch.
+pub struct ProviderRegistry {
+    providers: &'static [ProviderCapabilities],
+}
+
+impl ProviderRegistry {
+    fn entry(&self, provider: Provider) -> Option<&'static ProviderCapabilities> {
+        self.providers
+            .iter()
+            .find(|entry| entry.provider == provider)
+    }
+
+    pub fn observation(
+        &self,
+        provider: Provider,
+    ) -> Result<&'static dyn ObservationPort, CapabilityUnavailable> {
+        self.entry(provider)
+            .map(|entry| entry.observation)
+            .ok_or_else(|| CapabilityUnavailable::new(provider, "source observation"))
+    }
+
+    pub fn observations(&self) -> impl Iterator<Item = &'static dyn ObservationPort> + '_ {
+        self.providers.iter().map(|entry| entry.observation)
+    }
+
+    pub fn runtime_control(
+        &self,
+        provider: Provider,
+    ) -> Result<&'static dyn RuntimeControlPort, CapabilityUnavailable> {
+        self.entry(provider)
+            .map(|entry| entry.runtime_control)
+            .ok_or_else(|| CapabilityUnavailable::new(provider, "runtime control"))
+    }
+
+    pub fn skill_transport(
+        &self,
+        provider: Provider,
+    ) -> Result<&'static dyn SkillTransportPort, CapabilityUnavailable> {
+        self.entry(provider)
+            .map(|entry| entry.skill_transport)
+            .ok_or_else(|| CapabilityUnavailable::new(provider, "Skill transport"))
+    }
+}
+
+static CLAUDE_ADAPTER: claude::ClaudeAdapter = claude::ClaudeAdapter;
+static CODEX_ADAPTER: codex::CodexAdapter = codex::CodexAdapter;
+
+static PROVIDER_CAPABILITIES: &[ProviderCapabilities] = &[
+    ProviderCapabilities {
+        provider: Provider::ClaudeCode,
+        adapter: &CLAUDE_ADAPTER,
+        observation: &CLAUDE_ADAPTER,
+        runtime_control: &CLAUDE_ADAPTER,
+        skill_transport: &CLAUDE_ADAPTER,
+    },
+    ProviderCapabilities {
+        provider: Provider::CodexCli,
+        adapter: &CODEX_ADAPTER,
+        observation: &CODEX_ADAPTER,
+        runtime_control: &CODEX_ADAPTER,
+        skill_transport: &CODEX_ADAPTER,
+    },
+];
+
+static REGISTRY: ProviderRegistry = ProviderRegistry {
+    providers: PROVIDER_CAPABILITIES,
+};
+
+pub fn registry() -> &'static ProviderRegistry {
+    &REGISTRY
+}
+
+/// Provider-native executables used by authorized runtime workflows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderExecutables {
+    claude: PathBuf,
+    codex: PathBuf,
+}
+
+impl ProviderExecutables {
+    pub fn new(claude: PathBuf, codex: PathBuf) -> Self {
+        Self { claude, codex }
+    }
+
+    pub fn discover() -> Self {
+        let search = std::env::var_os("PATH")
+            .as_deref()
+            .map(std::env::split_paths)
+            .map(Iterator::collect::<Vec<_>>)
+            .unwrap_or_default();
+        let mut discovered = Self::discover_in(&search);
+        if let Some(path) = std::env::var_os("SESSIONMESH_CLAUDE_EXECUTABLE") {
+            discovered.claude = PathBuf::from(path);
+        }
+        if let Some(path) = std::env::var_os("SESSIONMESH_CODEX_EXECUTABLE") {
+            discovered.codex = PathBuf::from(path);
+        }
+        discovered
+    }
+
+    pub fn discover_in(search_directories: &[PathBuf]) -> Self {
+        Self {
+            claude: find_executable(search_directories, "claude").unwrap_or_default(),
+            codex: find_executable(search_directories, "codex").unwrap_or_default(),
+        }
+    }
+
+    pub fn executable_for(&self, provider: Provider) -> Option<&Path> {
+        registry().runtime_control(provider).ok()?.executable(self)
+    }
+
+    pub(crate) fn claude_path(&self) -> &Path {
+        &self.claude
+    }
+
+    pub(crate) fn codex_path(&self) -> &Path {
+        &self.codex
+    }
+}
+
+fn find_executable(search_directories: &[PathBuf], name: &str) -> Option<PathBuf> {
+    search_directories
+        .iter()
+        .map(|directory| directory.join(name))
+        .find(|candidate| is_executable(candidate))
+}
+
+pub(crate) fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 /// Every provider adapter, in display order. Iterated instead of matching on
 /// [`Provider`], so no dispatch site enumerates the variants.
-pub const ADAPTERS: &[&dyn ProviderAdapter] = &[&claude::ClaudeAdapter, &codex::CodexAdapter];
+pub const ADAPTERS: &[&dyn ProviderAdapter] = &[&CLAUDE_ADAPTER, &CODEX_ADAPTER];
 
 /// The adapter that owns `provider`. Every [`Provider`] has exactly one.
 pub fn adapter_for(provider: Provider) -> &'static dyn ProviderAdapter {
-    ADAPTERS
-        .iter()
-        .copied()
-        .find(|a| a.provider() == provider)
+    registry()
+        .entry(provider)
+        .map(|entry| entry.adapter)
         .expect("every Provider has a registered adapter")
 }
 
@@ -144,6 +354,20 @@ mod tests {
         for p in [Provider::ClaudeCode, Provider::CodexCli] {
             assert_eq!(adapter_for(p).provider(), p);
         }
+    }
+
+    #[test]
+    fn unavailable_capabilities_are_explicit() {
+        let registry = ProviderRegistry { providers: &[] };
+        let error = registry
+            .runtime_control(Provider::ClaudeCode)
+            .err()
+            .expect("an absent capability must not be guessed");
+
+        assert_eq!(
+            error.to_string(),
+            "Claude Code does not support runtime control"
+        );
     }
 
     #[test]

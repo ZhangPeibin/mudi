@@ -12,13 +12,13 @@
    ▾ main !2                   │Conversation unavailable.
     > ✳ critical       ! ●  90%│
       ⬡ x-shared       ! ●  40%│
+   ▾ warning                   │
  DETAILS ──────────────────────│
  Title       critical          │
  Description N/A               │
  Context     [#########-] 90.0%│
  Attention   Crit Ctx · 90% +1 │
- Provider    Claude Code       │
+ Provider    Claude Code -> ...│
  Worktree    ...sionmesh @ main│
- Model       claude-opus-4-8   │
 ───────────────────────────────┴────────────────────────────────────────────────
-j/k | Left/Right | Enter | e Edit | ? | q Quit                     fixture ready
+j/k | Left/Right | Enter | e Edit | ? | q Quit watching · 0 sessions · 0 parsed

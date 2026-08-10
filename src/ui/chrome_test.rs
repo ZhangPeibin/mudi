@@ -24,7 +24,7 @@ fn render(snapshot: &Snapshot, ui: &Ui) -> String {
 #[test]
 fn global_chrome_shows_product_navigation_inventory_and_status() {
     let snapshot = Snapshot {
-        status: "Watching local sessions".into(),
+        ready: true,
         ..Snapshot::default()
     };
 
@@ -32,5 +32,5 @@ fn global_chrome_shows_product_navigation_inventory_and_status() {
 
     assert!(rendered.contains("SessionMesh"));
     assert!(rendered.contains("0 Projects"));
-    assert!(rendered.contains("Watching local sessions"));
+    assert!(rendered.contains("watching · 0 sessions · 0 parsed / 0 skipped"));
 }

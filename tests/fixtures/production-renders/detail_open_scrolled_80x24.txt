@@ -1,24 +1,24 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
         ┌ Session Detail ──────────────────────────────────────────────┐       │
-        │Current Run per-model Usage                                   │       │
-        │  claude-opus-4-8      in 1.2k out 230 cr 3.4k cw 45  $0.04   │       │
+        │Output          230                                           │       │
+        │Est. API cost   $0.04                                         │       │
         │                                                              │       │
-        │Transcript Lifetime Usage                                     │       │
-        │Input           12.3k                                         │       │
-        │Output          2.3k                                          │───────┘
- PROJECT│Cache read      34.6k                                         │────────
- ▾ sessi│Cache write     456                                           │n select
-   ▾ mai│Est. API cost   $0.42                                         │
-    > ✳ │                                                              │
-      ⬡ │Transcript Lifetime per-model Usage                           │
- DETAILS│  claude-opus-4-8      in 12.3k out 2.3k cr 34.6k cw 456      │
- Title  │$0.42                                                         │
- Descrip│                                                              │
- Context│Compactions (2)                                               │
- Attenti│  11-15 06:11  trigger=auto  pre=188.0k                       │
- Provide│  11-15 06:12  trigger=manual  pre=181.0k                     │
- Worktre│Compaction count2                                             │
- Model  └ Up/Down Select | c Copy | h Handoff | Esc Close fields 22/22 ┘
+        │Current Run per-model Usage                                   │       │
+        │  claude-opus-4-8      in 1.2k out 230  $0.04                 │       │
+        │                                                              │───────┘
+ PROJECT│Transcript Lifetime Usage                                     │────────
+ ▾ sessi│Input           12.3k                                         │n select
+   ▾ mai│Output          2.3k                                          │
+    > ✳ │Est. API cost   $0.42                                         │
+      ⬡ │                                                              │
+   ▾ war│Transcript Lifetime per-model Usage                           │
+ DETAILS│  claude-opus-4-8      in 12.3k out 2.3k  $0.42               │
+ Title  │                                                              │
+ Descrip│Compactions (2)                                               │
+ Context│  11-15 06:11  trigger=auto  pre=188.0k                       │
+ Attenti│  11-15 06:12  trigger=manual  pre=181.0k                     │
+ Provide│Compaction count2                                             │
+ Worktre└ Up/Down Select | c Copy | h Handoff | Esc Close fields 17/17 ┘
 ───────────────────────────────┴────────────────────────────────────────────────
 Esc | j/k Fields | c Copy | e Edit | h Handoff | ? | q Quit Estimated using API

@@ -17,14 +17,14 @@
    ▾ idle                                              │
       ⬡ dex-idle                            ○  30%   3m│
    ▾ healthy                                           │
+      ✳ -healthy                            ●  20%   4m│
  DETAILS ──────────────────────────────────────────────│
  Title       critical                                  │
  Description N/A                                       │
  Context     [###########-] 90.0%                      │
  Attention   Critical Context · 90% · +1               │
- Provider    Claude Code                               │
+ Provider    Claude Code -> claude-opus-4-8            │
  Worktree    /Users/fixture/code/sessionmesh @ main    │
- Model       claude-opus-4-8                           │
- Run usage   in 1.2k | out 230 | read 3.4k | create 45 │
+ Run usage   in 1.2k | out 230                         │
 ───────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────
-j/k | Left/Right | Enter | e Edit session | 1/2/3 | r | ? | q Quit                                         fixture ready
+j/k | Left/Right | Enter | e Edit session | 1/2/3 | r | ? | q Quit          watching · 0 sessions · 0 parsed / 0 skipped

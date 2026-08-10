@@ -658,7 +658,6 @@ fn demo_snapshot() -> Snapshot {
             warning: 1,
             critical: 0,
         },
-        status: "watching".into(),
         ready: true,
         ..Default::default()
     }
@@ -686,7 +685,6 @@ fn render_tab(tab: Tab, detail: bool) {
 fn t_key_does_not_change_the_active_theme_or_show_a_notice() {
     let mut ui = Ui::default();
     let snapshot = Snapshot {
-        status: "watching".into(),
         ..Snapshot::default()
     };
 
@@ -895,7 +893,6 @@ fn now_sorts_projects_by_activity_and_their_sessions_by_attention() {
 
     let mut snapshot = Snapshot {
         sessions: vec![healthy, warning, shared, critical],
-        status: "watching".into(),
         generated_ms: 3_000,
         ready: true,
         ..Snapshot::default()
@@ -1767,7 +1764,6 @@ fn compact_status_strip_limits_signal_rows_while_the_editor_remains_visible() {
 fn now_empty_state_explains_that_there_are_no_open_sessions() {
     let snapshot = Snapshot {
         ready: true,
-        status: "watching".into(),
         ..Snapshot::default()
     };
     let ui = Ui::default();
@@ -1824,7 +1820,7 @@ fn compact_now_shortens_long_identity_before_operational_evidence() {
         .unwrap();
 
     assert!(page.contains("Worktree"));
-    assert!(page.contains("Model"));
+    assert!(page.contains("Provider"));
     for evidence in ["!", "●", "✳", "-session", "75%"] {
         assert!(
             session.contains(evidence),
@@ -2921,7 +2917,7 @@ fn field_navigation_auto_scrolls_without_changing_the_origin_session() {
         .unwrap();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
-    assert!(rendered_with_snapshot(&ui, &snapshot).contains("scroll-session-"));
+    assert!(rendered_with_snapshot(&ui, &snapshot).contains("Claude Code ->"));
 }
 
 #[test]
@@ -2983,7 +2979,7 @@ fn detail_keeps_required_session_evidence_without_reading_source_content() {
 
     for expected in [
         "Provider",
-        "Claude Code",
+        "Claude Code -> claude-opus-4-8",
         "Project",
         "sessionmesh",
         "Worktree",
@@ -2995,8 +2991,6 @@ fn detail_keeps_required_session_evidence_without_reading_source_content() {
         "-session",
         "Session ID",
         "demo-session",
-        "Latest model",
-        "claude-opus-4-8",
         "Busy",
         "Current Context",
         "150.0k / 200.0k",
@@ -3004,8 +2998,6 @@ fn detail_keeps_required_session_evidence_without_reading_source_content() {
         "Transcript Lifetime Usage",
         "Input",
         "Output",
-        "Cache read",
-        "Cache write",
         "Est. API cost",
         "$0.42",
         "Compactions (1)",
@@ -3017,6 +3009,26 @@ fn detail_keeps_required_session_evidence_without_reading_source_content() {
             "Detail should contain {expected:?}"
         );
     }
+    assert!(!detail.contains("Cache read"));
+    assert!(!detail.contains("Cache write"));
+}
+
+#[test]
+fn full_detail_keeps_provider_when_the_latest_model_is_unavailable() {
+    let mut snapshot = demo_snapshot();
+    snapshot.sessions[0].latest_model = None;
+    let mut ui = Ui {
+        tab: Tab::Claude,
+        ..Ui::default()
+    };
+    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+
+    let detail = rendered_rows_at(&ui, &snapshot, 120, 80);
+
+    assert!(detail.contains("Provider        Claude Code"));
+    assert!(!detail.contains("Latest model"));
+    assert!(!detail.contains("->"));
 }
 
 #[test]

@@ -1,7 +1,7 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
 ┌ CLAUDE CODE SESSIONS | grouped by Project ───────────────────────────────────┐
 │  State┌ Session Detail ──────────────────────────────────────────────┐       │
-│       │Provider        Claude Code                                   │       │
+│       │Provider        Claude Code -> claude-sonnet-4-5              │       │
 │PROJECT│Project         sessionmesh                                   │       │
 │  Busy │Worktree        /Users/fixture/code/sessionmesh-older         │       │
 │    I 1│Branch          archive                                       │       │
@@ -10,15 +10,15 @@
 │  Busy │Source format   JSONL                                         │       │
 │    I 1│Title           de-older                                      │       │
 │  - OLD│Session ID      claude-older                                  │       │
-│> · —  │Latest model    claude-sonnet-4-5                             │       │
-│    I 1│State           Exited                                        │       │
-│       │                                                              │       │
+│> · —  │State           Exited                                        │       │
+│    I 1│                                                              │       │
 │       │Current Context                                               │       │
 │       │Occupancy        50.0k / 200.0k (25.0%)                       │       │
 │       │                                                              │       │
 │       │Attention Conditions                                          │       │
 │       │  None - Exited Session has no current Attention Conditions   │       │
 │       │                                                              │       │
-│       └ Up/Down Select | c Copy | h Handoff | Esc Close  fields 1/17 ┘       │
+│       │Transcript Lifetime Usage                                     │       │
+│       └ Up/Down Select | c Copy | h Handoff | Esc Close  fields 1/14 ┘       │
 └──────────────────────────────────────────────────────────────────────────────┘
 Esc | j/k Fields | c Copy | e Edit | h Handoff | ? | q Quit Estimated using API

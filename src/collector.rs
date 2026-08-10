@@ -7,7 +7,8 @@ use crate::index::{fingerprint_of, Index, StoredSession};
 use crate::models::ModelCatalog;
 use crate::project;
 use crate::providers::state::StateDetector;
-use crate::providers::{self, ProviderAdapter};
+use crate::providers::{self, ObservationPort};
+use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -24,64 +25,111 @@ pub struct ScanStats {
 /// unchanged ones, and prune sessions whose source vanished. Each provider's
 /// adapter owns discovery and parsing; nothing here enumerates providers.
 pub fn refresh(cfg: &Config, index: &mut Index) -> ScanStats {
+    refresh_checked(cfg, index).unwrap_or_default()
+}
+
+/// Fallible refresh used by the read-model publisher. Malformed provider records remain
+/// normal non-fatal skips; index failures are reported to the caller.
+pub fn refresh_checked(cfg: &Config, index: &mut Index) -> Result<ScanStats> {
     let mut stats = ScanStats::default();
     let mut present: HashSet<PathBuf> = HashSet::new();
 
-    for adapter in providers::ADAPTERS {
+    for adapter in providers::registry().observations() {
         let files = adapter.discover(cfg);
         stats.discovered += files.len();
         for path in files {
             present.insert(path.clone());
-            index_one(index, &path, *adapter, &mut stats);
+            index_one_checked(index, &path, adapter, &mut stats)?;
         }
     }
 
-    stats.pruned = index.prune_missing(&present).unwrap_or(0);
-    stats
+    stats.pruned = index.prune_missing(&present)?;
+    Ok(stats)
 }
 
-fn index_one(index: &mut Index, path: &Path, adapter: &dyn ProviderAdapter, stats: &mut ScanStats) {
+fn index_one_checked(
+    index: &mut Index,
+    path: &Path,
+    adapter: &dyn ObservationPort,
+    stats: &mut ScanStats,
+) -> Result<()> {
     let Some(fp) = fingerprint_of(path) else {
-        return;
+        return Ok(());
     };
     // Skip unchanged files — this is what keeps incremental updates cheap.
-    if index.fingerprint(path) == Some(fp) {
+    if index.fingerprint_checked(path)? == Some(fp) {
         stats.skipped += 1;
-        return;
+        return Ok(());
     }
     if let Some(parsed) = adapter.parse_file(path) {
-        if index.upsert(&parsed, path, fp).is_ok() {
-            stats.parsed += 1;
-        }
+        index.upsert(&parsed, path, fp)?;
+        stats.parsed += 1;
     }
+    Ok(())
 }
 
 /// Build the normalized session list from the index, attaching live state and cost.
 pub fn build_sessions(cfg: &Config, index: &Index, models: &ModelCatalog) -> Vec<Session> {
-    let stored = index.load_all().unwrap_or_default();
+    let mut resolver = ProjectResolverCache::default();
+    build_sessions_with_resolver(cfg, index, models, &mut resolver).unwrap_or_default()
+}
+
+/// Long-lived cache for Project/Worktree resolution. Refresh owns this cache so an
+/// unchanged canonical cwd does not start a new Git probe on every poll.
+#[derive(Debug, Default)]
+pub struct ProjectResolverCache {
+    resolutions: HashMap<String, project::ProjectResolution>,
+}
+
+impl ProjectResolverCache {
+    pub fn resolve(&mut self, cwd: Option<&str>) -> project::ProjectResolution {
+        let Some(cwd) = cwd else {
+            return project::ProjectResolution::default();
+        };
+        self.resolutions
+            .entry(cwd.to_string())
+            .or_insert_with(|| project::resolve(Some(Path::new(cwd))))
+            .clone()
+    }
+
+    /// Drop a cached result when the source evidence for that cwd has changed deliberately.
+    pub fn invalidate(&mut self, cwd: &str) {
+        self.resolutions.remove(cwd);
+    }
+
+    fn retain_source_cwds<'a>(&mut self, cwds: impl Iterator<Item = &'a str>) {
+        let current = cwds.collect::<HashSet<_>>();
+        self.resolutions
+            .retain(|cwd, _| current.contains(cwd.as_str()));
+    }
+}
+
+/// Build sessions without hiding disposable-index failures. The caller owns the resolver
+/// cache for the lifetime appropriate to its refresh loop.
+pub fn build_sessions_with_resolver(
+    cfg: &Config,
+    index: &Index,
+    models: &ModelCatalog,
+    resolver: &mut ProjectResolverCache,
+) -> Result<Vec<Session>> {
+    let stored = index.load_all()?;
+    resolver.retain_source_cwds(
+        stored
+            .iter()
+            .filter_map(|session| session.parsed.cwd.as_deref()),
+    );
     let detector = StateDetector::gather(&cfg.claude_sessions_dir());
-    let mut resolutions: HashMap<String, project::ProjectResolution> = HashMap::new();
 
     let mut sessions: Vec<Session> = stored
         .into_iter()
         .map(|stored| {
-            let resolved = stored
-                .parsed
-                .cwd
-                .as_deref()
-                .map(|cwd| {
-                    resolutions
-                        .entry(cwd.to_string())
-                        .or_insert_with(|| project::resolve(Some(Path::new(cwd))))
-                        .clone()
-                })
-                .unwrap_or_default();
+            let resolved = resolver.resolve(stored.parsed.cwd.as_deref());
             to_session(stored, &detector, models, resolved)
         })
         .collect();
 
     disambiguate_projects(&mut sessions);
-    sessions
+    Ok(sessions)
 }
 
 fn to_session(
@@ -95,8 +143,10 @@ fn to_session(
         source_path,
     } = stored;
 
-    let adapter = providers::adapter_for(parsed.provider);
-    let live = adapter.live_state(detector, &source_path);
+    let observation = providers::registry()
+        .observation(parsed.provider)
+        .expect("stored session Provider has source observation");
+    let live = observation.live_state(detector, &parsed.id, &source_path);
     let state = live.state;
     let mut context = parsed.context;
     context.window = parsed
@@ -113,7 +163,7 @@ fn to_session(
     );
     let current_run_usage = if state.is_open() {
         live.current_run_started_at_ms
-            .and_then(|started_at_ms| adapter.current_run_usage(&source_path, started_at_ms))
+            .and_then(|started_at_ms| observation.current_run_usage(&source_path, started_at_ms))
             .map(|run| price_usage(run, models))
     } else {
         None
@@ -124,7 +174,7 @@ fn to_session(
         id: parsed.id,
         source: SourceMetadata {
             path: source_path,
-            format: adapter.source_format(),
+            format: observation.source_format(),
         },
         project: resolved.project,
         worktree: resolved.worktree,

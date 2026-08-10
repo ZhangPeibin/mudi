@@ -118,10 +118,10 @@ fn preferred_height_is_the_visible_rows_plus_the_heading_rule() {
     };
     let ui = Ui::default();
 
-    assert_eq!(detail_lines(&snapshot, &ui, 60).len(), 7);
-    assert_eq!(preferred_height(&snapshot, &ui, 61), 8);
-    assert_eq!(detail_lines(&snapshot, &ui, 35).len(), 6);
-    assert_eq!(preferred_height(&snapshot, &ui, 36), 7);
+    assert_eq!(detail_lines(&snapshot, &ui, 60).len(), 6);
+    assert_eq!(preferred_height(&snapshot, &ui, 61), 7);
+    assert_eq!(detail_lines(&snapshot, &ui, 35).len(), 5);
+    assert_eq!(preferred_height(&snapshot, &ui, 36), 6);
     assert_eq!(preferred_height(&Snapshot::default(), &ui, 60), 2);
 
     let mut selected = session();
@@ -139,8 +139,8 @@ fn preferred_height_is_the_visible_rows_plus_the_heading_rule() {
             .iter()
             .any(|line| line.to_string().starts_with(required)));
     }
-    assert_eq!(configured_lines.len(), 8);
-    assert_eq!(preferred_height(&configured, &ui, 36), 9);
+    assert_eq!(configured_lines.len(), 7);
+    assert_eq!(preferred_height(&configured, &ui, 36), 8);
 }
 
 #[test]
@@ -216,7 +216,6 @@ fn details_only_show_facts_not_already_visible_in_the_tree() {
         "Description",
         "Provider",
         "Worktree",
-        "Model",
         "Context",
         "Run usage",
     ] {
@@ -226,8 +225,33 @@ fn details_only_show_facts_not_already_visible_in_the_tree() {
         assert!(!rendered.contains(duplicate), "repeated {duplicate}");
     }
     assert!(rendered.contains("Description N/A"));
+    assert!(rendered.contains("Provider    Claude Code -> test-model"));
+    assert!(!rendered.contains("Model"));
+    assert!(rendered.contains("in 1.2k | out 230"));
+    assert!(!rendered.contains("read 3.4k"));
+    assert!(!rendered.contains("create 45"));
     assert!(!rendered.contains("Attention"));
     assert!(!rendered.contains("Task"));
+}
+
+#[test]
+fn compact_details_keep_provider_without_an_empty_model_row() {
+    let mut session = session();
+    session.latest_model = None;
+    let snapshot = Snapshot {
+        sessions: vec![session],
+        ..Snapshot::default()
+    };
+
+    let rendered = detail_lines(&snapshot, &Ui::default(), 60)
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Provider    Claude Code"));
+    assert!(!rendered.contains("->"));
+    assert!(!rendered.contains("Model"));
 }
 
 #[test]
@@ -245,7 +269,8 @@ fn compact_details_prioritize_tree_height_over_usage_summary() {
 
     assert!(rendered.contains("Provider"));
     assert!(rendered.contains("Worktree"));
-    assert!(rendered.contains("Model"));
+    assert!(rendered.contains("Provider"));
+    assert!(!rendered.contains("Model"));
     assert!(!rendered.contains("Run"));
 }
 

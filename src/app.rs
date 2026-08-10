@@ -1,12 +1,7 @@
 //! UI-facing application state: tabs, the shared snapshot, and
 //! small formatting helpers. Rendering lives in `ui/`.
 
-use crate::alerts::AlertCounts;
-use crate::attention::AttentionSnapshot;
-use crate::collector::ScanStats;
 use crate::domain::{Provider, Session};
-use crate::signals::RecentSignal;
-use crate::tasks::OperationTask;
 use chrono::{Local, TimeZone};
 
 /// The three top-level tabs.
@@ -45,20 +40,8 @@ impl Tab {
     }
 }
 
-/// Immutable snapshot produced by the background collector, consumed by the UI.
-#[derive(Debug, Clone, Default)]
-pub struct Snapshot {
-    pub sessions: Vec<Session>,
-    pub tasks: Vec<OperationTask>,
-    pub recent_signals: Vec<RecentSignal>,
-    pub attention: Option<AttentionSnapshot>,
-    pub stats: ScanStats,
-    pub alerts: AlertCounts,
-    pub status: String,
-    pub generated_ms: i64,
-    /// True once the first full scan has completed.
-    pub ready: bool,
-}
+/// Compatibility name for the structured read model consumed by the UI.
+pub use crate::read_model::RefreshSnapshot as Snapshot;
 
 // ---- formatting helpers ----
 

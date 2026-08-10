@@ -2,6 +2,7 @@
 
 use super::{selected_style, Ui};
 use crate::app::{fmt_tokens, Snapshot, Tab};
+use crate::read_model::RefreshHealth;
 use crate::tasks::OperationTask;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -176,7 +177,7 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     } else if let Some(label_error) = label_error.as_ref() {
         label_error.clone()
     } else {
-        snap.status.clone()
+        refresh_status(snap)
     };
     let shows_price_note = ui.tab != Tab::All || ui.detail.is_some();
     let right = if status_notice.is_some() {
@@ -227,6 +228,28 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
             .alignment(Alignment::Right),
         cols[1],
     );
+}
+
+fn refresh_status(snap: &Snapshot) -> String {
+    if !snap.ready {
+        return "Starting...".to_string();
+    }
+    match &snap.health {
+        RefreshHealth::Fresh => format!(
+            "watching · {} sessions · {} parsed / {} skipped{}",
+            snap.stats.discovered,
+            snap.stats.parsed,
+            snap.stats.skipped,
+            if snap.stats.pruned > 0 {
+                format!(" · {} pruned", snap.stats.pruned)
+            } else {
+                String::new()
+            }
+        ),
+        RefreshHealth::Degraded { diagnostics } => {
+            format!("degraded · {} refresh diagnostic(s)", diagnostics.len())
+        }
+    }
 }
 
 #[cfg(test)]

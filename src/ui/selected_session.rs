@@ -104,8 +104,13 @@ fn detail_lines(snap: &Snapshot, ui: &Ui, content_width: usize) -> Vec<Line<'sta
                 .render(content_width, theme),
         );
     }
+    let provider_model = session
+        .latest_model
+        .as_deref()
+        .map(|model| format!("{} -> {model}", session.provider.label()))
+        .unwrap_or_else(|| session.provider.label().to_string());
     lines.push(
-        FieldLine::new("Provider", session.provider.label())
+        FieldLine::new("Provider", &provider_model)
             .label_width(DETAILS_LABEL_WIDTH)
             .render(content_width, theme),
     );
@@ -134,14 +139,6 @@ fn detail_lines(snap: &Snapshot, ui: &Ui, content_width: usize) -> Vec<Line<'sta
             .render(content_width, theme),
         );
     }
-    if let Some(model) = session.latest_model.as_deref() {
-        lines.push(
-            FieldLine::new("Model", model)
-                .label_width(DETAILS_LABEL_WIDTH)
-                .keep_end()
-                .render(content_width, theme),
-        );
-    }
     if let Some(run) = session
         .current_run_usage
         .as_ref()
@@ -151,11 +148,9 @@ fn detail_lines(snap: &Snapshot, ui: &Ui, content_width: usize) -> Vec<Line<'sta
             FieldLine::new(
                 "Run usage",
                 &format!(
-                    "in {} | out {} | read {} | create {}",
+                    "in {} | out {}",
                     fmt_tokens(run.usage.input),
                     fmt_tokens(run.usage.output),
-                    fmt_tokens(run.usage.cache_read),
-                    fmt_tokens(run.usage.cache_write),
                 ),
             )
             .label_width(DETAILS_LABEL_WIDTH)

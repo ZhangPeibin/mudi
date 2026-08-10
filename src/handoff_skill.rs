@@ -19,15 +19,6 @@ const VERSION_MARKER_PREFIX: &str = "<!-- sessionmesh-managed-version: ";
 const CURRENT_VERSION: u32 = 1;
 const CANONICAL_SKILL: &str = include_str!("../skills/sessionmesh-handoff/SKILL.md");
 
-pub(crate) fn artifact_headings() -> [&'static str; 10] {
-    CANONICAL_SKILL
-        .lines()
-        .filter(|line| line.starts_with("# ") || line.starts_with("## "))
-        .collect::<Vec<_>>()
-        .try_into()
-        .expect("canonical Handoff Skill contains exactly ten Artifact headings")
-}
-
 /// Provider-standard roots that receive the same SessionMesh-managed Skill.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedHandoffSkills {
@@ -237,7 +228,12 @@ mod tests {
             "## Next Action",
         ];
 
-        assert_eq!(artifact_headings(), expected);
-        assert_eq!(crate::handoff::required_handoff_headings(), expected);
+        let headings = CANONICAL_SKILL
+            .lines()
+            .filter(|line| line.starts_with("# ") || line.starts_with("## "))
+            .collect::<Vec<_>>();
+
+        assert_eq!(headings, expected);
+        assert_eq!(crate::handoff_artifact::required_headings(), expected);
     }
 }

@@ -1,7 +1,7 @@
 ┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
         ┌ Session Detail ──────────────────────────────────────────────┐       │
-        │Provider        Claude Code                                   │       │
+        │Provider        Claude Code -> claude-opus-4-8                │       │
         │Project         sessionmesh                                   │       │
         │Worktree        /Users/fixture/code/sessionmesh               │       │
         │Branch          main                                          │       │
@@ -12,13 +12,13 @@
    ▾ mai│Source format   JSONL                                         │
     > ✳ │Title           critical                                      │
       ⬡ │Session ID      claude-critical                               │
- DETAILS│Latest model    claude-opus-4-8                               │
- Title  │State           Busy                                          │
- Descrip│                                                              │
- Context│Current Context                                               │
- Attenti│Occupancy        180.0k / 200.0k (90.0%)                      │
- Provide│                                                              │
- Worktre│Attention Conditions                                          │
- Model  └ Up/Down Select | c Copy | h Handoff | Esc Close  fields 1/22 ┘
+   ▾ war│State           Busy                                          │
+ DETAILS│                                                              │
+ Title  │Current Context                                               │
+ Descrip│Occupancy        180.0k / 200.0k (90.0%)                      │
+ Context│                                                              │
+ Attenti│Attention Conditions                                          │
+ Provide│  CRITICAL Current Context 90.0% >= 85%                       │
+ Worktre└ Up/Down Select | c Copy | h Handoff | Esc Close  fields 1/17 ┘
 ───────────────────────────────┴────────────────────────────────────────────────
 Esc | j/k Fields | c Copy | e Edit | h Handoff | ? | q Quit Estimated using API

@@ -13,14 +13,14 @@ use std::os::unix::fs::PermissionsExt;
 pub(crate) fn build_launch_plan(
     task: &OperationTask,
     artifact_path: PathBuf,
-) -> SuccessorLaunchPlan {
-    SuccessorLaunchPlan {
+) -> Result<SuccessorLaunchPlan> {
+    Ok(SuccessorLaunchPlan {
         successor_provider: task.successor_provider,
         working_directory: task.source_working_directory.clone(),
         executable: task.successor_executable.clone(),
-        arguments: expected_arguments(task.successor_provider, &artifact_path),
+        arguments: expected_arguments(task.successor_provider, &artifact_path)?,
         artifact_path,
-    }
+    })
 }
 
 pub fn validate_successor_launch_plan(task: &OperationTask) -> Result<&SuccessorLaunchPlan> {
@@ -58,8 +58,8 @@ pub fn validate_successor_launch_plan(task: &OperationTask) -> Result<&Successor
     }
     let artifact = std::fs::read_to_string(&plan.artifact_path)
         .map_err(|_| anyhow!("Handoff Artifact is unreadable"))?;
-    crate::handoff::validate_handoff_artifact(&artifact)?;
-    if plan.arguments != expected_arguments(plan.successor_provider, &plan.artifact_path) {
+    crate::handoff_artifact::validate(&artifact)?;
+    if plan.arguments != expected_arguments(plan.successor_provider, &plan.artifact_path)? {
         return Err(anyhow!(
             "Successor arguments do not match the Handoff Artifact"
         ));
@@ -150,7 +150,8 @@ where
     let mut linked = false;
     let status = loop {
         if !linked {
-            if let Some(session_id) = crate::providers::adapter_for(task.successor_provider)
+            if let Some(session_id) = crate::providers::registry()
+                .runtime_control(task.successor_provider)?
                 .resolve_successor_session(config, process)
             {
                 linked = store
@@ -271,24 +272,10 @@ impl TerminalLauncher for MacosTerminalLauncher {
     }
 }
 
-fn expected_arguments(provider: Provider, artifact_path: &Path) -> Vec<String> {
-    let provider_name = match provider {
-        Provider::ClaudeCode => "Claude Code",
-        Provider::CodexCli => "Codex CLI",
-    };
-    let artifact_directory = artifact_path
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .to_string_lossy()
-        .into_owned();
-    vec![
-        "--add-dir".into(),
-        artifact_directory,
-        format!(
-            "Read the Handoff Artifact at {} and continue the work in this new {provider_name} Session.",
-            artifact_path.to_string_lossy()
-        ),
-    ]
+fn expected_arguments(provider: Provider, artifact_path: &Path) -> Result<Vec<String>> {
+    Ok(crate::providers::registry()
+        .runtime_control(provider)?
+        .successor_launch_arguments(artifact_path))
 }
 
 fn required_arg(args: &mut impl Iterator<Item = OsString>, expected: &str) -> Result<OsString> {

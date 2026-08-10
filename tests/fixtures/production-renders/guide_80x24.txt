@@ -12,13 +12,13 @@
    ▾ mai│              │2  Claude Code                                 │
     > ✳ │              │3  Codex CLI                                   │
       ⬡ │              │Current and recent                             │
- DETAILS│              │NOW shows current conditions.                  │
- Title  │              │Recent Signals show transitions.               │
+   ▾ war│              │NOW shows current conditions.                  │
+ DETAILS│              │Recent Signals show transitions.               │
+ Title  │              │                                               │
  Descrip│              │                                               │
  Context│              │                                               │
  Attenti│              │                                               │
- Provide│              │                                               │
- Worktre└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘
- Model       claude-opus-4-8   │
+ Provide└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘
+ Worktree    ...sionmesh @ main│
 ───────────────────────────────┴────────────────────────────────────────────────
-j/k | Left/Right | Enter | e Edit | ? | q Quit                     fixture ready
+j/k | Left/Right | Enter | e Edit | ? | q Quit watching · 0 sessions · 0 parsed

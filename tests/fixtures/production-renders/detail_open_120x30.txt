@@ -2,7 +2,7 @@
                                         ┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
                                         │WT /Users/fixture/co...  Risk detected││                                      │
             ┌ Session Detail ──────────────────────────────────────────────────────────────────────────────┐           │
-            │Provider        Claude Code                                                                   │           │
+            │Provider        Claude Code -> claude-opus-4-8                                                │           │
             │Project         sessionmesh                                                                   │           │
             │Worktree        /Users/fixture/code/sessionmesh                                               │           │
             │Branch          main                                                                          │           │
@@ -12,19 +12,19 @@
    ▾ main !2│Source format   JSONL                                                                         │
     > ✳ crit│Title           critical                                                                      │
       ⬡ x-sh│Session ID      claude-critical                                                               │
-   ▾ warning│Latest model    claude-opus-4-8                                                               │
-      ✳ -war│State           Busy                                                                          │
-   ▾ idle   │                                                                                              │
-      ⬡ dex-│Current Context                                                                               │
-   ▾ healthy│Occupancy        180.0k / 200.0k [#############################---] (90.0%)                   │
- DETAILS ───│                                                                                              │
- Title      │Attention Conditions                                                                          │
- Description│  CRITICAL Current Context 90.0% >= 85%                                                       │
- Context    │  WARNING Shared Worktree Risk x2                                                             │
- Attention  │                                                                                              │
- Provider   │Current Run Usage                                                                             │
- Worktree   │Input           1.2k                                                                          │
- Model      └ Up/Down Select | c Copy | h Handoff | Esc Close ──────────────────────────────── fields 1/22 ┘
- Run usage   in 1.2k | out 230 | read 3.4k | create 45 │
+   ▾ warning│State           Busy                                                                          │
+      ✳ -war│                                                                                              │
+   ▾ idle   │Current Context                                                                               │
+      ⬡ dex-│Occupancy        180.0k / 200.0k [#############################---] (90.0%)                   │
+   ▾ healthy│                                                                                              │
+      ✳ -hea│Attention Conditions                                                                          │
+ DETAILS ───│  CRITICAL Current Context 90.0% >= 85%                                                       │
+ Title      │  WARNING Shared Worktree Risk x2                                                             │
+ Description│                                                                                              │
+ Context    │Current Run Usage                                                                             │
+ Attention  │Input           1.2k                                                                          │
+ Provider   │Output          230                                                                           │
+ Worktree   └ Up/Down Select | c Copy | h Handoff | Esc Close ──────────────────────────────── fields 1/17 ┘
+ Run usage   in 1.2k | out 230                         │
 ───────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────
-Esc | j/k Fields | c Copy | e Edit session | h Handoff | 1/2/3 | ?         fixture ready   ·   Estimated using API rates
+Esc | j/k Fields | c Copy | e Edit session | h Handoff | 1/2/3 | ?watching · 0 sessions · 0 parsed / 0 skipped   ·   Est

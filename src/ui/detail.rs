@@ -132,28 +132,16 @@ fn add_usage_summary(
     lines.push(heading(format!("{scope} Usage"), theme));
     lines.push(DetailLine::field("Input", fmt_tokens(usage.input), true));
     lines.push(DetailLine::field("Output", fmt_tokens(usage.output), true));
-    lines.push(DetailLine::field(
-        "Cache read",
-        fmt_tokens(usage.cache_read),
-        true,
-    ));
-    lines.push(DetailLine::field(
-        "Cache write",
-        fmt_tokens(usage.cache_write),
-        true,
-    ));
     lines.push(DetailLine::field("Est. API cost", fmt_cost(cost), true));
     lines.push(DetailLine::Content(Line::from("")));
     lines.push(heading(format!("{scope} per-model Usage"), theme));
     for model in per_model {
         lines.push(content(
             format!(
-                "  {:<20} in {} out {} cr {} cw {}  {}",
+                "  {:<20} in {} out {}  {}",
                 model.model,
                 fmt_tokens(model.usage.input),
                 fmt_tokens(model.usage.output),
-                fmt_tokens(model.usage.cache_read),
-                fmt_tokens(model.usage.cache_write),
                 fmt_cost(model.cost),
             ),
             Style::default().fg(theme.foreground),
@@ -240,11 +228,12 @@ fn detail_lines(
     };
     let mut lines = Vec::new();
 
-    lines.push(DetailLine::field(
-        "Provider",
-        session.provider.label(),
-        true,
-    ));
+    let provider_model = session
+        .latest_model
+        .as_deref()
+        .map(|model| format!("{} -> {model}", session.provider.label()))
+        .unwrap_or_else(|| session.provider.label().to_string());
+    lines.push(DetailLine::field("Provider", provider_model, true));
     add_optional_field(
         &mut lines,
         "Project",
@@ -294,12 +283,6 @@ fn detail_lines(
         true,
     ));
     lines.push(DetailLine::field("Session ID", &session.id, true));
-    add_optional_field(
-        &mut lines,
-        "Latest model",
-        session.latest_model.clone(),
-        "N/A",
-    );
     lines.push(DetailLine::field("State", state, true));
     lines.push(DetailLine::Content(Line::from("")));
 

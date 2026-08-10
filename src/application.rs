@@ -1,0 +1,196 @@
+//! Application controller for declarative UI intents.
+
+use crate::clipboard::Clipboard;
+use crate::handoff::{
+    CompletionNotice, CompletionNotifier, HandoffService, MacosCompletionNotifier, WorkerLauncher,
+};
+use crate::read_model::RefreshSnapshot;
+use crate::successor::TerminalLauncher;
+use crate::ui::{Ui, UiIntent};
+use anyhow::Result;
+use tokio::sync::mpsc;
+
+/// Performs authorized effects requested by the UI and schedules a subsequent refresh.
+pub struct ApplicationController<L, T> {
+    handoff: HandoffService<L>,
+    terminal_launcher: T,
+}
+
+impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
+    pub fn new(handoff: HandoffService<L>, terminal_launcher: T) -> Self {
+        Self {
+            handoff,
+            terminal_launcher,
+        }
+    }
+
+    pub fn reconcile_tasks(&mut self, now_ms: i64) -> Result<()> {
+        self.handoff.reconcile_tasks(now_ms)?;
+        Ok(())
+    }
+
+    /// Returns true only when the caller should leave the TUI.
+    pub fn handle(
+        &mut self,
+        intent: UiIntent,
+        snapshot: &RefreshSnapshot,
+        ui: &mut Ui,
+        clipboard: &mut dyn Clipboard,
+        rescan_tx: &mpsc::UnboundedSender<()>,
+    ) -> bool {
+        match intent {
+            UiIntent::None => false,
+            UiIntent::Rescan => {
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::Copy { field, value } => {
+                ui.copy_to_clipboard(clipboard, field, &value);
+                false
+            }
+            UiIntent::AuthorizeHandoff {
+                source_provider,
+                source_session_id,
+                successor_provider,
+                end_current_run,
+            } => {
+                let message = match snapshot.sessions.iter().find(|session| {
+                    session.provider == source_provider && session.id == source_session_id
+                }) {
+                    Some(session) => match self.handoff.authorize_session_to(
+                        session,
+                        successor_provider,
+                        end_current_run,
+                        chrono::Local::now().timestamp_millis(),
+                    ) {
+                        Ok(task) => {
+                            if task.state.is_terminal() {
+                                let _ = MacosCompletionNotifier.notify(&CompletionNotice {
+                                    task_id: task.id.clone(),
+                                    state: task.state,
+                                    source_provider: task.source_provider,
+                                    source_session_id: task.source_session_id.clone(),
+                                });
+                            }
+                            format!(
+                                "Handoff {}: {}",
+                                short_task_id(&task.id),
+                                task.state.label()
+                            )
+                        }
+                        Err(error) => error.to_string(),
+                    },
+                    None => "Handoff is ineligible: source Session is unavailable".to_string(),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::AcknowledgeTask { task_id } => {
+                if let Err(error) = self
+                    .handoff
+                    .acknowledge_task(&task_id, chrono::Local::now().timestamp_millis())
+                {
+                    ui.show_notice(format!("Task acknowledgement failed: {error}"));
+                }
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::CancelTask { task_id } => {
+                let message = match self
+                    .handoff
+                    .cancel_task(&task_id, chrono::Local::now().timestamp_millis())
+                {
+                    Ok(task) => format!(
+                        "Handoff {}: {}",
+                        short_task_id(&task.id),
+                        task.state.label()
+                    ),
+                    Err(error) => format!("Task cancellation failed: {error}"),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::DeleteTask { task_id } => {
+                let message = match self
+                    .handoff
+                    .delete_task(&task_id, chrono::Local::now().timestamp_millis())
+                {
+                    Ok(()) => format!("Deleted Task and Artifact {}", short_task_id(&task_id)),
+                    Err(error) => format!("Task deletion failed: {error}"),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::RetryTask {
+                predecessor_task_id,
+                source_provider,
+                source_session_id,
+                successor_provider,
+                end_current_run,
+            } => {
+                let message = match snapshot.sessions.iter().find(|session| {
+                    session.provider == source_provider && session.id == source_session_id
+                }) {
+                    Some(session) => match self.handoff.retry_task_to(
+                        &predecessor_task_id,
+                        session,
+                        successor_provider,
+                        end_current_run,
+                        chrono::Local::now().timestamp_millis(),
+                    ) {
+                        Ok(task) => format!(
+                            "Handoff Retry {}: {}",
+                            short_task_id(&task.id),
+                            task.state.label()
+                        ),
+                        Err(error) => error.to_string(),
+                    },
+                    None => "Handoff Retry is ineligible: source Session is unavailable".into(),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::CopySuccessorCommand { task_id } => {
+                match self.handoff.task(&task_id) {
+                    Ok(Some(task)) => match crate::successor::render_successor_command(&task) {
+                        Ok(command) => {
+                            ui.copy_to_clipboard(clipboard, "Successor Launch Command", &command)
+                        }
+                        Err(error) => ui.show_notice(format!("Copy Command unavailable: {error}")),
+                    },
+                    Ok(None) => ui.show_notice("Copy Command unavailable: Task is missing"),
+                    Err(error) => ui.show_notice(format!("Copy Command unavailable: {error}")),
+                }
+                false
+            }
+            UiIntent::OpenSuccessorTerminal { task_id } => {
+                let message = match self
+                    .terminal_launcher
+                    .open(&task_id, chrono::Local::now().timestamp_millis())
+                {
+                    Ok(()) => "Opened Successor in Terminal.app".to_string(),
+                    Err(error) => format!("Open Terminal failed: {error}"),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::Quit => true,
+        }
+    }
+}
+
+fn short_task_id(task_id: &str) -> String {
+    task_id
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
