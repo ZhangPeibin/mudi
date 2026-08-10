@@ -65,6 +65,14 @@ impl RuntimeControlPort for ClaudeAdapter {
         probe.claude_state(source_session_id)
     }
 
+    fn binding_evidence(
+        &self,
+        cfg: &Config,
+        process: super::state::ProcessIdentity,
+    ) -> Option<super::ProviderBindingEvidence> {
+        binding_evidence(cfg, process)
+    }
+
     fn new_session_args(&self, binding_initializer: bool) -> Vec<String> {
         binding_initializer
             .then(|| super::BINDING_INITIALIZER.to_string())
@@ -133,6 +141,41 @@ fn resolve_successor_session(
     cfg: &Config,
     process: super::state::ProcessIdentity,
 ) -> Option<String> {
+    process_session_id(cfg, process)
+}
+
+fn binding_evidence(
+    cfg: &Config,
+    process: super::state::ProcessIdentity,
+) -> Option<super::ProviderBindingEvidence> {
+    let process_session_id = process_session_id(cfg, process)?;
+    let mut sources = super::discover_files(&cfg.claude_project_roots(), |name| {
+        name == format!("{process_session_id}.jsonl")
+    })
+    .into_iter()
+    .filter_map(|path| path.canonicalize().ok())
+    .collect::<Vec<_>>();
+    sources.sort();
+    sources.dedup();
+    let [source_path] = sources.as_slice() else {
+        return None;
+    };
+    let (source_session_id, working_directory) =
+        binding_source_metadata(source_path, &process_session_id)?;
+    Some(super::ProviderBindingEvidence {
+        provider: Provider::ClaudeCode,
+        source_session_id,
+        process_session_id,
+        source: crate::domain::SourceMetadata {
+            path: source_path.clone(),
+            format: crate::domain::SourceFormat::JsonLines,
+        },
+        working_directory,
+        provider_process: process,
+    })
+}
+
+fn process_session_id(cfg: &Config, process: super::state::ProcessIdentity) -> Option<String> {
     if !super::state::process_identity_is_live(process) {
         return None;
     }
@@ -173,6 +216,37 @@ fn resolve_successor_session(
     }
     let session_id = session_id?;
     super::state::process_identity_is_live(process).then_some(session_id)
+}
+
+fn binding_source_metadata(path: &Path, expected_session_id: &str) -> Option<(String, PathBuf)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut source_session_id: Option<String> = None;
+    let mut working_directory: Option<PathBuf> = None;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let value: Value = serde_json::from_str(line).ok()?;
+        if let Some(observed) = value.get("sessionId").and_then(Value::as_str) {
+            if observed.is_empty()
+                || observed != expected_session_id
+                || source_session_id
+                    .as_deref()
+                    .is_some_and(|current| current != observed)
+            {
+                return None;
+            }
+            source_session_id = Some(observed.to_string());
+        }
+        if let Some(observed) = value.get("cwd").and_then(Value::as_str) {
+            let observed = PathBuf::from(observed).canonicalize().ok()?;
+            if working_directory
+                .as_ref()
+                .is_some_and(|current| current != &observed)
+            {
+                return None;
+            }
+            working_directory = Some(observed);
+        }
+    }
+    Some((source_session_id?, working_directory?))
 }
 
 /// Parse a Claude transcript file. Returns `None` if the file is unreadable or yields

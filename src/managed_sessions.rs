@@ -1,10 +1,14 @@
 //! Explicitly authorized Managed Session launch registration and native New startup.
 
-use crate::domain::{ProjectIdentity, Provider};
+use crate::domain::{
+    ProjectIdentity, Provider, Session, SessionIdentity, SessionProvenance, SourceFormat,
+    SourceMetadata,
+};
 use crate::providers::state::ProcessIdentity;
-use crate::providers::{registry, ProviderExecutables};
+use crate::providers::{registry, ProviderBindingEvidence, ProviderExecutables};
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -97,6 +101,167 @@ pub struct ManagedLaunchEvidence {
 pub struct ManagedNewOutcome {
     pub registration: ManagedLaunchRegistration,
     pub terminal_opened: bool,
+}
+
+/// Conclusive record that atomically established a Managed Session and Current Run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingReceipt {
+    pub id: String,
+    pub registration_id: String,
+    pub provider: Provider,
+    pub native_session_id: String,
+    pub source: SourceMetadata,
+    pub provider_process: ProcessIdentity,
+    pub issued_at_ms: i64,
+}
+
+/// Durable management metadata for one provider-native Session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedSessionRecord {
+    pub provider: Provider,
+    pub native_session_id: String,
+    pub target: ManagedLaunchTarget,
+    pub session_alias: String,
+    pub description: Option<String>,
+    pub binding_receipt_id: String,
+}
+
+/// Durable identity of the exact Current Run established by a Binding Receipt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedCurrentRunRecord {
+    pub id: String,
+    pub provider: Provider,
+    pub native_session_id: String,
+    pub provider_process: ProcessIdentity,
+    pub tmux: PrivateTmuxEnvironment,
+    pub binding_receipt_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingOutcome {
+    Waiting,
+    Bound(BindingReceipt),
+}
+
+/// Revalidates exact process identity immediately before receipt issuance.
+pub trait ProcessEvidence: Send + Sync {
+    fn current_identity(&self, pid: u32) -> Option<ProcessIdentity>;
+}
+
+pub struct SystemProcessEvidence;
+
+impl ProcessEvidence for SystemProcessEvidence {
+    fn current_identity(&self, pid: u32) -> Option<ProcessIdentity> {
+        crate::providers::state::process_identity(pid)
+    }
+}
+
+/// Sole issuer of Binding Receipts.
+pub struct EvidenceBinder {
+    process_evidence: Box<dyn ProcessEvidence>,
+}
+
+impl EvidenceBinder {
+    pub fn new(process_evidence: Box<dyn ProcessEvidence>) -> Self {
+        Self { process_evidence }
+    }
+
+    pub fn bind(
+        &self,
+        store: &mut ManagedLaunchStore,
+        registration_id: &str,
+        evidence: Option<ProviderBindingEvidence>,
+        now_ms: i64,
+    ) -> Result<BindingOutcome> {
+        let Some(evidence) = evidence else {
+            return Ok(BindingOutcome::Waiting);
+        };
+        let registration = store.get(registration_id)?.ok_or_else(|| {
+            anyhow!("Binding Managed Launch Registration {registration_id} is unavailable")
+        })?;
+        let launch = registration
+            .launch_evidence
+            .as_ref()
+            .ok_or_else(|| anyhow!("Binding requires conclusive launch evidence"))?;
+
+        if registration.status != ManagedLaunchStatus::Binding {
+            return Err(anyhow!("only a Binding registration can issue a Receipt"));
+        }
+        if evidence.provider != registration.provider {
+            return Err(anyhow!(
+                "Provider source evidence disagrees with the launch"
+            ));
+        }
+        if evidence.source_session_id.is_empty()
+            || evidence.process_session_id.is_empty()
+            || evidence.source_session_id != evidence.process_session_id
+        {
+            return Err(anyhow!(
+                "native Session ID evidence is incomplete or conflicting"
+            ));
+        }
+        if evidence.provider_process != launch.provider_process {
+            return Err(anyhow!(
+                "Provider process evidence disagrees with the launch"
+            ));
+        }
+        let source_path = evidence
+            .source
+            .path
+            .canonicalize()
+            .context("Binding Provider source is unavailable")?;
+        if !source_path.is_file() {
+            return Err(anyhow!("Binding Provider source is not a file"));
+        }
+        let working_directory = evidence
+            .working_directory
+            .canonicalize()
+            .context("Binding working directory is unavailable")?;
+        let target_directory = registration
+            .target
+            .working_directory
+            .canonicalize()
+            .context("Managed launch target is unavailable")?;
+        if working_directory != target_directory {
+            return Err(anyhow!(
+                "Provider source working directory disagrees with the launch"
+            ));
+        }
+        let resolved = crate::project::resolve(Some(&working_directory));
+        if resolved.project.as_ref().map(|project| &project.identity)
+            != Some(&registration.target.project)
+            || resolved.worktree.as_ref().map(|worktree| &worktree.root)
+                != registration.target.worktree_root.as_ref()
+        {
+            return Err(anyhow!(
+                "Provider source Project or Worktree disagrees with the launch"
+            ));
+        }
+        if self
+            .process_evidence
+            .current_identity(launch.provider_process.pid)
+            != Some(launch.provider_process)
+        {
+            return Err(anyhow!(
+                "launched Provider process is stale or its PID was reused"
+            ));
+        }
+
+        let receipt = BindingReceipt {
+            id: format!("receipt-{registration_id}"),
+            registration_id: registration.id.clone(),
+            provider: registration.provider,
+            native_session_id: evidence.source_session_id,
+            source: SourceMetadata {
+                path: source_path,
+                format: evidence.source.format,
+            },
+            provider_process: launch.provider_process,
+            issued_at_ms: now_ms,
+        };
+        store.establish_management(&registration, &receipt)?;
+        Ok(BindingOutcome::Bound(receipt))
+    }
 }
 
 pub trait ManagedLaunchBroker {
@@ -289,6 +454,46 @@ impl ManagedLaunchStore {
                 terminal_opened_at_ms INTEGER,
                 terminal_error TEXT
             );
+            CREATE TABLE IF NOT EXISTS binding_receipts (
+                receipt_id TEXT PRIMARY KEY,
+                registration_id TEXT NOT NULL UNIQUE,
+                provider TEXT NOT NULL,
+                native_session_id TEXT NOT NULL,
+                source_path BLOB NOT NULL,
+                source_format TEXT NOT NULL,
+                provider_pid INTEGER NOT NULL,
+                provider_started_at_ms INTEGER NOT NULL,
+                issued_at_ms INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS managed_sessions (
+                provider TEXT NOT NULL,
+                native_session_id TEXT NOT NULL,
+                project_kind TEXT NOT NULL,
+                project_path BLOB NOT NULL,
+                project_label TEXT NOT NULL,
+                worktree_root BLOB,
+                working_directory BLOB NOT NULL,
+                session_alias TEXT NOT NULL,
+                description TEXT,
+                binding_receipt_id TEXT NOT NULL UNIQUE,
+                PRIMARY KEY (provider, native_session_id)
+            );
+            CREATE TABLE IF NOT EXISTS managed_current_runs (
+                run_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                native_session_id TEXT NOT NULL,
+                provider_pid INTEGER NOT NULL,
+                provider_started_at_ms INTEGER NOT NULL,
+                tmux_socket_name TEXT NOT NULL,
+                tmux_session_name TEXT NOT NULL,
+                binding_receipt_id TEXT NOT NULL UNIQUE,
+                UNIQUE (provider, native_session_id)
+            );
+            CREATE TABLE IF NOT EXISTS managed_metadata_syncs (
+                provider TEXT NOT NULL,
+                native_session_id TEXT NOT NULL,
+                PRIMARY KEY (provider, native_session_id)
+            );
             "#,
         )?;
         Ok(Self { conn })
@@ -458,6 +663,297 @@ impl ManagedLaunchStore {
                 },
             )
             .transpose()
+    }
+
+    pub fn binding_registrations(&self) -> Result<Vec<ManagedLaunchRegistration>> {
+        let mut statement = self.conn.prepare(
+            "SELECT registration_id FROM managed_launch_registrations WHERE status = 'binding' ORDER BY created_at_ms, registration_id",
+        )?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        ids.into_iter()
+            .map(|id| {
+                self.get(&id)?
+                    .ok_or_else(|| anyhow!("Binding Managed Launch Registration {id} disappeared"))
+            })
+            .collect()
+    }
+
+    pub fn binding_receipt(&self, registration_id: &str) -> Result<Option<BindingReceipt>> {
+        let mut statement = self.conn.prepare(
+            "SELECT receipt_id, provider, native_session_id, source_path, source_format, provider_pid, provider_started_at_ms, issued_at_ms FROM binding_receipts WHERE registration_id = ?1",
+        )?;
+        statement
+            .query_row([registration_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, u32>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            })
+            .optional()?
+            .map(
+                |(
+                    id,
+                    provider,
+                    native_session_id,
+                    source_path,
+                    source_format,
+                    pid,
+                    started_at_ms,
+                    issued_at_ms,
+                )| {
+                    Ok(BindingReceipt {
+                        id,
+                        registration_id: registration_id.to_string(),
+                        provider: Provider::parse(&provider)
+                            .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
+                        native_session_id,
+                        source: SourceMetadata {
+                            path: path_from_bytes(source_path),
+                            format: match source_format.as_str() {
+                                "jsonl" => SourceFormat::JsonLines,
+                                _ => {
+                                    return Err(anyhow!("unknown source format {source_format:?}"))
+                                }
+                            },
+                        },
+                        provider_process: ProcessIdentity { pid, started_at_ms },
+                        issued_at_ms,
+                    })
+                },
+            )
+            .transpose()
+    }
+
+    pub fn managed_session(
+        &self,
+        provider: Provider,
+        native_session_id: &str,
+    ) -> Result<Option<ManagedSessionRecord>> {
+        Ok(self.managed_sessions()?.into_iter().find(|session| {
+            session.provider == provider && session.native_session_id == native_session_id
+        }))
+    }
+
+    pub fn managed_sessions(&self) -> Result<Vec<ManagedSessionRecord>> {
+        let mut statement = self.conn.prepare(
+            "SELECT provider, native_session_id, project_kind, project_path, project_label, worktree_root, working_directory, session_alias, description, binding_receipt_id FROM managed_sessions ORDER BY provider, native_session_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<Vec<u8>>>(5)?,
+                row.get::<_, Vec<u8>>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, String>(9)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                provider,
+                native_session_id,
+                project_kind,
+                project_path,
+                project_label,
+                worktree_root,
+                working_directory,
+                session_alias,
+                description,
+                binding_receipt_id,
+            ) = row?;
+            Ok(ManagedSessionRecord {
+                provider: Provider::parse(&provider)
+                    .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
+                native_session_id,
+                target: ManagedLaunchTarget {
+                    project: project_identity_from_parts(&project_kind, project_path)?,
+                    project_label,
+                    worktree_root: worktree_root.map(path_from_bytes),
+                    working_directory: path_from_bytes(working_directory),
+                },
+                session_alias,
+                description,
+                binding_receipt_id,
+            })
+        })
+        .collect()
+    }
+
+    pub fn managed_current_run(
+        &self,
+        provider: Provider,
+        native_session_id: &str,
+    ) -> Result<Option<ManagedCurrentRunRecord>> {
+        Ok(self
+            .managed_current_runs()?
+            .into_iter()
+            .find(|run| run.provider == provider && run.native_session_id == native_session_id))
+    }
+
+    pub fn managed_current_runs(&self) -> Result<Vec<ManagedCurrentRunRecord>> {
+        let mut statement = self.conn.prepare(
+            "SELECT run_id, provider, native_session_id, provider_pid, provider_started_at_ms, tmux_socket_name, tmux_session_name, binding_receipt_id FROM managed_current_runs ORDER BY run_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, u32>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                id,
+                provider,
+                native_session_id,
+                pid,
+                started_at_ms,
+                socket_name,
+                session_name,
+                binding_receipt_id,
+            ) = row?;
+            Ok(ManagedCurrentRunRecord {
+                id,
+                provider: Provider::parse(&provider)
+                    .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
+                native_session_id,
+                provider_process: ProcessIdentity { pid, started_at_ms },
+                tmux: PrivateTmuxEnvironment {
+                    socket_name,
+                    session_name,
+                },
+                binding_receipt_id,
+            })
+        })
+        .collect()
+    }
+
+    pub fn managed_metadata_is_synchronized(
+        &self,
+        provider: Provider,
+        native_session_id: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM managed_metadata_syncs WHERE provider = ?1 AND native_session_id = ?2",
+                params![provider.as_str(), native_session_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    pub fn mark_managed_metadata_synchronized(
+        &self,
+        provider: Provider,
+        native_session_id: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO managed_metadata_syncs (provider, native_session_id) VALUES (?1, ?2)",
+            params![provider.as_str(), native_session_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn apply_provenance(&self, sessions: &mut [Session]) -> Result<()> {
+        let managed = self
+            .managed_sessions()?
+            .into_iter()
+            .map(|session| SessionIdentity {
+                provider: session.provider,
+                native_id: session.native_session_id,
+            })
+            .collect::<HashSet<_>>();
+        for session in sessions {
+            session.provenance = if managed.contains(&SessionIdentity::from(&*session)) {
+                SessionProvenance::Managed
+            } else {
+                SessionProvenance::Observed
+            };
+        }
+        Ok(())
+    }
+
+    fn establish_management(
+        &mut self,
+        registration: &ManagedLaunchRegistration,
+        receipt: &BindingReceipt,
+    ) -> Result<()> {
+        let launch = registration
+            .launch_evidence
+            .as_ref()
+            .ok_or_else(|| anyhow!("Binding requires conclusive launch evidence"))?;
+        let (project_kind, project_path) = project_identity_parts(&registration.target.project);
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "INSERT INTO binding_receipts (receipt_id, registration_id, provider, native_session_id, source_path, source_format, provider_pid, provider_started_at_ms, issued_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, 'jsonl', ?6, ?7, ?8)",
+            params![
+                receipt.id,
+                receipt.registration_id,
+                receipt.provider.as_str(),
+                receipt.native_session_id,
+                path_bytes(&receipt.source.path),
+                receipt.provider_process.pid,
+                receipt.provider_process.started_at_ms,
+                receipt.issued_at_ms,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO managed_sessions (provider, native_session_id, project_kind, project_path, project_label, worktree_root, working_directory, session_alias, description, binding_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                receipt.provider.as_str(),
+                receipt.native_session_id,
+                project_kind,
+                project_path,
+                registration.target.project_label,
+                registration.target.worktree_root.as_deref().map(path_bytes),
+                path_bytes(&registration.target.working_directory),
+                registration.session_alias,
+                registration.description,
+                receipt.id,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO managed_current_runs (run_id, provider, native_session_id, provider_pid, provider_started_at_ms, tmux_socket_name, tmux_session_name, binding_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                format!("run-{}", registration.id),
+                receipt.provider.as_str(),
+                receipt.native_session_id,
+                launch.provider_process.pid,
+                launch.provider_process.started_at_ms,
+                registration.tmux.socket_name,
+                registration.tmux.session_name,
+                receipt.id,
+            ],
+        )?;
+        update_one(
+            transaction.execute(
+                "DELETE FROM managed_launch_registrations WHERE registration_id = ?1 AND status = 'binding'",
+                [registration.id.as_str()],
+            )?,
+            &registration.id,
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     fn record_launched(

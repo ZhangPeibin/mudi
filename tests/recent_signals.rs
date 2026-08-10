@@ -12,6 +12,7 @@ fn session(id: &str, state: SessionState, context_tokens: u64) -> Session {
     Session {
         provider: Provider::ClaudeCode,
         id: id.into(),
+        provenance: sessionmesh::domain::SessionProvenance::Observed,
         source: Default::default(),
         project: Some(Project {
             identity: ProjectIdentity::CanonicalCwd("/tmp/sessionmesh".into()),

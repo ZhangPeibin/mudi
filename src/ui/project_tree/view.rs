@@ -1,8 +1,8 @@
 //! Ratatui rendering for Project Tree rows.
 
 use super::super::{
-    context, current_attention, provider_mark, retained_selection, snapshot_now_ms, text,
-    theme::Theme,
+    context, current_attention, provenance_mark, provider_mark, retained_selection,
+    snapshot_now_ms, text, theme::Theme,
 };
 use super::model::{ProjectTreeRow, ProjectTreeSection, SessionAgeBand};
 use super::State;
@@ -186,6 +186,7 @@ pub(super) fn open_session_line(
         SessionState::Exited => unreachable!("NOW contains only Open Sessions"),
     };
     let provider = provider_mark::icon(session.provider);
+    let provenance = provenance_mark::icon(session.provenance);
     let context_value = session
         .context
         .percent()
@@ -208,6 +209,8 @@ pub(super) fn open_session_line(
         prefix.as_str(),
         provider,
         SESSION_COLUMN_GAP,
+        SESSION_COLUMN_GAP,
+        provenance,
         SESSION_COLUMN_GAP,
         attention_marker,
         SESSION_COLUMN_GAP,
@@ -246,6 +249,11 @@ pub(super) fn open_session_line(
         Span::raw(SESSION_COLUMN_GAP),
         Span::styled(title, Style::default().fg(theme.foreground)),
         Span::raw(SESSION_COLUMN_GAP),
+        Span::styled(
+            provenance,
+            provenance_mark::style(session.provenance, theme, Style::default()),
+        ),
+        Span::raw(SESSION_COLUMN_GAP),
         Span::styled(attention_marker, attention_style),
         Span::raw(SESSION_COLUMN_GAP),
         Span::styled(lifecycle_marker, lifecycle_style),
@@ -270,10 +278,12 @@ fn exited_session_line(
         if position.selected { ">" } else { " " }
     );
     let provider = provider_mark::icon(session.provider);
+    let provenance = provenance_mark::icon(session.provenance);
     let elapsed = fmt_relative(session.last_activity_ms, now_ms);
     let fixed_width = UnicodeWidthStr::width(prefix.as_str())
         + UnicodeWidthStr::width(provider)
-        + 2
+        + UnicodeWidthStr::width(provenance)
+        + 3
         + UnicodeWidthStr::width(elapsed.as_str());
     let title = text::fit(title, content_width.saturating_sub(fixed_width), true);
     let cursor_style = if position.selected {
@@ -291,6 +301,11 @@ fn exited_session_line(
         ),
         Span::raw(" "),
         Span::styled(title, Style::default().fg(theme.exited)),
+        Span::raw(" "),
+        Span::styled(
+            provenance,
+            provenance_mark::style(session.provenance, theme, Style::default()),
+        ),
         Span::raw(" "),
         Span::styled(elapsed, Style::default().fg(theme.muted)),
     ]);

@@ -6,7 +6,7 @@ pub mod codex;
 pub mod state;
 
 use crate::config::Config;
-use crate::domain::{Compaction, ContextState, Provider, SourceFormat, Usage};
+use crate::domain::{Compaction, ContextState, Provider, SourceFormat, SourceMetadata, Usage};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,6 +15,18 @@ use walkdir::WalkDir;
 /// Fixed, opt-in message used only to induce a Provider source record for Binding.
 pub const BINDING_INITIALIZER: &str =
     "SessionMesh initialization only. Do not inspect files, run commands, or make changes. Reply with exactly: READY.";
+
+/// Provider-normalized source and process evidence considered for a Binding Receipt.
+/// Provider-private field names and file layouts do not cross this boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderBindingEvidence {
+    pub provider: Provider,
+    pub source_session_id: String,
+    pub process_session_id: String,
+    pub source: SourceMetadata,
+    pub working_directory: PathBuf,
+    pub provider_process: state::ProcessIdentity,
+}
 
 /// Source discovery, parsing, live observation, and Current Run usage for one Provider.
 pub trait ObservationPort: Sync {
@@ -50,6 +62,13 @@ pub trait RuntimeControlPort: Sync {
         source_session_id: &str,
         source_path: &Path,
     ) -> state::LiveState;
+    /// Normalize the Provider source record tied to one exact launched process.
+    /// `None` means evidence is missing, stale, ambiguous, or contradictory.
+    fn binding_evidence(
+        &self,
+        cfg: &Config,
+        process: state::ProcessIdentity,
+    ) -> Option<ProviderBindingEvidence>;
     /// Provider-native arguments for starting a new interactive Session.
     fn new_session_args(&self, binding_initializer: bool) -> Vec<String>;
     /// Provider-native arguments for read-only, noninteractive Handoff generation.

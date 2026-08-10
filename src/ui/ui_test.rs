@@ -612,6 +612,7 @@ fn demo_snapshot() -> Snapshot {
     let session = Session {
         provider: Provider::ClaudeCode,
         id: "demo-session".into(),
+        provenance: crate::domain::SessionProvenance::Observed,
         source: Default::default(),
         project: Some(Project {
             identity: ProjectIdentity::GitCommonDir(PathBuf::from(

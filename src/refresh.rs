@@ -5,8 +5,13 @@ use crate::attention::AttentionEngine;
 use crate::collector::{self, ProjectResolverCache, ScanStats};
 use crate::config::Config;
 use crate::index::Index;
+use crate::managed_sessions::{
+    BindingOutcome, EvidenceBinder, ManagedLaunchStore, SystemProcessEvidence,
+};
 use crate::models::ModelCatalog;
+use crate::providers::registry;
 use crate::read_model::{ReadModelCache, RefreshDiagnostic, RefreshHealth, RefreshSnapshot};
+use crate::session_labels::SessionLabels;
 use crate::signals::RecentSignalsEngine;
 use crate::tasks::TaskStore;
 
@@ -15,6 +20,7 @@ pub struct RefreshService {
     cfg: Config,
     index: std::result::Result<Index, String>,
     task_store: std::result::Result<TaskStore, String>,
+    managed_store: std::result::Result<ManagedLaunchStore, String>,
     models: ModelCatalog,
     alert_engine: AlertEngine,
     attention_engine: AttentionEngine,
@@ -27,12 +33,15 @@ impl RefreshService {
     pub fn new(cfg: Config) -> Self {
         let index = Index::open(&cfg.index_path()).map_err(|error| error.to_string());
         let task_store = TaskStore::open(&cfg.task_store_path()).map_err(|error| error.to_string());
+        let managed_store = ManagedLaunchStore::open(cfg.managed_launch_store_path())
+            .map_err(|error| error.to_string());
         Self {
             models: ModelCatalog::load(Some(&cfg.model_catalog_override_path())),
             alert_engine: AlertEngine::new(cfg.label_store_path()),
             cfg,
             index,
             task_store,
+            managed_store,
             attention_engine: AttentionEngine::default(),
             recent_signals_engine: RecentSignalsEngine::default(),
             project_resolver: ProjectResolverCache::default(),
@@ -78,6 +87,59 @@ impl RefreshService {
             Err(error) => diagnostics.push(RefreshDiagnostic::new("Index", error.clone())),
         }
 
+        match self.managed_store.as_mut() {
+            Ok(store) => {
+                let binder = EvidenceBinder::new(Box::new(SystemProcessEvidence));
+                match store.binding_registrations() {
+                    Ok(registrations) => {
+                        for registration in registrations {
+                            let Some(process) = registration
+                                .launch_evidence
+                                .as_ref()
+                                .map(|evidence| evidence.provider_process)
+                            else {
+                                continue;
+                            };
+                            let evidence = registry()
+                                .runtime_control(registration.provider)
+                                .ok()
+                                .and_then(|adapter| adapter.binding_evidence(&self.cfg, process));
+                            if evidence.is_none() {
+                                continue;
+                            }
+                            match binder.bind(store, &registration.id, evidence, now) {
+                                Ok(BindingOutcome::Bound(_)) | Ok(BindingOutcome::Waiting) => {}
+                                Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                                    "Managed Binding",
+                                    error.to_string(),
+                                )),
+                            }
+                        }
+                    }
+                    Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Registration Store",
+                        error.to_string(),
+                    )),
+                }
+                if let Err(error) = sync_managed_metadata(&self.cfg, store) {
+                    diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Session Metadata",
+                        error.to_string(),
+                    ));
+                }
+                if let Err(error) = store.apply_provenance(&mut sessions) {
+                    diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Session Registry",
+                        error.to_string(),
+                    ));
+                }
+            }
+            Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                "Managed Session Registry",
+                error.clone(),
+            )),
+        }
+
         collector::sort_for_display(&mut sessions);
         self.alert_engine.update(&sessions);
         let alerts = alerts::counts(&sessions);
@@ -115,4 +177,31 @@ impl RefreshService {
     pub fn refresh_and_publish(&mut self, cache: &dyn ReadModelCache) {
         cache.publish(self.refresh());
     }
+}
+
+fn sync_managed_metadata(cfg: &Config, store: &ManagedLaunchStore) -> anyhow::Result<()> {
+    let mut labels = SessionLabels::load(cfg.label_store_path());
+    if let Some(error) = labels.error() {
+        anyhow::bail!(error.to_string());
+    }
+    for session in store.managed_sessions()? {
+        if store.managed_metadata_is_synchronized(session.provider, &session.native_session_id)? {
+            continue;
+        }
+        let description = session.description.as_deref().unwrap_or_default();
+        if labels.alias(session.provider, &session.native_session_id)
+            != Some(session.session_alias.as_str())
+            || labels.description(session.provider, &session.native_session_id)
+                != session.description.as_deref()
+        {
+            labels.set_metadata(
+                session.provider,
+                &session.native_session_id,
+                &session.session_alias,
+                description,
+            )?;
+        }
+        store.mark_managed_metadata_synchronized(session.provider, &session.native_session_id)?;
+    }
+    Ok(())
 }

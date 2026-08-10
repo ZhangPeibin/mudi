@@ -4,8 +4,8 @@ use super::State;
 use crate::app::Snapshot;
 use crate::attention::{AttentionEngine, AttentionSnapshot};
 use crate::domain::{
-    ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceMetadata, Usage,
-    Worktree,
+    ContextState, Project, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
+    SourceMetadata, Usage, Worktree,
 };
 use crate::session_labels::SessionLabels;
 use crate::ui::ThemeName;
@@ -18,6 +18,7 @@ fn unresolved_open_session(provider: Provider, id: &str) -> Session {
     Session {
         provider,
         id: id.into(),
+        provenance: crate::domain::SessionProvenance::Observed,
         source: SourceMetadata::default(),
         project: None,
         worktree: None,
@@ -160,6 +161,59 @@ fn tree_rows_use_disclosure_triangles_and_provider_icons() {
     assert!(line.contains("✳"));
     assert!(line.contains("●"));
     assert!(!line.contains("Claude"));
+}
+
+#[test]
+fn managed_and_observed_rows_use_shape_distinct_non_text_provenance_marks() {
+    let observed = unresolved_open_session(Provider::ClaudeCode, "observed");
+    let mut managed = observed.clone();
+    managed.id = "managed".into();
+    managed.provenance = SessionProvenance::Managed;
+    let theme = ThemeName::SessionMesh.palette();
+    let position = SessionTreePosition {
+        depth: 1,
+        selected: false,
+    };
+
+    let observed_line = open_session_line(
+        &observed,
+        "observed",
+        &AttentionSnapshot::default(),
+        1_000,
+        50,
+        position,
+        theme,
+    );
+    let managed_line = open_session_line(
+        &managed,
+        "managed",
+        &AttentionSnapshot::default(),
+        1_000,
+        50,
+        position,
+        theme,
+    );
+
+    let observed_mark = observed_line
+        .spans
+        .iter()
+        .find(|span| span.content == "⌁")
+        .expect("Observed row should use the open trace");
+    let managed_mark = managed_line
+        .spans
+        .iter()
+        .find(|span| span.content == "▦")
+        .expect("Managed row should use the closed weave");
+    assert_ne!(observed_mark.content, managed_mark.content);
+    assert_eq!(
+        unicode_width::UnicodeWidthStr::width(observed_mark.content.as_ref()),
+        1
+    );
+    assert_eq!(
+        unicode_width::UnicodeWidthStr::width(managed_mark.content.as_ref()),
+        1
+    );
+    assert_ne!(observed_mark.style.fg, managed_mark.style.fg);
 }
 
 #[test]

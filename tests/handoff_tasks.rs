@@ -467,6 +467,7 @@ fn exited_session(source_path: PathBuf, cwd: PathBuf) -> Session {
     Session {
         provider: Provider::ClaudeCode,
         id: "claude-native-session".into(),
+        provenance: sessionmesh::domain::SessionProvenance::Observed,
         source: SourceMetadata {
             path: source_path,
             format: SourceFormat::JsonLines,

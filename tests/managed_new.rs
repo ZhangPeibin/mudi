@@ -630,6 +630,7 @@ fn session_in_project(project_root: &Path) -> Session {
     Session {
         provider: Provider::ClaudeCode,
         id: "observed-session".into(),
+        provenance: sessionmesh::domain::SessionProvenance::Observed,
         source: SourceMetadata::default(),
         project: Some(Project {
             identity: ProjectIdentity::CanonicalCwd(project_root.to_path_buf()),

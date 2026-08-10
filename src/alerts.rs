@@ -164,6 +164,7 @@ mod tests {
         Session {
             provider: Provider::ClaudeCode,
             id: id.into(),
+            provenance: crate::domain::SessionProvenance::Observed,
             source: Default::default(),
             project: Some(Project {
                 identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/p")),

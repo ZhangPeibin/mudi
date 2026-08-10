@@ -2,7 +2,9 @@
 //! normalized snapshot the UI renders.
 
 use crate::config::Config;
-use crate::domain::{ModelUsage, ProjectIdentity, Session, SourceMetadata, Usage, UsageSummary};
+use crate::domain::{
+    ModelUsage, ProjectIdentity, Session, SessionProvenance, SourceMetadata, Usage, UsageSummary,
+};
 use crate::index::{fingerprint_of, Index, StoredSession};
 use crate::models::ModelCatalog;
 use crate::project;
@@ -172,6 +174,7 @@ fn to_session(
     Session {
         provider: parsed.provider,
         id: parsed.id,
+        provenance: SessionProvenance::Observed,
         source: SourceMetadata {
             path: source_path,
             format: observation.source_format(),
@@ -319,6 +322,7 @@ mod tests {
         Session {
             provider: Provider::ClaudeCode,
             id: cwd.into(),
+            provenance: SessionProvenance::Observed,
             source: SourceMetadata::default(),
             project: Some(Project {
                 label: tail_path(&path, 1),

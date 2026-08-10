@@ -10,6 +10,7 @@ fn session() -> Session {
     Session {
         provider: Provider::ClaudeCode,
         id: "selected".into(),
+        provenance: crate::domain::SessionProvenance::Observed,
         source: SourceMetadata::default(),
         project: Some(Project {
             identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/test/sessionmesh")),

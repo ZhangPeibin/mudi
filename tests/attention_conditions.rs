@@ -18,6 +18,7 @@ fn session(
     Session {
         provider,
         id: id.into(),
+        provenance: sessionmesh::domain::SessionProvenance::Observed,
         source: Default::default(),
         project: Some(Project {
             identity: ProjectIdentity::GitCommonDir(PathBuf::from(project_path).join(".git")),

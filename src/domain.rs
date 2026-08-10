@@ -82,6 +82,15 @@ impl SessionState {
     }
 }
 
+/// Whether SessionMesh only observes a Session or has established management through a
+/// Binding Receipt. Observation is always the default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionProvenance {
+    #[default]
+    Observed,
+    Managed,
+}
+
 /// Cumulative, provider-reported token processing. Kept strictly separate from
 /// [`ContextState`]. Categories are only populated when the provider exposes them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,6 +205,9 @@ pub struct Session {
     pub provider: Provider,
     /// Native provider session id.
     pub id: String,
+    /// Control provenance established independently from Provider source observation.
+    #[serde(default)]
+    pub provenance: SessionProvenance,
     /// Metadata about the indexed source log. Its contents are never exposed here.
     pub source: SourceMetadata,
     /// Canonical Project identity and display label, if resolution succeeded.

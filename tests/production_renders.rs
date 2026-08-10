@@ -220,6 +220,7 @@ fn fixture_session(
     Session {
         provider,
         id: id.into(),
+        provenance: sessionmesh::domain::SessionProvenance::Observed,
         source: SourceMetadata {
             path: PathBuf::from(format!("/Users/fixture/.sessions/{id}.jsonl")),
             format: SourceFormat::JsonLines,
@@ -1960,6 +1961,7 @@ fn production_render_uses_the_snapshot_time_for_relative_session_age() {
         sessions: vec![Session {
             provider: Provider::ClaudeCode,
             id: "stable-clock-session".into(),
+            provenance: sessionmesh::domain::SessionProvenance::Observed,
             source: Default::default(),
             project: Some(Project {
                 identity: ProjectIdentity::GitCommonDir(PathBuf::from(
@@ -3212,7 +3214,7 @@ fn compact_now_uses_every_title_cell_before_operational_evidence() {
         .expect("critical NOW Session should render");
 
     assert!(
-        critical_row.contains("✳ ...fghijklmnop ! ●  90%│"),
+        critical_row.contains("✳ ...hijklmnop ⌁ ! ●  90%│"),
         "Session Title should use every cell before operational evidence:\n{critical_row}"
     );
 }

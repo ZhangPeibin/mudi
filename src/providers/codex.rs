@@ -79,6 +79,14 @@ impl RuntimeControlPort for CodexAdapter {
         probe.codex_state(source_path, latest_task_boundary(source_path))
     }
 
+    fn binding_evidence(
+        &self,
+        cfg: &Config,
+        process: super::state::ProcessIdentity,
+    ) -> Option<super::ProviderBindingEvidence> {
+        binding_evidence(cfg, process)
+    }
+
     fn new_session_args(&self, binding_initializer: bool) -> Vec<String> {
         binding_initializer
             .then(|| super::BINDING_INITIALIZER.to_string())
@@ -145,6 +153,29 @@ fn resolve_successor_session(
     cfg: &Config,
     process: super::state::ProcessIdentity,
 ) -> Option<String> {
+    native_session_id(&binding_rollout(cfg, process)?)
+}
+
+fn binding_evidence(
+    cfg: &Config,
+    process: super::state::ProcessIdentity,
+) -> Option<super::ProviderBindingEvidence> {
+    let source_path = binding_rollout(cfg, process)?;
+    let (native_session_id, working_directory) = binding_source_metadata(&source_path)?;
+    Some(super::ProviderBindingEvidence {
+        provider: Provider::CodexCli,
+        source_session_id: native_session_id.clone(),
+        process_session_id: native_session_id,
+        source: crate::domain::SourceMetadata {
+            path: source_path,
+            format: crate::domain::SourceFormat::JsonLines,
+        },
+        working_directory,
+        provider_process: process,
+    })
+}
+
+fn binding_rollout(cfg: &Config, process: super::state::ProcessIdentity) -> Option<PathBuf> {
     let roots = cfg
         .codex_session_roots()
         .into_iter()
@@ -165,11 +196,7 @@ fn resolve_successor_session(
     let [rollout] = rollouts.as_slice() else {
         return None;
     };
-    let session_id = native_session_id(rollout)?;
-    if session_id.is_empty() || !super::state::process_identity_is_live(process) {
-        return None;
-    }
-    Some(session_id)
+    super::state::process_identity_is_live(process).then(|| rollout.clone())
 }
 
 fn native_session_id(path: &Path) -> Option<String> {
@@ -194,6 +221,41 @@ fn native_session_id(path: &Path) -> Option<String> {
         session_id = Some(observed.to_string());
     }
     session_id
+}
+
+fn binding_source_metadata(path: &Path) -> Option<(String, PathBuf)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut session_id: Option<String> = None;
+    let mut working_directory: Option<PathBuf> = None;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let value: Value = serde_json::from_str(line).ok()?;
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let payload = value.get("payload")?;
+        let observed_id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())?;
+        if session_id
+            .as_deref()
+            .is_some_and(|current| current != observed_id)
+        {
+            return None;
+        }
+        session_id = Some(observed_id.to_string());
+
+        let observed_cwd = payload.get("cwd").and_then(Value::as_str)?;
+        let observed_cwd = PathBuf::from(observed_cwd).canonicalize().ok()?;
+        if working_directory
+            .as_ref()
+            .is_some_and(|current| current != &observed_cwd)
+        {
+            return None;
+        }
+        working_directory = Some(observed_cwd);
+    }
+    Some((session_id?, working_directory?))
 }
 
 /// The latest task boundary in a Codex rollout file: `Some(true)` if the last

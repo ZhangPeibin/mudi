@@ -40,6 +40,7 @@ fn session_with_metadata(
     Session {
         provider: Provider::ClaudeCode,
         id: native_id.into(),
+        provenance: sessionmesh::domain::SessionProvenance::Observed,
         source: SourceMetadata {
             path: source_path.into(),
             format: SourceFormat::JsonLines,

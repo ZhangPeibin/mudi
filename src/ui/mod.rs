@@ -17,6 +17,7 @@ mod modals;
 mod overview;
 mod path_display;
 mod project_tree;
+mod provenance_mark;
 mod provider;
 mod provider_mark;
 mod selected_session;
@@ -433,6 +434,7 @@ pub struct Ui {
     task_retry_confirmation: Option<TaskRetryConfirmation>,
     /// UI 自己拥有的 Session 元数据、Profile、主题和短期状态提示。
     labels: SessionLabels,
+    labels_snapshot_revision: u64,
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
     theme: ThemeName,
@@ -524,6 +526,7 @@ impl Default for Ui {
             task_deletion_confirmation: None,
             task_retry_confirmation: None,
             labels: SessionLabels::default(),
+            labels_snapshot_revision: 0,
             profile_path: None,
             profile: ProfilePreferences::default(),
             theme: ThemeName::default(),
@@ -1351,6 +1354,10 @@ impl Ui {
 
     /// 根据最新快照校正所有区域的独立选中位置。
     pub fn clamp_selections(&mut self, snap: &Snapshot) {
+        if self.labels_snapshot_revision != snap.revision {
+            self.labels.reload();
+            self.labels_snapshot_revision = snap.revision;
+        }
         if self.tab == Tab::All {
             self.project_tree.reconcile(snap);
         } else {
