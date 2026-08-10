@@ -65,6 +65,13 @@ impl RuntimeControlPort for ClaudeAdapter {
         probe.claude_state(source_session_id)
     }
 
+    fn new_session_args(&self, binding_initializer: bool) -> Vec<String> {
+        binding_initializer
+            .then(|| super::BINDING_INITIALIZER.to_string())
+            .into_iter()
+            .collect()
+    }
+
     fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String> {
         [
             "--print",

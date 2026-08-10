@@ -147,7 +147,7 @@ fn guide_content(
         ],
         GuideCategory::Navigation => vec![
             heading(category.label()),
-            Line::from("1 / 2 / 3  Open a page"),
+            Line::from("1 / 2 / 3  Open a page   n  New from selected Project or Worktree"),
             Line::from("Tab / Shift+Tab  Change region or Guide pane"),
             Line::from("Up/Down or j/k  Move or scroll"),
             Line::from("Left/Right  Collapse, expand, or move through the Session Tree"),

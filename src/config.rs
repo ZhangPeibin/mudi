@@ -86,6 +86,11 @@ impl Config {
         self.data_dir.join("tasks.db")
     }
 
+    /// Durable Managed Launch Registrations, separate from the disposable Session index.
+    pub fn managed_launch_store_path(&self) -> PathBuf {
+        self.data_dir.join("managed-launches.db")
+    }
+
     /// Private root for Task-owned Handoff Artifacts.
     pub fn artifact_root(&self) -> PathBuf {
         self.data_dir.join("handoff-artifacts")
@@ -196,6 +201,12 @@ mod tests {
             PathBuf::from("/sessionmesh-data/handoff-artifacts")
         );
         assert_ne!(config.task_store_path(), config.index_path());
+        assert_eq!(
+            config.managed_launch_store_path(),
+            PathBuf::from("/sessionmesh-data/managed-launches.db")
+        );
+        assert_ne!(config.managed_launch_store_path(), config.index_path());
+        assert_ne!(config.managed_launch_store_path(), config.task_store_path());
     }
 
     #[test]

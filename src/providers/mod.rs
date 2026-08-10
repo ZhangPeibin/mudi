@@ -12,6 +12,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// Fixed, opt-in message used only to induce a Provider source record for Binding.
+pub const BINDING_INITIALIZER: &str =
+    "SessionMesh initialization only. Do not inspect files, run commands, or make changes. Reply with exactly: READY.";
+
 /// Source discovery, parsing, live observation, and Current Run usage for one Provider.
 pub trait ObservationPort: Sync {
     /// Which provider this adapter speaks for.
@@ -46,6 +50,8 @@ pub trait RuntimeControlPort: Sync {
         source_session_id: &str,
         source_path: &Path,
     ) -> state::LiveState;
+    /// Provider-native arguments for starting a new interactive Session.
+    fn new_session_args(&self, binding_initializer: bool) -> Vec<String>;
     /// Provider-native arguments for read-only, noninteractive Handoff generation.
     fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String>;
     /// Resolve one exact launched process to a Provider-native Successor Session.

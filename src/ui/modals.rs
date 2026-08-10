@@ -1,8 +1,8 @@
 //! 全局模态覆盖层、编辑器和终端尺寸保护。
 
 use super::{
-    detail, guide, layout, text, theme::Theme, SessionEditorField, Ui, MIN_TERMINAL_HEIGHT,
-    MIN_TERMINAL_WIDTH,
+    detail, guide, layout, text, theme::Theme, NewSessionField, SessionEditorField, Ui,
+    MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH,
 };
 use crate::app::Snapshot;
 use crate::domain::{Provider, SessionState};
@@ -18,6 +18,7 @@ use unicode_width::UnicodeWidthStr;
 pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
     ui.detail.is_some()
         || ui.guide_open
+        || ui.new_session.is_some()
         || ui.edit_session.is_some()
         || ui.handoff_confirmation.is_some()
         || ui.task_cancellation_confirmation.is_some()
@@ -34,6 +35,9 @@ pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     if ui.guide_open {
         guide::draw(f, ui);
     }
+    if ui.new_session.is_some() {
+        draw_new_session(f, ui);
+    }
     if ui.edit_session.is_some() {
         draw_session_editor(f, ui);
     }
@@ -48,6 +52,130 @@ pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     }
     if ui.task_retry_confirmation.is_some() {
         draw_task_retry_confirmation(f, ui);
+    }
+}
+
+fn draw_new_session(f: &mut Frame, ui: &Ui) {
+    const FIELD_INDICATOR_WIDTH: usize = 2;
+    const FIELD_LABEL_WIDTH: usize = 20;
+
+    let Some(form) = &ui.new_session else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let area = layout::centered_rect(76, 62, f.area());
+    let value_width =
+        usize::from(area.width).saturating_sub(3 + FIELD_INDICATOR_WIDTH + FIELD_LABEL_WIDTH);
+    let title_input = text::visible_input_tail(&form.title, value_width);
+    let description_input = text::visible_input_tail(&form.description, value_width);
+    let target = form.targets.get(form.target_index);
+    let target_text = target
+        .map(|target| target.working_directory.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Unavailable".to_string());
+    let target_text = text::visible_input_tail(&target_text, value_width);
+    let field_line = |label: &str, value: String, field: NewSessionField| {
+        let focused = form.field == field;
+        let style = if focused {
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.muted)
+        };
+        Line::from(vec![
+            Span::styled(if focused { "> " } else { "  " }, style),
+            Span::styled(format!("{label:<FIELD_LABEL_WIDTH$}"), style),
+            Span::styled(value, Style::default().fg(theme.foreground)),
+        ])
+    };
+    let provider = match form.provider {
+        None => "Choose Provider".to_string(),
+        Some(Provider::ClaudeCode) => "[Claude Code]  Codex CLI".to_string(),
+        Some(Provider::CodexCli) => "Claude Code  [Codex CLI]".to_string(),
+    };
+    let target_count = form.targets.len();
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Project  ", Style::default().fg(theme.muted)),
+            Span::styled(
+                target.map_or("Unavailable", |target| target.project_label.as_str()),
+                Style::default().fg(theme.foreground),
+            ),
+        ]),
+        Line::from(""),
+        field_line("Provider", provider, NewSessionField::Provider),
+        field_line(
+            "Worktree",
+            format!(
+                "{}  {}/{}",
+                target_text,
+                form.target_index + 1,
+                target_count
+            ),
+            NewSessionField::Target,
+        ),
+        field_line("Title", title_input.clone(), NewSessionField::Title),
+        field_line(
+            "Description",
+            description_input.clone(),
+            NewSessionField::Description,
+        ),
+        field_line(
+            "Binding Initializer",
+            if form.binding_initializer {
+                "[x] On".to_string()
+            } else {
+                "[ ] Off".to_string()
+            },
+            NewSessionField::BindingInitializer,
+        ),
+        Line::from(""),
+        field_line("", "[ Start New ]".to_string(), NewSessionField::Confirm),
+    ];
+    if let Some(error) = &form.error {
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(theme.critical),
+        )));
+    }
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(theme.foreground).bg(theme.background))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(Span::styled(
+                        " New Session ",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .title_bottom(
+                        Line::from(Span::styled(
+                            " Tab Fields | Left/Right Select | Enter | Esc ",
+                            Style::default().fg(theme.muted),
+                        ))
+                        .right_aligned(),
+                    ),
+            ),
+        area,
+    );
+    let (visible_input, row_offset) = match form.field {
+        NewSessionField::Title => (Some(title_input), 5),
+        NewSessionField::Description => (Some(description_input), 6),
+        _ => (None, 0),
+    };
+    if let Some(visible_input) = visible_input {
+        f.set_cursor_position(Position::new(
+            area.x
+                + 1
+                + FIELD_INDICATOR_WIDTH as u16
+                + FIELD_LABEL_WIDTH as u16
+                + UnicodeWidthStr::width(visible_input.as_str()) as u16,
+            area.y + row_offset,
+        ));
     }
 }
 

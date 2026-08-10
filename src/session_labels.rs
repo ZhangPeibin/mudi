@@ -304,7 +304,7 @@ fn short_session_id(native_id: &str, length: usize) -> String {
     suffix.into_iter().collect()
 }
 
-fn validate_alias(alias: &str) -> std::io::Result<String> {
+pub(crate) fn validate_alias(alias: &str) -> std::io::Result<String> {
     let alias = alias.trim();
     if alias.is_empty() {
         return Err(std::io::Error::new(
@@ -335,7 +335,7 @@ fn validate_optional_alias(alias: &str) -> std::io::Result<Option<String>> {
     }
 }
 
-fn validate_description(description: &str) -> std::io::Result<Option<String>> {
+pub(crate) fn validate_description(description: &str) -> std::io::Result<Option<String>> {
     let description = description.trim();
     if description.is_empty() {
         return Ok(None);

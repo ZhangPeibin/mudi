@@ -12,6 +12,7 @@ pub mod handoff;
 pub mod handoff_artifact;
 pub mod handoff_skill;
 pub mod index;
+pub mod managed_sessions;
 pub mod models;
 pub mod project;
 pub mod providers;

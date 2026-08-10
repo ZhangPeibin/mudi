@@ -31,6 +31,7 @@ use crate::app::{Snapshot, Tab};
 use crate::attention::{AttentionEngine, AttentionSnapshot};
 use crate::clipboard::Clipboard;
 use crate::domain::{Project, ProjectIdentity, Provider, Session, SessionIdentity, SessionState};
+use crate::managed_sessions::{ManagedLaunchTarget, ManagedNewRequest};
 use crate::session_labels::SessionLabels;
 use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
@@ -172,6 +173,81 @@ impl SessionEditor {
             SessionEditorField::Title => &mut self.title,
             SessionEditorField::Description => &mut self.description,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewSessionField {
+    Provider,
+    Target,
+    Title,
+    Description,
+    BindingInitializer,
+    Confirm,
+}
+
+impl NewSessionField {
+    const ALL: [Self; 6] = [
+        Self::Provider,
+        Self::Target,
+        Self::Title,
+        Self::Description,
+        Self::BindingInitializer,
+        Self::Confirm,
+    ];
+
+    fn move_by(self, offset: isize) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|field| *field == self)
+            .unwrap_or(0) as isize;
+        let next = (index + offset).rem_euclid(Self::ALL.len() as isize);
+        Self::ALL[next as usize]
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NewSessionForm {
+    targets: Vec<ManagedLaunchTarget>,
+    target_index: usize,
+    provider: Option<Provider>,
+    title: String,
+    description: String,
+    binding_initializer: bool,
+    field: NewSessionField,
+    error: Option<String>,
+}
+
+impl NewSessionForm {
+    fn active_input_mut(&mut self) -> Option<&mut String> {
+        match self.field {
+            NewSessionField::Title => Some(&mut self.title),
+            NewSessionField::Description => Some(&mut self.description),
+            _ => None,
+        }
+    }
+
+    fn request(&self) -> Result<ManagedNewRequest, String> {
+        let provider = self.provider.ok_or("Provider is required".to_string())?;
+        if self.title.trim().is_empty() {
+            return Err("Title is required".to_string());
+        }
+        let title = crate::session_labels::validate_alias(&self.title)
+            .map_err(|error| error.to_string())?;
+        let description = crate::session_labels::validate_description(&self.description)
+            .map_err(|error| error.to_string())?;
+        let target = self
+            .targets
+            .get(self.target_index)
+            .cloned()
+            .ok_or("Target is unavailable".to_string())?;
+        Ok(ManagedNewRequest {
+            provider,
+            target,
+            title,
+            description,
+            binding_initializer: self.binding_initializer,
+        })
     }
 }
 
@@ -330,6 +406,7 @@ pub struct Ui {
     // 文本换行取决于实际视口，所以绘制阶段会回写最近一次测得的最大滚动位置。
     guide_max_scroll: StateCell<usize>,
     /// 编辑器及所有需要显式确认的模态状态。
+    new_session: Option<NewSessionForm>,
     edit_session: Option<SessionEditor>,
     handoff_confirmation: Option<HandoffConfirmation>,
     task_cancellation_confirmation: Option<TaskCancellationConfirmation>,
@@ -393,6 +470,9 @@ pub enum UiAction {
     OpenSuccessorTerminal {
         task_id: String,
     },
+    StartManagedNew {
+        request: ManagedNewRequest,
+    },
     Quit,
 }
 
@@ -417,6 +497,7 @@ impl Default for Ui {
             guide_pane: GuidePane::Categories,
             guide_scroll: 0,
             guide_max_scroll: StateCell::new(UNMEASURED_GUIDE_MAX_SCROLL),
+            new_session: None,
             edit_session: None,
             handoff_confirmation: None,
             task_cancellation_confirmation: None,
@@ -586,6 +667,9 @@ impl Ui {
     ) -> std::io::Result<UiAction> {
         // 快照可能在两次按键之间变化，先把所有选择位置收回到有效范围。
         self.clamp_selections(snap);
+        if self.new_session.is_some() {
+            return Ok(self.handle_new_session_key(key));
+        }
         // Session 编辑器是最高优先级模态状态，打开时不会泄漏全局快捷键。
         if self.edit_session.is_some() {
             self.handle_session_editor_key(key);
@@ -720,6 +804,24 @@ impl Ui {
         }
         // 下面按上下文分派普通页面和详情的导航动作。
         match key.code {
+            crossterm::event::KeyCode::Char('n') => {
+                if self.tab == Tab::All && self.detail.is_none() {
+                    if let Some(selection) = self.project_tree.new_target_selection(snap) {
+                        self.new_session = Some(NewSessionForm {
+                            targets: selection.targets,
+                            target_index: selection.selected,
+                            provider: None,
+                            title: String::new(),
+                            description: String::new(),
+                            binding_initializer: false,
+                            field: NewSessionField::Provider,
+                            error: None,
+                        });
+                    } else {
+                        self.show_notice("New requires a selected Project or Worktree");
+                    }
+                }
+            }
             crossterm::event::KeyCode::Char('r') => {
                 self.labels.reload();
                 return Ok(UiAction::Rescan);
@@ -1000,6 +1102,75 @@ impl Ui {
         Ok(())
     }
 
+    fn handle_new_session_key(&mut self, key: crossterm::event::KeyEvent) -> UiAction {
+        let Some(form) = self.new_session.as_mut() else {
+            return UiAction::None;
+        };
+        form.error = None;
+        match key.code {
+            crossterm::event::KeyCode::Esc => self.new_session = None,
+            crossterm::event::KeyCode::Tab => form.field = form.field.move_by(1),
+            crossterm::event::KeyCode::BackTab => form.field = form.field.move_by(-1),
+            crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right
+                if form.field == NewSessionField::Provider =>
+            {
+                form.provider = match (form.provider, key.code) {
+                    (None, crossterm::event::KeyCode::Left) => Some(Provider::ClaudeCode),
+                    (None, crossterm::event::KeyCode::Right) => Some(Provider::CodexCli),
+                    (Some(Provider::ClaudeCode), _) => Some(Provider::CodexCli),
+                    (Some(Provider::CodexCli), _) => Some(Provider::ClaudeCode),
+                    _ => form.provider,
+                };
+            }
+            crossterm::event::KeyCode::Left
+                if form.field == NewSessionField::Target && !form.targets.is_empty() =>
+            {
+                form.target_index = form
+                    .target_index
+                    .checked_sub(1)
+                    .unwrap_or(form.targets.len() - 1);
+            }
+            crossterm::event::KeyCode::Right
+                if form.field == NewSessionField::Target && !form.targets.is_empty() =>
+            {
+                form.target_index = (form.target_index + 1) % form.targets.len();
+            }
+            crossterm::event::KeyCode::Char(' ')
+                if form.field == NewSessionField::BindingInitializer =>
+            {
+                form.binding_initializer = !form.binding_initializer;
+            }
+            crossterm::event::KeyCode::Backspace => {
+                if let Some(input) = form.active_input_mut() {
+                    input.pop();
+                }
+            }
+            crossterm::event::KeyCode::Char(character)
+                if !character.is_control()
+                    && !key.modifiers.intersects(
+                        crossterm::event::KeyModifiers::CONTROL
+                            | crossterm::event::KeyModifiers::ALT,
+                    ) =>
+            {
+                if let Some(input) = form.active_input_mut() {
+                    input.push(character);
+                }
+            }
+            crossterm::event::KeyCode::Enter if form.field == NewSessionField::Confirm => {
+                match form.request() {
+                    Ok(request) => {
+                        self.new_session = None;
+                        return UiAction::StartManagedNew { request };
+                    }
+                    Err(error) => form.error = Some(error),
+                }
+            }
+            crossterm::event::KeyCode::Enter => form.field = form.field.move_by(1),
+            _ => {}
+        }
+        UiAction::None
+    }
+
     /// 切换 Guide 主题后重置滚动，并等待下一次绘制重新测量上限。
     fn reset_guide_scroll(&mut self) {
         self.guide_scroll = 0;
@@ -1015,6 +1186,7 @@ impl Ui {
         self.signal_selected = 0;
         self.task_selected = 0;
         self.detail = None;
+        self.new_session = None;
         self.handoff_confirmation = None;
         self.task_cancellation_confirmation = None;
         self.task_deletion_confirmation = None;

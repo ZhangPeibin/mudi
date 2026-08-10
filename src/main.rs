@@ -26,6 +26,10 @@ use sessionmesh::handoff::{
     ProviderExecutables, WorkerLauncher,
 };
 use sessionmesh::handoff_skill::ManagedHandoffSkills;
+use sessionmesh::managed_sessions::{
+    discover_tmux_executable, MacosManagedTerminalAccess, ManagedLaunchStore,
+    ManagedSessionService, TmuxLaunchBroker,
+};
 use sessionmesh::read_model::{InMemoryReadModelCache, ReadModelCache};
 use sessionmesh::refresh::RefreshService;
 use sessionmesh::successor::{MacosTerminalLauncher, TerminalLauncher};
@@ -55,6 +59,13 @@ async fn main() -> Result<()> {
         handoff_paths.task_store.clone(),
     );
     let provider_executables = ProviderExecutables::discover();
+    let tmux_executable = discover_tmux_executable().unwrap_or_default();
+    let managed_sessions = ManagedSessionService::new(
+        ManagedLaunchStore::open(cfg.managed_launch_store_path())?,
+        provider_executables.clone(),
+        Box::new(TmuxLaunchBroker::new(tmux_executable.clone())),
+        Box::new(MacosManagedTerminalAccess::new(tmux_executable)),
+    );
     let claude_sessions_dir = cfg.claude_sessions_dir();
     let user_home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let managed_handoff_skills = ManagedHandoffSkills::for_user_home(&user_home, &cfg.claude_dir);
@@ -73,7 +84,7 @@ async fn main() -> Result<()> {
         Arc::new(MacosCurrentRunControl::new(claude_sessions_dir)),
     )?
     .with_managed_handoff_skills(managed_handoff_skills);
-    let mut controller = ApplicationController::new(handoff, terminal_launcher);
+    let mut controller = ApplicationController::new(handoff, terminal_launcher, managed_sessions);
     controller.reconcile_tasks(chrono::Utc::now().timestamp_millis())?;
     let shared: Shared = Arc::new(InMemoryReadModelCache::default());
     // Channel to request an out-of-band rescan (the `r` key).

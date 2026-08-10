@@ -4,6 +4,7 @@ use crate::clipboard::Clipboard;
 use crate::handoff::{
     CompletionNotice, CompletionNotifier, HandoffService, MacosCompletionNotifier, WorkerLauncher,
 };
+use crate::managed_sessions::ManagedSessionService;
 use crate::read_model::RefreshSnapshot;
 use crate::successor::TerminalLauncher;
 use crate::ui::{Ui, UiIntent};
@@ -14,13 +15,19 @@ use tokio::sync::mpsc;
 pub struct ApplicationController<L, T> {
     handoff: HandoffService<L>,
     terminal_launcher: T,
+    managed_sessions: ManagedSessionService,
 }
 
 impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
-    pub fn new(handoff: HandoffService<L>, terminal_launcher: T) -> Self {
+    pub fn new(
+        handoff: HandoffService<L>,
+        terminal_launcher: T,
+        managed_sessions: ManagedSessionService,
+    ) -> Self {
         Self {
             handoff,
             terminal_launcher,
+            managed_sessions,
         }
     }
 
@@ -179,9 +186,45 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
                 let _ = rescan_tx.send(());
                 false
             }
+            UiIntent::StartManagedNew { request } => {
+                let message = match self
+                    .managed_sessions
+                    .start_new(request, chrono::Local::now().timestamp_millis())
+                {
+                    Ok(outcome) if outcome.terminal_opened => format!(
+                        "Started {} New in Terminal.app; Binding {}",
+                        outcome.registration.provider.label(),
+                        short_registration_id(&outcome.registration.id)
+                    ),
+                    Ok(outcome) => format!(
+                        "Started {} New; Open Terminal failed: {}",
+                        outcome.registration.provider.label(),
+                        outcome
+                            .registration
+                            .terminal_error
+                            .as_deref()
+                            .unwrap_or("unknown error")
+                    ),
+                    Err(error) => format!("New failed: {error}"),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
             UiIntent::Quit => true,
         }
     }
+}
+
+fn short_registration_id(registration_id: &str) -> String {
+    registration_id
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 fn short_task_id(task_id: &str) -> String {

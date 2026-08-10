@@ -2,8 +2,15 @@
 
 use super::model::{ProjectTreeKey, ProjectTreeRow};
 use crate::app::Snapshot;
-use crate::domain::{Session, SessionIdentity};
+use crate::domain::{ProjectIdentity, Session, SessionIdentity};
+use crate::managed_sessions::ManagedLaunchTarget;
 use std::collections::HashSet;
+use std::path::PathBuf;
+
+pub(in crate::ui) struct NewTargetSelection {
+    pub targets: Vec<ManagedLaunchTarget>,
+    pub selected: usize,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(in crate::ui) enum VerticalDirection {
@@ -128,6 +135,70 @@ impl State {
         find_session(snap, &identity)
     }
 
+    pub(in crate::ui) fn new_target_selection(
+        &self,
+        snap: &Snapshot,
+    ) -> Option<NewTargetSelection> {
+        let (project_identity, selected_worktree) = match self.effective_selection(snap)? {
+            ProjectTreeKey::Project(project) => (project, None),
+            ProjectTreeKey::Worktree { project, root } => (project, Some(root)),
+            _ => return None,
+        };
+        let project = snap
+            .sessions
+            .iter()
+            .filter_map(|session| session.project.as_ref())
+            .find(|project| project.identity == project_identity)?;
+        let mut worktree_roots = snap
+            .sessions
+            .iter()
+            .filter(|session| session.project.as_ref() == Some(project))
+            .filter_map(|session| {
+                session
+                    .worktree
+                    .as_ref()
+                    .map(|worktree| worktree.root.clone())
+            })
+            .collect::<Vec<_>>();
+        worktree_roots.sort();
+        worktree_roots.dedup();
+
+        let targets = match &project.identity {
+            ProjectIdentity::CanonicalCwd(root) => vec![ManagedLaunchTarget {
+                project: project.identity.clone(),
+                project_label: project.label.clone(),
+                worktree_root: None,
+                working_directory: root.clone(),
+            }],
+            ProjectIdentity::GitCommonDir(common_dir) => {
+                let main_root =
+                    git_main_worktree(common_dir).or_else(|| worktree_roots.first().cloned())?;
+                if !worktree_roots.contains(&main_root) {
+                    worktree_roots.push(main_root.clone());
+                }
+                worktree_roots.sort_by_key(|root| (root != &main_root, root.clone()));
+                worktree_roots
+                    .into_iter()
+                    .map(|root| ManagedLaunchTarget {
+                        project: project.identity.clone(),
+                        project_label: project.label.clone(),
+                        worktree_root: Some(root.clone()),
+                        working_directory: root,
+                    })
+                    .collect()
+            }
+        };
+        let selected = selected_worktree
+            .as_ref()
+            .and_then(|selected| {
+                targets
+                    .iter()
+                    .position(|target| target.worktree_root.as_ref() == Some(selected))
+            })
+            .unwrap_or(0);
+        Some(NewTargetSelection { targets, selected })
+    }
+
     pub(in crate::ui) fn select_session(&mut self, identity: SessionIdentity) {
         self.selection = Some(ProjectTreeKey::Session(identity));
     }
@@ -162,6 +233,12 @@ impl State {
         }
         self.selection = Some(key);
     }
+}
+
+fn git_main_worktree(common_dir: &std::path::Path) -> Option<PathBuf> {
+    (common_dir.file_name() == Some(std::ffi::OsStr::new(".git")))
+        .then(|| common_dir.parent().map(PathBuf::from))
+        .flatten()
 }
 
 fn find_session<'a>(snap: &'a Snapshot, identity: &SessionIdentity) -> Option<&'a Session> {

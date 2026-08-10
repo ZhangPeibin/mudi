@@ -1,0 +1,764 @@
+//! Explicitly authorized Managed Session launch registration and native New startup.
+
+use crate::domain::{ProjectIdentity, Provider};
+use crate::providers::state::ProcessIdentity;
+use crate::providers::{registry, ProviderExecutables};
+use anyhow::{anyhow, Context, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+static REGISTRATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedLaunchStatus {
+    Binding,
+}
+
+impl ManagedLaunchStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Binding => "binding",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "binding" => Ok(Self::Binding),
+            _ => Err(anyhow!(
+                "unknown Managed Launch Registration status {value:?}"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedLaunchTarget {
+    pub project: ProjectIdentity,
+    pub project_label: String,
+    pub worktree_root: Option<PathBuf>,
+    pub working_directory: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedNewRequest {
+    pub provider: Provider,
+    pub target: ManagedLaunchTarget,
+    pub title: String,
+    pub description: Option<String>,
+    pub binding_initializer: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderNewCommand {
+    pub executable: PathBuf,
+    pub arguments: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateTmuxEnvironment {
+    pub socket_name: String,
+    pub session_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedLaunchRegistration {
+    pub id: String,
+    pub status: ManagedLaunchStatus,
+    pub provider: Provider,
+    pub target: ManagedLaunchTarget,
+    pub session_alias: String,
+    pub description: Option<String>,
+    pub binding_initializer: bool,
+    pub provider_command: ProviderNewCommand,
+    pub tmux: PrivateTmuxEnvironment,
+    pub created_at_ms: i64,
+    pub launched_at_ms: Option<i64>,
+    pub launch_evidence: Option<ManagedLaunchEvidence>,
+    pub terminal_opened_at_ms: Option<i64>,
+    pub terminal_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedLaunchEvidence {
+    pub tmux_pane_id: String,
+    pub provider_process: ProcessIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedNewOutcome {
+    pub registration: ManagedLaunchRegistration,
+    pub terminal_opened: bool,
+}
+
+pub trait ManagedLaunchBroker {
+    fn launch(&mut self, registration: &ManagedLaunchRegistration)
+        -> Result<ManagedLaunchEvidence>;
+}
+
+pub trait ManagedTerminalAccess {
+    fn open(&mut self, registration: &ManagedLaunchRegistration) -> Result<()>;
+}
+
+pub struct ManagedSessionService {
+    store: ManagedLaunchStore,
+    executables: ProviderExecutables,
+    launch_broker: Box<dyn ManagedLaunchBroker>,
+    terminal_access: Box<dyn ManagedTerminalAccess>,
+}
+
+impl ManagedSessionService {
+    pub fn new(
+        store: ManagedLaunchStore,
+        executables: ProviderExecutables,
+        launch_broker: Box<dyn ManagedLaunchBroker>,
+        terminal_access: Box<dyn ManagedTerminalAccess>,
+    ) -> Self {
+        Self {
+            store,
+            executables,
+            launch_broker,
+            terminal_access,
+        }
+    }
+
+    pub fn start_new(
+        &mut self,
+        mut request: ManagedNewRequest,
+        now_ms: i64,
+    ) -> Result<ManagedNewOutcome> {
+        if request.title.trim().is_empty() {
+            return Err(anyhow!("New requires a Title"));
+        }
+        request.title = crate::session_labels::validate_alias(&request.title)?;
+        request.description = crate::session_labels::validate_description(
+            request.description.as_deref().unwrap_or_default(),
+        )?;
+        validate_target(&request.target)?;
+
+        let executable = self
+            .executables
+            .executable_for(request.provider)
+            .ok_or_else(|| anyhow!("{} executable is unavailable", request.provider.label()))?
+            .to_path_buf();
+        validate_executable(&executable, request.provider.label())?;
+        let id = new_registration_id(now_ms);
+        let registration = ManagedLaunchRegistration {
+            id: id.clone(),
+            status: ManagedLaunchStatus::Binding,
+            provider: request.provider,
+            target: request.target,
+            session_alias: request.title,
+            description: request.description,
+            binding_initializer: request.binding_initializer,
+            provider_command: ProviderNewCommand {
+                executable,
+                arguments: registry()
+                    .runtime_control(request.provider)?
+                    .new_session_args(request.binding_initializer),
+            },
+            tmux: PrivateTmuxEnvironment {
+                socket_name: format!("sessionmesh-{id}"),
+                session_name: "managed".to_string(),
+            },
+            created_at_ms: now_ms,
+            launched_at_ms: None,
+            launch_evidence: None,
+            terminal_opened_at_ms: None,
+            terminal_error: None,
+        };
+
+        self.store.insert(&registration)?;
+        let launch_evidence = self
+            .launch_broker
+            .launch(&registration)
+            .context("Managed Provider launch failed")?;
+        self.store
+            .record_launched(&registration.id, now_ms, launch_evidence)?;
+        let launched = self
+            .store
+            .get(&registration.id)?
+            .ok_or_else(|| anyhow!("Managed Launch Registration disappeared after launch"))?;
+
+        let terminal_opened = match self.terminal_access.open(&launched) {
+            Ok(()) => {
+                self.store
+                    .record_terminal_opened(&registration.id, now_ms)?;
+                true
+            }
+            Err(error) => {
+                self.store
+                    .record_terminal_error(&registration.id, &error.to_string())?;
+                false
+            }
+        };
+        let registration = self.store.get(&registration.id)?.ok_or_else(|| {
+            anyhow!("Managed Launch Registration disappeared after Terminal access")
+        })?;
+        Ok(ManagedNewOutcome {
+            registration,
+            terminal_opened,
+        })
+    }
+}
+
+fn validate_target(target: &ManagedLaunchTarget) -> Result<()> {
+    if target.project_label.trim().is_empty() {
+        return Err(anyhow!("New target Project label is unavailable"));
+    }
+    if !target.working_directory.is_absolute() || !target.working_directory.is_dir() {
+        return Err(anyhow!("New target working directory is unavailable"));
+    }
+    match (&target.project, &target.worktree_root) {
+        (ProjectIdentity::GitCommonDir(common_dir), Some(worktree_root))
+            if common_dir.is_absolute()
+                && worktree_root.is_absolute()
+                && worktree_root == &target.working_directory => {}
+        (ProjectIdentity::CanonicalCwd(project_root), None)
+            if project_root == &target.working_directory => {}
+        _ => {
+            return Err(anyhow!(
+                "New target Project and Worktree identity do not match its working directory"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn new_registration_id(_now_ms: i64) -> String {
+    let sequence = REGISTRATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    format!("launch-{:x}-{:x}-{:x}", nonce, std::process::id(), sequence)
+}
+
+pub struct ManagedLaunchStore {
+    conn: Connection,
+}
+
+impl ManagedLaunchStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                let mut builder = std::fs::DirBuilder::new();
+                builder.recursive(true);
+                #[cfg(unix)]
+                builder.mode(0o700);
+                builder.create(parent)?;
+            }
+            #[cfg(unix)]
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
+        let conn = Connection::open(path)?;
+        #[cfg(unix)]
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        conn.execute_batch(
+            r#"
+            PRAGMA journal_mode = WAL;
+            CREATE TABLE IF NOT EXISTS managed_launch_registrations (
+                registration_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                project_kind TEXT NOT NULL,
+                project_path BLOB NOT NULL,
+                project_label TEXT NOT NULL,
+                worktree_root BLOB,
+                working_directory BLOB NOT NULL,
+                session_alias TEXT NOT NULL,
+                description TEXT,
+                binding_initializer INTEGER NOT NULL,
+                provider_executable BLOB NOT NULL,
+                provider_arguments_json TEXT NOT NULL,
+                tmux_socket_name TEXT NOT NULL,
+                tmux_session_name TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                launched_at_ms INTEGER,
+                tmux_pane_id TEXT,
+                provider_pid INTEGER,
+                provider_started_at_ms INTEGER,
+                terminal_opened_at_ms INTEGER,
+                terminal_error TEXT
+            );
+            "#,
+        )?;
+        Ok(Self { conn })
+    }
+
+    pub fn insert(&self, registration: &ManagedLaunchRegistration) -> Result<()> {
+        let (project_kind, project_path) = project_identity_parts(&registration.target.project);
+        self.conn.execute(
+            r#"
+            INSERT INTO managed_launch_registrations (
+                registration_id, status, provider, project_kind, project_path,
+                project_label, worktree_root, working_directory, session_alias,
+                description, binding_initializer, provider_executable,
+                provider_arguments_json, tmux_socket_name, tmux_session_name,
+                created_at_ms, launched_at_ms, tmux_pane_id, provider_pid,
+                provider_started_at_ms, terminal_opened_at_ms, terminal_error
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
+            )
+            "#,
+            params![
+                registration.id,
+                registration.status.as_str(),
+                registration.provider.as_str(),
+                project_kind,
+                project_path,
+                registration.target.project_label,
+                registration.target.worktree_root.as_deref().map(path_bytes),
+                path_bytes(&registration.target.working_directory),
+                registration.session_alias,
+                registration.description,
+                registration.binding_initializer,
+                path_bytes(&registration.provider_command.executable),
+                serde_json::to_string(&registration.provider_command.arguments)?,
+                registration.tmux.socket_name,
+                registration.tmux.session_name,
+                registration.created_at_ms,
+                registration.launched_at_ms,
+                registration
+                    .launch_evidence
+                    .as_ref()
+                    .map(|evidence| &evidence.tmux_pane_id),
+                registration
+                    .launch_evidence
+                    .as_ref()
+                    .map(|evidence| evidence.provider_process.pid),
+                registration
+                    .launch_evidence
+                    .as_ref()
+                    .map(|evidence| evidence.provider_process.started_at_ms),
+                registration.terminal_opened_at_ms,
+                registration.terminal_error,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get(&self, registration_id: &str) -> Result<Option<ManagedLaunchRegistration>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT status, provider, project_kind, project_path, project_label,
+                   worktree_root, working_directory, session_alias, description,
+                   binding_initializer, provider_executable, provider_arguments_json,
+                   tmux_socket_name, tmux_session_name, created_at_ms, launched_at_ms,
+                   tmux_pane_id, provider_pid, provider_started_at_ms,
+                   terminal_opened_at_ms, terminal_error
+            FROM managed_launch_registrations
+            WHERE registration_id = ?1
+            "#,
+        )?;
+        statement
+            .query_row([registration_id], |row| {
+                let status: String = row.get(0)?;
+                let provider: String = row.get(1)?;
+                let project_kind: String = row.get(2)?;
+                let project_path: Vec<u8> = row.get(3)?;
+                let worktree_root = row.get::<_, Option<Vec<u8>>>(5)?.map(path_from_bytes);
+                let working_directory = path_from_bytes(row.get(6)?);
+                let provider_executable = path_from_bytes(row.get(10)?);
+                let arguments_json: String = row.get(11)?;
+                let tmux_pane_id = row.get::<_, Option<String>>(16)?;
+                let provider_pid = row.get::<_, Option<u32>>(17)?;
+                let provider_started_at_ms = row.get::<_, Option<i64>>(18)?;
+                Ok((
+                    status,
+                    provider,
+                    project_kind,
+                    project_path,
+                    row.get::<_, String>(4)?,
+                    worktree_root,
+                    working_directory,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, bool>(9)?,
+                    provider_executable,
+                    arguments_json,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, i64>(14)?,
+                    row.get::<_, Option<i64>>(15)?,
+                    tmux_pane_id,
+                    provider_pid,
+                    provider_started_at_ms,
+                    row.get::<_, Option<i64>>(19)?,
+                    row.get::<_, Option<String>>(20)?,
+                ))
+            })
+            .optional()?
+            .map(
+                |(
+                    status,
+                    provider,
+                    project_kind,
+                    project_path,
+                    project_label,
+                    worktree_root,
+                    working_directory,
+                    session_alias,
+                    description,
+                    binding_initializer,
+                    provider_executable,
+                    arguments_json,
+                    tmux_socket_name,
+                    tmux_session_name,
+                    created_at_ms,
+                    launched_at_ms,
+                    tmux_pane_id,
+                    provider_pid,
+                    provider_started_at_ms,
+                    terminal_opened_at_ms,
+                    terminal_error,
+                )| {
+                    Ok(ManagedLaunchRegistration {
+                        id: registration_id.to_string(),
+                        status: ManagedLaunchStatus::parse(&status)?,
+                        provider: Provider::parse(&provider)
+                            .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
+                        target: ManagedLaunchTarget {
+                            project: project_identity_from_parts(&project_kind, project_path)?,
+                            project_label,
+                            worktree_root,
+                            working_directory,
+                        },
+                        session_alias,
+                        description,
+                        binding_initializer,
+                        provider_command: ProviderNewCommand {
+                            executable: provider_executable,
+                            arguments: serde_json::from_str(&arguments_json)
+                                .map_err(|_| anyhow!("invalid persisted Provider New arguments"))?,
+                        },
+                        tmux: PrivateTmuxEnvironment {
+                            socket_name: tmux_socket_name,
+                            session_name: tmux_session_name,
+                        },
+                        created_at_ms,
+                        launched_at_ms,
+                        launch_evidence: persisted_launch_evidence(
+                            tmux_pane_id,
+                            provider_pid,
+                            provider_started_at_ms,
+                        )?,
+                        terminal_opened_at_ms,
+                        terminal_error,
+                    })
+                },
+            )
+            .transpose()
+    }
+
+    fn record_launched(
+        &self,
+        registration_id: &str,
+        now_ms: i64,
+        evidence: ManagedLaunchEvidence,
+    ) -> Result<()> {
+        update_one(
+            self.conn.execute(
+                r#"
+                UPDATE managed_launch_registrations
+                SET launched_at_ms = ?2,
+                    tmux_pane_id = ?3,
+                    provider_pid = ?4,
+                    provider_started_at_ms = ?5
+                WHERE registration_id = ?1
+                  AND launched_at_ms IS NULL
+                  AND tmux_pane_id IS NULL
+                  AND provider_pid IS NULL
+                  AND provider_started_at_ms IS NULL
+                "#,
+                params![
+                    registration_id,
+                    now_ms,
+                    evidence.tmux_pane_id,
+                    evidence.provider_process.pid,
+                    evidence.provider_process.started_at_ms,
+                ],
+            )?,
+            registration_id,
+        )
+    }
+
+    fn record_terminal_opened(&self, registration_id: &str, now_ms: i64) -> Result<()> {
+        update_one(
+            self.conn.execute(
+                "UPDATE managed_launch_registrations SET terminal_opened_at_ms = ?2, terminal_error = NULL WHERE registration_id = ?1 AND launched_at_ms IS NOT NULL",
+                params![registration_id, now_ms],
+            )?,
+            registration_id,
+        )
+    }
+
+    fn record_terminal_error(&self, registration_id: &str, error: &str) -> Result<()> {
+        update_one(
+            self.conn.execute(
+                "UPDATE managed_launch_registrations SET terminal_error = ?2 WHERE registration_id = ?1 AND launched_at_ms IS NOT NULL",
+                params![registration_id, error],
+            )?,
+            registration_id,
+        )
+    }
+}
+
+fn persisted_launch_evidence(
+    tmux_pane_id: Option<String>,
+    provider_pid: Option<u32>,
+    provider_started_at_ms: Option<i64>,
+) -> Result<Option<ManagedLaunchEvidence>> {
+    match (tmux_pane_id, provider_pid, provider_started_at_ms) {
+        (Some(tmux_pane_id), Some(pid), Some(started_at_ms)) => Ok(Some(ManagedLaunchEvidence {
+            tmux_pane_id,
+            provider_process: ProcessIdentity { pid, started_at_ms },
+        })),
+        (None, None, None) => Ok(None),
+        _ => Err(anyhow!("incomplete persisted Managed launch evidence")),
+    }
+}
+
+fn update_one(changed: usize, registration_id: &str) -> Result<()> {
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Managed Launch Registration {registration_id} is unavailable or in the wrong state"
+        ))
+    }
+}
+
+fn project_identity_parts(identity: &ProjectIdentity) -> (&'static str, Vec<u8>) {
+    match identity {
+        ProjectIdentity::GitCommonDir(path) => ("git_common_dir", path_bytes(path)),
+        ProjectIdentity::CanonicalCwd(path) => ("canonical_cwd", path_bytes(path)),
+    }
+}
+
+fn project_identity_from_parts(kind: &str, path: Vec<u8>) -> Result<ProjectIdentity> {
+    let path = path_from_bytes(path);
+    match kind {
+        "git_common_dir" => Ok(ProjectIdentity::GitCommonDir(path)),
+        "canonical_cwd" => Ok(ProjectIdentity::CanonicalCwd(path)),
+        _ => Err(anyhow!("unknown persisted Project identity kind {kind:?}")),
+    }
+}
+
+#[cfg(unix)]
+fn path_bytes(path: &Path) -> Vec<u8> {
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn path_bytes(path: &Path) -> Vec<u8> {
+    path.to_string_lossy().as_bytes().to_vec()
+}
+
+#[cfg(unix)]
+fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
+    PathBuf::from(OsString::from_vec(bytes))
+}
+
+#[cfg(not(unix))]
+fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+pub struct TmuxLaunchBroker {
+    tmux_executable: PathBuf,
+}
+
+impl TmuxLaunchBroker {
+    pub fn new(tmux_executable: PathBuf) -> Self {
+        Self { tmux_executable }
+    }
+}
+
+impl ManagedLaunchBroker for TmuxLaunchBroker {
+    fn launch(
+        &mut self,
+        registration: &ManagedLaunchRegistration,
+    ) -> Result<ManagedLaunchEvidence> {
+        validate_executable(&self.tmux_executable, "tmux")?;
+        validate_executable(
+            &registration.provider_command.executable,
+            registration.provider.label(),
+        )?;
+        validate_tmux_name(&registration.tmux.socket_name)?;
+        validate_tmux_name(&registration.tmux.session_name)?;
+        let output = Command::new(&self.tmux_executable)
+            .env_remove("TMUX")
+            .args([OsStr::new("-f"), OsStr::new("/dev/null"), OsStr::new("-L")])
+            .arg(&registration.tmux.socket_name)
+            .args([
+                OsStr::new("new-session"),
+                OsStr::new("-d"),
+                OsStr::new("-P"),
+                OsStr::new("-F"),
+                OsStr::new("#{pane_id}\t#{pane_pid}"),
+                OsStr::new("-s"),
+            ])
+            .arg(&registration.tmux.session_name)
+            .arg("-c")
+            .arg(&registration.target.working_directory)
+            .arg("--")
+            .arg(&registration.provider_command.executable)
+            .args(&registration.provider_command.arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .context("could not start private tmux")?;
+        if !output.status.success() {
+            return Err(anyhow!("private tmux launch exited with {}", output.status));
+        }
+        let output = String::from_utf8(output.stdout)
+            .map_err(|_| anyhow!("private tmux launch evidence is not valid UTF-8"))?;
+        let (tmux_pane_id, pane_pid) = output
+            .trim()
+            .split_once('\t')
+            .ok_or_else(|| anyhow!("private tmux launch evidence is incomplete"))?;
+        validate_tmux_pane_id(tmux_pane_id)?;
+        let pane_pid = pane_pid
+            .parse::<u32>()
+            .map_err(|_| anyhow!("private tmux Provider PID is invalid"))?;
+        let provider_process = crate::providers::state::process_identity_after_spawn(pane_pid)
+            .ok_or_else(|| anyhow!("private tmux Provider process identity is unavailable"))?;
+        Ok(ManagedLaunchEvidence {
+            tmux_pane_id: tmux_pane_id.to_string(),
+            provider_process,
+        })
+    }
+}
+
+pub struct MacosManagedTerminalAccess {
+    tmux_executable: PathBuf,
+    osascript_executable: PathBuf,
+}
+
+impl MacosManagedTerminalAccess {
+    pub fn new(tmux_executable: PathBuf) -> Self {
+        Self::with_osascript(tmux_executable, PathBuf::from("/usr/bin/osascript"))
+    }
+
+    pub fn with_osascript(tmux_executable: PathBuf, osascript_executable: PathBuf) -> Self {
+        Self {
+            tmux_executable,
+            osascript_executable,
+        }
+    }
+}
+
+impl ManagedTerminalAccess for MacosManagedTerminalAccess {
+    fn open(&mut self, registration: &ManagedLaunchRegistration) -> Result<()> {
+        validate_executable(&self.tmux_executable, "tmux")?;
+        validate_tmux_name(&registration.tmux.socket_name)?;
+        validate_tmux_name(&registration.tmux.session_name)?;
+        let command = [
+            shell_quote_os(self.tmux_executable.as_os_str())?,
+            "-L".to_string(),
+            shell_quote(&registration.tmux.socket_name),
+            "attach-session".to_string(),
+            "-t".to_string(),
+            shell_quote(&registration.tmux.session_name),
+        ]
+        .join(" ");
+        let status = Command::new(&self.osascript_executable)
+            .args([
+                OsStr::new("-e"),
+                OsStr::new("on run argv"),
+                OsStr::new("-e"),
+                OsStr::new("tell application \"Terminal\""),
+                OsStr::new("-e"),
+                OsStr::new("do script (item 1 of argv)"),
+                OsStr::new("-e"),
+                OsStr::new("activate"),
+                OsStr::new("-e"),
+                OsStr::new("end tell"),
+                OsStr::new("-e"),
+                OsStr::new("end run"),
+                OsStr::new("--"),
+                OsStr::new(&command),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("could not open Terminal.app")?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(anyhow!("Terminal.app launch failed"))
+        }
+    }
+}
+
+pub fn discover_tmux_executable() -> Option<PathBuf> {
+    std::env::var_os("SESSIONMESH_TMUX_EXECUTABLE")
+        .map(PathBuf::from)
+        .filter(|path| validate_executable(path, "tmux").is_ok())
+        .or_else(|| {
+            std::env::var_os("PATH")
+                .as_deref()
+                .map(std::env::split_paths)
+                .into_iter()
+                .flatten()
+                .map(|directory| directory.join("tmux"))
+                .find(|path| validate_executable(path, "tmux").is_ok())
+        })
+}
+
+fn validate_executable(path: &Path, name: &str) -> Result<()> {
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("{name} executable is unavailable"))?;
+    if !path.is_absolute() || !metadata.is_file() {
+        return Err(anyhow!("{name} executable is unavailable"));
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(anyhow!("{name} executable is unavailable"));
+    }
+    Ok(())
+}
+
+fn validate_tmux_name(value: &str) -> Result<()> {
+    if value.is_empty()
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(anyhow!("private tmux environment is invalid"));
+    }
+    Ok(())
+}
+
+fn validate_tmux_pane_id(value: &str) -> Result<()> {
+    if value.strip_prefix('%').is_some_and(|number| {
+        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+    }) {
+        Ok(())
+    } else {
+        Err(anyhow!("private tmux pane identity is invalid"))
+    }
+}
+
+fn shell_quote_os(value: &OsStr) -> Result<String> {
+    value
+        .to_str()
+        .map(shell_quote)
+        .ok_or_else(|| anyhow!("tmux executable path is not valid UTF-8"))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}

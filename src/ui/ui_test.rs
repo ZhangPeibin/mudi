@@ -663,6 +663,121 @@ fn demo_snapshot() -> Snapshot {
     }
 }
 
+fn managed_new_snapshot() -> Snapshot {
+    let mut snapshot = demo_snapshot();
+    snapshot.sessions[0].last_activity_ms = 2_000;
+    let mut feature = snapshot.sessions[0].clone();
+    feature.id = "feature-session".into();
+    feature.worktree = Some(Worktree {
+        root: PathBuf::from("/Users/x/code/sessionmesh-feature"),
+        branch: Some("feature".into()),
+        writable: true,
+    });
+    feature.cwd = Some("/Users/x/code/sessionmesh-feature".into());
+    feature.last_activity_ms = 1_000;
+    snapshot.sessions.push(feature);
+    snapshot
+}
+
+#[test]
+fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
+    let snapshot = managed_new_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap(),
+        UiAction::None
+    );
+    let initial = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(initial.contains("New Session"));
+    assert!(initial.contains("/Users/x/code/sessionmesh"));
+    assert!(initial.contains("Choose Provider"));
+    assert!(initial.contains("[ ] Off"));
+    let compact = rendered_rows_at(&ui, &snapshot, 80, 24);
+    for visible_control in [
+        "New Session",
+        "Provider",
+        "Worktree",
+        "Title",
+        "Description",
+        "Binding Initializer",
+        "Start New",
+    ] {
+        assert!(compact.contains(visible_control));
+    }
+
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Investigate startup".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Trace launch".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Char(' ')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+        UiAction::StartManagedNew {
+            request: crate::managed_sessions::ManagedNewRequest {
+                provider: Provider::CodexCli,
+                target: crate::managed_sessions::ManagedLaunchTarget {
+                    project: snapshot.sessions[0]
+                        .project
+                        .as_ref()
+                        .unwrap()
+                        .identity
+                        .clone(),
+                    project_label: "sessionmesh".into(),
+                    worktree_root: Some(PathBuf::from("/Users/x/code/sessionmesh-feature")),
+                    working_directory: PathBuf::from("/Users/x/code/sessionmesh-feature"),
+                },
+                title: "Investigate startup".into(),
+                description: Some("Trace launch".into()),
+                binding_initializer: true,
+            }
+        }
+    );
+}
+
+#[test]
+fn selected_worktree_new_requires_title_and_does_not_remember_provider() {
+    let snapshot = managed_new_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+
+    let selected = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(selected.contains("/Users/x/code/sessionmesh-feature"));
+    assert!(selected.contains("Choose Provider"));
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    for _ in 0..5 {
+        ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    }
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+        UiAction::None
+    );
+    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("Title is required"));
+
+    ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("Choose Provider"));
+}
+
 /// 对指定顶层页签及可选详情状态执行一次无崩溃渲染。
 fn render_tab(tab: Tab, detail: bool) {
     let snap = demo_snapshot();
