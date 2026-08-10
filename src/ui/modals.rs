@@ -20,6 +20,7 @@ pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
         || ui.guide_open
         || ui.new_session.is_some()
         || ui.edit_session.is_some()
+        || ui.managed_resume_confirmation.is_some()
         || ui.handoff_confirmation.is_some()
         || ui.task_cancellation_confirmation.is_some()
         || ui.task_deletion_confirmation.is_some()
@@ -41,6 +42,9 @@ pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     if ui.edit_session.is_some() {
         draw_session_editor(f, ui);
     }
+    if ui.managed_resume_confirmation.is_some() {
+        draw_managed_resume_confirmation(f, ui);
+    }
     if ui.handoff_confirmation.is_some() {
         draw_handoff_confirmation(f, snap, ui);
     }
@@ -53,6 +57,48 @@ pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     if ui.task_retry_confirmation.is_some() {
         draw_task_retry_confirmation(f, ui);
     }
+}
+
+fn draw_managed_resume_confirmation(f: &mut Frame, ui: &Ui) {
+    let Some(target) = ui.managed_resume_confirmation.as_ref() else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let area = layout::centered_rect_with_max_width(82, 62, 72, f.area());
+    f.render_widget(Clear, area);
+    let lines = vec![
+        Line::from(Span::styled(
+            "Authorize Resume?",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("Provider    {}", target.provider.label())),
+        Line::from(format!("Session ID  {}", target.native_session_id)),
+        Line::from(""),
+        Line::from("Starts the Provider's exact native Resume path."),
+        Line::from("Creates a new private tmux and distinct Current Run."),
+        Line::from("Managed authority requires a new complete Binding Receipt."),
+        Line::from("The prior Current Run is revalidated before launch."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter Authorize   Esc Cancel",
+            Style::default().fg(theme.accent),
+        )),
+    ];
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(" Authorize Resume "),
+            )
+            .style(Style::default().fg(theme.foreground).bg(theme.background)),
+        area,
+    );
 }
 
 fn draw_new_session(f: &mut Frame, ui: &Ui) {

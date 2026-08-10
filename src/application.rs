@@ -263,6 +263,31 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
                 let _ = rescan_tx.send(());
                 false
             }
+            UiIntent::StartManagedResume { request } => {
+                let message = match self
+                    .managed_sessions
+                    .start_resume(request, chrono::Local::now().timestamp_millis())
+                {
+                    Ok(outcome) if outcome.terminal_opened => format!(
+                        "Started {} Resume in Terminal.app; Binding {}",
+                        outcome.registration.provider.label(),
+                        short_registration_id(&outcome.registration.id)
+                    ),
+                    Ok(outcome) => format!(
+                        "Started {} Resume; Open Terminal failed: {}",
+                        outcome.registration.provider.label(),
+                        outcome
+                            .registration
+                            .terminal_error
+                            .as_deref()
+                            .unwrap_or("unknown error")
+                    ),
+                    Err(error) => format!("Resume failed: {error}"),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
             UiIntent::CancelManagedStart { registration_id } => {
                 let message = match self.managed_sessions.cancel_start(&registration_id) {
                     Ok(()) => format!(

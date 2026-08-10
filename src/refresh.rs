@@ -7,8 +7,9 @@ use crate::config::Config;
 use crate::index::Index;
 use crate::managed_sessions::{
     discover_tmux_executable, BindingOutcome, EvidenceBinder, ManagedCurrentRunEvidence,
-    ManagedCurrentRunVerifier, ManagedLaunchStore, SystemManagedCurrentRunEvidence,
-    SystemProcessEvidence, TmuxManagedLaunchCleanup,
+    ManagedCurrentRunVerifier, ManagedLaunchStore, ManagedResumeEvidence, ManagedResumeVerifier,
+    SystemManagedCurrentRunEvidence, SystemManagedResumeEvidence, SystemProcessEvidence,
+    TmuxManagedLaunchCleanup,
 };
 use crate::models::ModelCatalog;
 use crate::providers::registry;
@@ -27,6 +28,7 @@ pub struct RefreshService {
     restart_binding_registrations: HashSet<String>,
     managed_binding_reconciler: EvidenceBinder,
     managed_current_run_verifier: ManagedCurrentRunVerifier,
+    managed_resume_verifier: ManagedResumeVerifier,
     models: ModelCatalog,
     alert_engine: AlertEngine,
     attention_engine: AttentionEngine,
@@ -60,6 +62,10 @@ impl RefreshService {
                 cfg.clone(),
                 Box::new(SystemManagedCurrentRunEvidence),
             ),
+            managed_resume_verifier: ManagedResumeVerifier::new(
+                cfg.clone(),
+                Box::new(SystemManagedResumeEvidence::default()),
+            ),
             models: ModelCatalog::load(Some(&cfg.model_catalog_override_path())),
             alert_engine: AlertEngine::new(cfg.label_store_path()),
             cfg,
@@ -83,6 +89,14 @@ impl RefreshService {
         self
     }
 
+    pub fn with_managed_resume_evidence(
+        mut self,
+        evidence: Box<dyn ManagedResumeEvidence>,
+    ) -> Self {
+        self.managed_resume_verifier = ManagedResumeVerifier::new(self.cfg.clone(), evidence);
+        self
+    }
+
     pub fn with_managed_binding_reconciler(mut self, reconciler: EvidenceBinder) -> Self {
         self.managed_binding_reconciler = reconciler;
         self
@@ -97,6 +111,7 @@ impl RefreshService {
         let mut sessions = Vec::new();
         let mut managed_launches = Vec::new();
         let mut verified_managed_current_runs = Vec::new();
+        let mut resumable_managed_sessions = Vec::new();
 
         match self.index.as_mut() {
             Ok(index) => match collector::refresh_checked(&self.cfg, index) {
@@ -205,6 +220,18 @@ impl RefreshService {
                         error.to_string(),
                     )),
                 }
+                match self.managed_resume_verifier.verified_exited_sessions(store) {
+                    Ok(sessions) => {
+                        resumable_managed_sessions = sessions
+                            .iter()
+                            .map(crate::read_model::ManagedResumeSummary::from)
+                            .collect();
+                    }
+                    Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Resume Registry",
+                        error.to_string(),
+                    )),
+                }
                 match store.registrations() {
                     Ok(registrations) => {
                         managed_launches = registrations
@@ -251,6 +278,7 @@ impl RefreshService {
             tasks,
             managed_launches,
             verified_managed_current_runs,
+            resumable_managed_sessions,
             recent_signals,
             attention: Some(attention),
             stats,

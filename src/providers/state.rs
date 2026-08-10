@@ -18,6 +18,8 @@ pub struct StateDetector {
     /// Absolute rollout paths currently held by Codex, with the holder's
     /// validated process start when it is unambiguous.
     codex_held: HashMap<PathBuf, Option<ProcessIdentity>>,
+    claude_complete: bool,
+    codex_complete: bool,
 }
 
 /// Exact Provider CLI process evidence used to defend control actions from PID reuse.
@@ -27,6 +29,7 @@ pub struct ProcessIdentity {
     pub started_at_ms: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProcessInspection {
     Present(ProcessIdentity, bool),
     Absent,
@@ -54,9 +57,21 @@ impl LiveState {
 impl StateDetector {
     /// Gather live state for both providers.
     pub fn gather(claude_sessions_dir: &Path) -> Self {
+        let (claude, claude_complete) = detect_claude(claude_sessions_dir);
+        let (codex_held, codex_complete) = codex_live_files();
         StateDetector {
-            claude: detect_claude(claude_sessions_dir),
-            codex_held: codex_live_files(),
+            claude,
+            codex_held,
+            claude_complete,
+            codex_complete,
+        }
+    }
+
+    /// Whether the process scan for this Provider completed without an unknown result.
+    pub fn scan_complete(&self, provider: crate::domain::Provider) -> bool {
+        match provider {
+            crate::domain::Provider::ClaudeCode => self.claude_complete,
+            crate::domain::Provider::CodexCli => self.codex_complete,
         }
     }
 
@@ -97,28 +112,48 @@ impl StateDetector {
 }
 
 /// Read Claude's per-PID state files, validating each against the live process.
-fn detect_claude(sessions_dir: &Path) -> HashMap<String, LiveState> {
+fn detect_claude(sessions_dir: &Path) -> (HashMap<String, LiveState>, bool) {
     let mut out = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(sessions_dir) else {
-        return out;
+    let entries = match std::fs::read_dir(sessions_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (out, true),
+        Err(_) => return (out, false),
     };
+    let mut complete = true;
 
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
+        };
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
         };
-        let Ok(v) = serde_json::from_str::<Value>(&text) else {
-            continue;
+        let v = match serde_json::from_str::<Value>(&text) {
+            Ok(value) => value,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
         };
 
         let Some(pid) = v.get("pid").and_then(Value::as_i64) else {
+            complete = false;
             continue;
         };
         let Some(session_id) = v.get("sessionId").and_then(Value::as_str) else {
+            complete = false;
             continue;
         };
         let started_at_ms = v.get("startedAt").and_then(Value::as_i64);
@@ -126,8 +161,13 @@ fn detect_claude(sessions_dir: &Path) -> HashMap<String, LiveState> {
         // PID-reuse guard: the live process must exist and its start time must match
         // the recorded `startedAt`. We validate via elapsed time (`ps -o etime`), which
         // is locale- and timezone-independent (unlike `lstart`).
-        if !process_matches(pid, started_at_ms) {
-            continue;
+        match process_matches(pid, started_at_ms) {
+            Some(true) => {}
+            Some(false) => continue,
+            None => {
+                complete = false;
+                continue;
+            }
         }
 
         let status = v.get("status").and_then(Value::as_str).unwrap_or("");
@@ -149,7 +189,7 @@ fn detect_claude(sessions_dir: &Path) -> HashMap<String, LiveState> {
             },
         );
     }
-    out
+    (out, complete)
 }
 
 /// Elapsed-time tolerance (seconds) when matching a process against `startedAt`.
@@ -157,20 +197,20 @@ fn detect_claude(sessions_dir: &Path) -> HashMap<String, LiveState> {
 const START_TOLERANCE_S: i64 = 120;
 
 /// True if `pid` is alive and (when known) its start time matches `expected_started_ms`.
-fn process_matches(pid: i64, expected_started_ms: Option<i64>) -> bool {
+fn process_matches(pid: i64, expected_started_ms: Option<i64>) -> Option<bool> {
     let output = Command::new("ps")
         .args(["-o", "etime=", "-p", &pid.to_string()])
         .output();
-    let Ok(output) = output else { return false };
+    let Ok(output) = output else { return None };
     if !output.status.success() {
-        return false;
+        return (output.status.code() == Some(1)).then_some(false);
     }
     let etime = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if etime.is_empty() {
-        return false; // process not alive
+        return Some(false); // process not alive
     }
     let Some(elapsed_s) = parse_etime(&etime) else {
-        return false;
+        return None;
     };
 
     match expected_started_ms {
@@ -180,10 +220,10 @@ fn process_matches(pid: i64, expected_started_ms: Option<i64>) -> bool {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             let actual_start_s = now_s - elapsed_s;
-            (actual_start_s - exp_ms / 1000).abs() <= START_TOLERANCE_S
+            Some((actual_start_s - exp_ms / 1000).abs() <= START_TOLERANCE_S)
         }
         // No recorded start time: fall back to liveness only.
-        None => true,
+        None => Some(true),
     }
 }
 
@@ -200,32 +240,75 @@ fn observe_process_identity(pid: u32) -> Option<(ProcessIdentity, bool)> {
 }
 
 pub(crate) fn inspect_process_identity(pid: u32) -> ProcessInspection {
+    inspect_process_identities(&[pid])
+        .into_iter()
+        .next()
+        .unwrap_or(ProcessInspection::Unknown)
+}
+
+/// Inspect multiple process identities with one system snapshot.
+pub(crate) fn inspect_process_identities(pids: &[u32]) -> Vec<ProcessInspection> {
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    let mut unique_pids = pids.to_vec();
+    unique_pids.sort_unstable();
+    unique_pids.dedup();
+    let pid_list = unique_pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let output = match Command::new("ps")
-        .args(["-o", "stat=", "-o", "lstart=", "-p", &pid.to_string()])
+        .args([
+            "-o", "pid=", "-o", "stat=", "-o", "lstart=", "-p", &pid_list,
+        ])
         .env("LC_ALL", "C")
         .output()
     {
         Ok(output) => output,
-        Err(_) => return ProcessInspection::Unknown,
+        Err(_) => return vec![ProcessInspection::Unknown; pids.len()],
     };
-    if !output.status.success() {
-        return if output.status.code() == Some(1) {
-            ProcessInspection::Absent
-        } else {
-            ProcessInspection::Unknown
-        };
+    if !output.status.success() && output.status.code() != Some(1) {
+        return vec![ProcessInspection::Unknown; pids.len()];
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut fields = stdout.trim().splitn(2, char::is_whitespace);
-    let Some(state) = fields.next().filter(|state| !state.is_empty()) else {
-        return ProcessInspection::Absent;
-    };
-    let Some(started_at_ms) = fields.next().and_then(|value| parse_lstart(value.trim())) else {
-        return ProcessInspection::Unknown;
-    };
-    ProcessInspection::Present(
-        ProcessIdentity { pid, started_at_ms },
-        state.starts_with('Z'),
+    parse_process_inspections(pids, &String::from_utf8_lossy(&output.stdout))
+        .unwrap_or_else(|| vec![ProcessInspection::Unknown; pids.len()])
+}
+
+fn parse_process_inspections(pids: &[u32], stdout: &str) -> Option<Vec<ProcessInspection>> {
+    let mut unique_pids = pids.to_vec();
+    unique_pids.sort_unstable();
+    unique_pids.dedup();
+    let mut observations = unique_pids
+        .into_iter()
+        .map(|pid| (pid, ProcessInspection::Absent))
+        .collect::<HashMap<_, _>>();
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let mut fields = line.split_whitespace();
+        let pid = fields.next()?.parse::<u32>().ok()?;
+        let state = fields.next()?;
+        let started_at_ms = parse_lstart(&fields.collect::<Vec<_>>().join(" "))?;
+        if !observations.contains_key(&pid) {
+            return None;
+        }
+        observations.insert(
+            pid,
+            ProcessInspection::Present(
+                ProcessIdentity { pid, started_at_ms },
+                state.starts_with('Z'),
+            ),
+        );
+    }
+    Some(
+        pids.iter()
+            .map(|pid| {
+                observations
+                    .get(pid)
+                    .copied()
+                    .unwrap_or(ProcessInspection::Unknown)
+            })
+            .collect(),
     )
 }
 
@@ -287,27 +370,30 @@ fn parse_etime(s: &str) -> Option<i64> {
 }
 
 /// Rollout files currently held by Codex, joined to each holder's process start.
-fn codex_live_files() -> HashMap<PathBuf, Option<ProcessIdentity>> {
+fn codex_live_files() -> (HashMap<PathBuf, Option<ProcessIdentity>>, bool) {
     // Find codex PIDs. No match → nothing is held.
     let pids = match Command::new("pgrep").arg("codex").output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
             .split_whitespace()
             .map(str::to_string)
             .collect::<Vec<_>>(),
-        _ => return HashMap::new(),
+        Ok(output) if output.status.code() == Some(1) => return (HashMap::new(), true),
+        _ => return (HashMap::new(), false),
     };
     if pids.is_empty() {
-        return HashMap::new();
+        return (HashMap::new(), true);
     }
 
-    let ps_output = Command::new("ps")
+    let Some(ps_output) = Command::new("ps")
         .args(["-o", "pid=,lstart=", "-p", &pids.join(",")])
         .env("LC_ALL", "C")
         .output()
         .ok()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-        .unwrap_or_default();
+    else {
+        return (HashMap::new(), false);
+    };
 
     // Keep the PID field so each open rollout can be joined to its holder.
     let output = Command::new("lsof")
@@ -316,14 +402,20 @@ fn codex_live_files() -> HashMap<PathBuf, Option<ProcessIdentity>> {
         .arg("-Fpn")
         .output();
     let Ok(output) = output else {
-        return HashMap::new();
+        return (HashMap::new(), false);
     };
+    if !output.status.success() {
+        return (HashMap::new(), false);
+    }
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0);
-    parse_codex_live_files(&String::from_utf8_lossy(&output.stdout), &ps_output, now_ms)
+    (
+        parse_codex_live_files(&String::from_utf8_lossy(&output.stdout), &ps_output, now_ms),
+        true,
+    )
 }
 
 fn parse_codex_live_files(
@@ -395,6 +487,8 @@ mod tests {
                     started_at_ms: 1_234,
                 }),
             )]),
+            claude_complete: true,
+            codex_complete: true,
         };
         let held = Path::new("/x/sessions/a.jsonl");
         assert_eq!(d.codex_state(held, Some(true)).state, SessionState::Busy);
@@ -410,6 +504,8 @@ mod tests {
         let detector = StateDetector {
             claude: HashMap::new(),
             codex_held: HashMap::new(),
+            claude_complete: true,
+            codex_complete: true,
         };
 
         let live = detector.codex_state(Path::new("/x/sessions/not-held.jsonl"), Some(true));
@@ -423,6 +519,8 @@ mod tests {
         let d = StateDetector {
             claude: HashMap::new(),
             codex_held: HashMap::new(),
+            claude_complete: true,
+            codex_complete: true,
         };
         assert_eq!(d.claude_state("nope").state, SessionState::Exited);
     }
@@ -436,6 +534,53 @@ mod tests {
             Some(13 * 86400 + 6 * 3600 + 15 * 60 + 11)
         );
         assert_eq!(parse_etime("garbage"), None);
+    }
+
+    #[test]
+    fn process_inspection_parser_aligns_multiple_live_and_absent_pids() {
+        let started_at_ms = Local
+            .with_ymd_and_hms(2026, 8, 3, 12, 34, 56)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+
+        let observations = parse_process_inspections(
+            &[42, 999, 84, 42],
+            " 42 S    Mon Aug  3 12:34:56 2026\n 84 Z+   Tue Aug  4 01:02:03 2026\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            observations,
+            vec![
+                ProcessInspection::Present(
+                    ProcessIdentity {
+                        pid: 42,
+                        started_at_ms,
+                    },
+                    false,
+                ),
+                ProcessInspection::Absent,
+                ProcessInspection::Present(
+                    ProcessIdentity {
+                        pid: 84,
+                        started_at_ms: Local
+                            .with_ymd_and_hms(2026, 8, 4, 1, 2, 3)
+                            .single()
+                            .unwrap()
+                            .timestamp_millis(),
+                    },
+                    true,
+                ),
+                ProcessInspection::Present(
+                    ProcessIdentity {
+                        pid: 42,
+                        started_at_ms,
+                    },
+                    false,
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -571,6 +716,8 @@ mod tests {
         let detector = StateDetector {
             claude: HashMap::new(),
             codex_held: held,
+            claude_complete: true,
+            codex_complete: true,
         };
 
         let live = detector.codex_state(&path, Some(true));

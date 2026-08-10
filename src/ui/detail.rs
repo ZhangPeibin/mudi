@@ -295,6 +295,14 @@ fn detail_lines(
             "  o Open Terminal | a Copy Attach Command",
             Style::default().fg(theme.foreground),
         ));
+    } else if snap
+        .resumable_managed_sessions
+        .iter()
+        .any(|resume| resume.is_verified_exited_for(session))
+    {
+        lines.push(DetailLine::Content(Line::from("")));
+        lines.push(heading("Managed Session", theme));
+        lines.push(content("  r Resume", Style::default().fg(theme.foreground)));
     }
     lines.push(DetailLine::Content(Line::from("")));
 

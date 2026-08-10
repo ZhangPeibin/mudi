@@ -69,6 +69,12 @@ pub struct ManagedNewRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedResumeRequest {
+    pub provider: Provider,
+    pub native_session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderNewCommand {
     pub executable: PathBuf,
     pub arguments: Vec<String>,
@@ -150,6 +156,12 @@ pub struct ManagedNewOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedResumeOutcome {
+    pub registration: ManagedLaunchRegistration,
+    pub terminal_opened: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedTerminalOutcome {
     pub registration: ManagedLaunchRegistration,
     pub opened: bool,
@@ -188,6 +200,422 @@ pub struct ManagedCurrentRunRecord {
     pub provider_process: ProcessIdentity,
     pub tmux: PrivateTmuxEnvironment,
     pub binding_receipt_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedResumeTarget {
+    pub provider: Provider,
+    pub native_session_id: String,
+    pub prior_run_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedCurrentRunLifecycle {
+    Open,
+    Exited,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedResumeEvidenceCandidate {
+    pub run: ManagedCurrentRunRecord,
+    pub session: ManagedSessionRecord,
+    pub receipt: BindingReceipt,
+}
+
+/// System boundary for proving the lifecycle of the exact prior Managed Current Run.
+pub trait ManagedResumeEvidence: Send + Sync {
+    fn observe(
+        &self,
+        config: &crate::config::Config,
+        run: &ManagedCurrentRunRecord,
+        session: &ManagedSessionRecord,
+        receipt: &BindingReceipt,
+    ) -> Result<ManagedCurrentRunLifecycle>;
+
+    fn observe_many(
+        &self,
+        config: &crate::config::Config,
+        candidates: &[ManagedResumeEvidenceCandidate],
+    ) -> Vec<Result<ManagedCurrentRunLifecycle>> {
+        candidates
+            .iter()
+            .map(|candidate| {
+                self.observe(
+                    config,
+                    &candidate.run,
+                    &candidate.session,
+                    &candidate.receipt,
+                )
+            })
+            .collect()
+    }
+}
+
+pub trait ManagedResumeProviderEvidence: Send + Sync {
+    fn observe(
+        &self,
+        config: &crate::config::Config,
+        run: &ManagedCurrentRunRecord,
+        session: &ManagedSessionRecord,
+        receipt: &BindingReceipt,
+    ) -> Result<ManagedCurrentRunLifecycle>;
+
+    fn observe_many(
+        &self,
+        config: &crate::config::Config,
+        candidates: &[ManagedResumeEvidenceCandidate],
+    ) -> Vec<Result<ManagedCurrentRunLifecycle>> {
+        candidates
+            .iter()
+            .map(|candidate| {
+                self.observe(
+                    config,
+                    &candidate.run,
+                    &candidate.session,
+                    &candidate.receipt,
+                )
+            })
+            .collect()
+    }
+}
+
+pub struct SystemManagedResumeProviderEvidence;
+
+impl SystemManagedResumeProviderEvidence {
+    fn observe_with_detector(
+        detector: &crate::providers::state::StateDetector,
+        run: &ManagedCurrentRunRecord,
+        session: &ManagedSessionRecord,
+        receipt: &BindingReceipt,
+    ) -> Result<ManagedCurrentRunLifecycle> {
+        let source = match receipt.source.path.canonicalize() {
+            Ok(source) if source.is_file() => source,
+            _ => return Ok(ManagedCurrentRunLifecycle::Unknown),
+        };
+        let parsed = match registry().observation(run.provider)?.parse_file(&source) {
+            Some(parsed) => parsed,
+            None => return Ok(ManagedCurrentRunLifecycle::Unknown),
+        };
+        let parsed_working_directory = parsed
+            .cwd
+            .as_deref()
+            .and_then(|cwd| Path::new(cwd).canonicalize().ok());
+        let target_working_directory = session.target.working_directory.canonicalize().ok();
+        if parsed.provider != run.provider
+            || parsed.id != run.native_session_id
+            || parsed_working_directory.is_none()
+            || parsed_working_directory != target_working_directory
+        {
+            return Ok(ManagedCurrentRunLifecycle::Unknown);
+        }
+        if !detector.scan_complete(run.provider) {
+            return Ok(ManagedCurrentRunLifecycle::Unknown);
+        }
+        let live = registry()
+            .runtime_control(run.provider)?
+            .observe_current_run(&detector, &run.native_session_id, &source);
+        if live.state.is_open() {
+            Ok(ManagedCurrentRunLifecycle::Open)
+        } else if live.state == crate::domain::SessionState::Exited
+            && live.process_identity.is_none()
+        {
+            Ok(ManagedCurrentRunLifecycle::Exited)
+        } else {
+            Ok(ManagedCurrentRunLifecycle::Unknown)
+        }
+    }
+}
+
+impl ManagedResumeProviderEvidence for SystemManagedResumeProviderEvidence {
+    fn observe(
+        &self,
+        config: &crate::config::Config,
+        run: &ManagedCurrentRunRecord,
+        session: &ManagedSessionRecord,
+        receipt: &BindingReceipt,
+    ) -> Result<ManagedCurrentRunLifecycle> {
+        let detector =
+            crate::providers::state::StateDetector::gather(&config.claude_sessions_dir());
+        Self::observe_with_detector(&detector, run, session, receipt)
+    }
+
+    fn observe_many(
+        &self,
+        config: &crate::config::Config,
+        candidates: &[ManagedResumeEvidenceCandidate],
+    ) -> Vec<Result<ManagedCurrentRunLifecycle>> {
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        let detector =
+            crate::providers::state::StateDetector::gather(&config.claude_sessions_dir());
+        candidates
+            .iter()
+            .map(|candidate| {
+                Self::observe_with_detector(
+                    &detector,
+                    &candidate.run,
+                    &candidate.session,
+                    &candidate.receipt,
+                )
+            })
+            .collect()
+    }
+}
+
+pub struct SystemManagedResumeEvidence {
+    process_evidence: Box<dyn ProcessEvidence>,
+    provider_evidence: Box<dyn ManagedResumeProviderEvidence>,
+}
+
+impl Default for SystemManagedResumeEvidence {
+    fn default() -> Self {
+        Self::new(Box::new(SystemProcessEvidence))
+    }
+}
+
+impl SystemManagedResumeEvidence {
+    pub fn new(process_evidence: Box<dyn ProcessEvidence>) -> Self {
+        Self {
+            process_evidence,
+            provider_evidence: Box::new(SystemManagedResumeProviderEvidence),
+        }
+    }
+
+    pub fn with_evidence(
+        process_evidence: Box<dyn ProcessEvidence>,
+        provider_evidence: Box<dyn ManagedResumeProviderEvidence>,
+    ) -> Self {
+        Self {
+            process_evidence,
+            provider_evidence,
+        }
+    }
+}
+
+impl ManagedResumeEvidence for SystemManagedResumeEvidence {
+    fn observe(
+        &self,
+        config: &crate::config::Config,
+        run: &ManagedCurrentRunRecord,
+        session: &ManagedSessionRecord,
+        receipt: &BindingReceipt,
+    ) -> Result<ManagedCurrentRunLifecycle> {
+        let provider_lifecycle = self
+            .provider_evidence
+            .observe(config, run, session, receipt)?;
+        let prior_process = self.process_evidence.observe(run.provider_process.pid);
+        combine_resume_evidence(run, session, receipt, provider_lifecycle, prior_process)
+    }
+
+    fn observe_many(
+        &self,
+        config: &crate::config::Config,
+        candidates: &[ManagedResumeEvidenceCandidate],
+    ) -> Vec<Result<ManagedCurrentRunLifecycle>> {
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        let provider_lifecycles = self.provider_evidence.observe_many(config, candidates);
+        let pids = candidates
+            .iter()
+            .map(|candidate| candidate.run.provider_process.pid)
+            .collect::<Vec<_>>();
+        let process_observations = self.process_evidence.observe_many(&pids);
+        if provider_lifecycles.len() != candidates.len()
+            || process_observations.len() != candidates.len()
+        {
+            return candidates
+                .iter()
+                .map(|_| Err(anyhow!("Managed Resume bulk evidence was incomplete")))
+                .collect();
+        }
+        candidates
+            .iter()
+            .zip(provider_lifecycles)
+            .zip(process_observations)
+            .map(|((candidate, provider_lifecycle), prior_process)| {
+                combine_resume_evidence(
+                    &candidate.run,
+                    &candidate.session,
+                    &candidate.receipt,
+                    provider_lifecycle?,
+                    prior_process,
+                )
+            })
+            .collect()
+    }
+}
+
+fn combine_resume_evidence(
+    run: &ManagedCurrentRunRecord,
+    session: &ManagedSessionRecord,
+    receipt: &BindingReceipt,
+    provider_lifecycle: ManagedCurrentRunLifecycle,
+    prior_process: ProviderProcessObservation,
+) -> Result<ManagedCurrentRunLifecycle> {
+    if run.provider != session.provider
+        || run.provider != receipt.provider
+        || run.native_session_id != session.native_session_id
+        || run.native_session_id != receipt.native_session_id
+        || run.provider_process != receipt.provider_process
+        || run.binding_receipt_id != receipt.id
+        || session.binding_receipt_id != receipt.id
+        || receipt.source.format != SourceFormat::JsonLines
+    {
+        return Ok(ManagedCurrentRunLifecycle::Unknown);
+    }
+    match prior_process {
+        ProviderProcessObservation::Unknown => Ok(ManagedCurrentRunLifecycle::Unknown),
+        ProviderProcessObservation::Live(identity) if identity != run.provider_process => {
+            Ok(ManagedCurrentRunLifecycle::Unknown)
+        }
+        ProviderProcessObservation::Live(_) => {
+            if provider_lifecycle == ManagedCurrentRunLifecycle::Open {
+                Ok(ManagedCurrentRunLifecycle::Open)
+            } else {
+                Ok(ManagedCurrentRunLifecycle::Unknown)
+            }
+        }
+        ProviderProcessObservation::Absent
+            if provider_lifecycle == ManagedCurrentRunLifecycle::Open =>
+        {
+            Ok(ManagedCurrentRunLifecycle::Open)
+        }
+        ProviderProcessObservation::Absent
+            if provider_lifecycle == ManagedCurrentRunLifecycle::Exited =>
+        {
+            Ok(ManagedCurrentRunLifecycle::Exited)
+        }
+        ProviderProcessObservation::Absent => Ok(ManagedCurrentRunLifecycle::Unknown),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedExitedManagedSession {
+    pub provider: Provider,
+    pub native_session_id: String,
+    pub target: ManagedLaunchTarget,
+    pub session_alias: String,
+    pub description: Option<String>,
+    prior_run_id: String,
+}
+
+pub struct ManagedResumeVerifier {
+    config: crate::config::Config,
+    evidence: Box<dyn ManagedResumeEvidence>,
+}
+
+impl ManagedResumeVerifier {
+    pub fn new(config: crate::config::Config, evidence: Box<dyn ManagedResumeEvidence>) -> Self {
+        Self { config, evidence }
+    }
+
+    pub fn verify_exited(
+        &self,
+        store: &ManagedLaunchStore,
+        provider: Provider,
+        native_session_id: &str,
+    ) -> Result<VerifiedExitedManagedSession> {
+        let candidate = self.evidence_candidate(store, provider, native_session_id)?;
+        let lifecycle = self.evidence.observe(
+            &self.config,
+            &candidate.run,
+            &candidate.session,
+            &candidate.receipt,
+        )?;
+        verified_exited_session(candidate, lifecycle)
+    }
+
+    fn evidence_candidate(
+        &self,
+        store: &ManagedLaunchStore,
+        provider: Provider,
+        native_session_id: &str,
+    ) -> Result<ManagedResumeEvidenceCandidate> {
+        if native_session_id.trim().is_empty() {
+            return Err(anyhow!("Resume requires an exact native Session ID"));
+        }
+        let session = store
+            .managed_session(provider, native_session_id)?
+            .ok_or_else(|| anyhow!("Resume requires an existing Managed Session"))?;
+        let run = store
+            .managed_current_run(provider, native_session_id)?
+            .ok_or_else(|| anyhow!("Resume requires a prior Managed Current Run"))?;
+        let receipt = store
+            .binding_receipt_by_id(&run.binding_receipt_id)?
+            .ok_or_else(|| anyhow!("prior Managed Current Run Binding Receipt is unavailable"))?;
+        if session.provider != provider
+            || session.native_session_id != native_session_id
+            || session.binding_receipt_id != run.binding_receipt_id
+            || run.provider != provider
+            || run.native_session_id != native_session_id
+            || receipt.id != run.binding_receipt_id
+            || receipt.provider != provider
+            || receipt.native_session_id != native_session_id
+            || receipt.provider_process != run.provider_process
+        {
+            return Err(anyhow!("Resume authority metadata is contradictory"));
+        }
+        if store.has_pending_resume(provider, native_session_id)? {
+            return Err(anyhow!(
+                "Resume is already in progress for this Managed Session"
+            ));
+        }
+        Ok(ManagedResumeEvidenceCandidate {
+            run,
+            session,
+            receipt,
+        })
+    }
+
+    pub fn verified_exited_sessions(
+        &self,
+        store: &ManagedLaunchStore,
+    ) -> Result<Vec<VerifiedExitedManagedSession>> {
+        let candidates = store
+            .managed_sessions()?
+            .into_iter()
+            .filter_map(|session| {
+                self.evidence_candidate(store, session.provider, &session.native_session_id)
+                    .ok()
+            })
+            .collect::<Vec<_>>();
+        let observations = self.evidence.observe_many(&self.config, &candidates);
+        if observations.len() != candidates.len() {
+            return Err(anyhow!("Managed Resume bulk evidence was incomplete"));
+        }
+        Ok(candidates
+            .into_iter()
+            .zip(observations)
+            .filter_map(|(candidate, observation)| {
+                verified_exited_session(candidate, observation.ok()?).ok()
+            })
+            .collect())
+    }
+}
+
+fn verified_exited_session(
+    candidate: ManagedResumeEvidenceCandidate,
+    lifecycle: ManagedCurrentRunLifecycle,
+) -> Result<VerifiedExitedManagedSession> {
+    match lifecycle {
+        ManagedCurrentRunLifecycle::Exited => Ok(VerifiedExitedManagedSession {
+            provider: candidate.session.provider,
+            native_session_id: candidate.session.native_session_id,
+            target: candidate.session.target,
+            session_alias: candidate.session.session_alias,
+            description: candidate.session.description,
+            prior_run_id: candidate.run.id,
+        }),
+        ManagedCurrentRunLifecycle::Open => Err(anyhow!(
+            "Resume is unavailable while the Managed Current Run is Open"
+        )),
+        ManagedCurrentRunLifecycle::Unknown => Err(anyhow!(
+            "prior Managed Current Run exit could not be verified"
+        )),
+    }
 }
 
 /// System boundary for proving that stored management metadata still names one Open Run.
@@ -479,6 +907,10 @@ pub enum ProviderProcessObservation {
 /// Revalidates exact process identity immediately before receipt issuance.
 pub trait ProcessEvidence: Send + Sync {
     fn observe(&self, pid: u32) -> ProviderProcessObservation;
+
+    fn observe_many(&self, pids: &[u32]) -> Vec<ProviderProcessObservation> {
+        pids.iter().map(|pid| self.observe(*pid)).collect()
+    }
 }
 
 pub struct SystemProcessEvidence;
@@ -506,6 +938,24 @@ impl ProcessEvidence for SystemProcessEvidence {
                 ProviderProcessObservation::Unknown
             }
         }
+    }
+
+    fn observe_many(&self, pids: &[u32]) -> Vec<ProviderProcessObservation> {
+        crate::providers::state::inspect_process_identities(pids)
+            .into_iter()
+            .map(|inspection| match inspection {
+                crate::providers::state::ProcessInspection::Present(identity, false) => {
+                    ProviderProcessObservation::Live(identity)
+                }
+                crate::providers::state::ProcessInspection::Present(_, true)
+                | crate::providers::state::ProcessInspection::Absent => {
+                    ProviderProcessObservation::Absent
+                }
+                crate::providers::state::ProcessInspection::Unknown => {
+                    ProviderProcessObservation::Unknown
+                }
+            })
+            .collect()
     }
 }
 
@@ -624,6 +1074,29 @@ impl EvidenceBinder {
         let Some(evidence) = evidence else {
             return Ok(BindingOutcome::Waiting);
         };
+        if let Some(target) = store.managed_resume_target(registration_id)? {
+            let current = store.managed_current_run(target.provider, &target.native_session_id)?;
+            let session = store.managed_session(target.provider, &target.native_session_id)?;
+            let resume_identity_matches = target.provider == registration.provider
+                && evidence.provider == target.provider
+                && evidence.source_session_id == target.native_session_id
+                && evidence.process_session_id == target.native_session_id
+                && current
+                    .as_ref()
+                    .is_some_and(|run| run.id == target.prior_run_id)
+                && session.as_ref().is_some_and(|managed| {
+                    current
+                        .as_ref()
+                        .is_some_and(|run| managed.binding_receipt_id == run.binding_receipt_id)
+                });
+            if !resume_identity_matches {
+                store.mark_needs_review(
+                    registration_id,
+                    "Resume evidence does not match the exact Managed Session and prior Run",
+                )?;
+                return Ok(BindingOutcome::NeedsReview);
+            }
+        }
         let receipt = match binding_receipt_candidate(&registration, evidence, now_ms) {
             Ok(receipt) => receipt,
             Err(error) => {
@@ -730,6 +1203,7 @@ pub struct ManagedSessionService {
     executables: ProviderExecutables,
     launch_broker: Box<dyn ManagedLaunchBroker>,
     terminal_access: Box<dyn ManagedTerminalAccess>,
+    resume_verifier: Option<ManagedResumeVerifier>,
 }
 
 impl ManagedSessionService {
@@ -744,7 +1218,13 @@ impl ManagedSessionService {
             executables,
             launch_broker,
             terminal_access,
+            resume_verifier: None,
         }
+    }
+
+    pub fn with_resume_verifier(mut self, verifier: ManagedResumeVerifier) -> Self {
+        self.resume_verifier = Some(verifier);
+        self
     }
 
     pub fn start_new(
@@ -822,6 +1302,87 @@ impl ManagedSessionService {
             anyhow!("Managed Launch Registration disappeared after Terminal access")
         })?;
         Ok(ManagedNewOutcome {
+            registration,
+            terminal_opened,
+        })
+    }
+
+    pub fn start_resume(
+        &mut self,
+        request: ManagedResumeRequest,
+        now_ms: i64,
+    ) -> Result<ManagedResumeOutcome> {
+        let verified = self
+            .resume_verifier
+            .as_ref()
+            .ok_or_else(|| anyhow!("Managed Resume verification is unavailable"))?
+            .verify_exited(&self.store, request.provider, &request.native_session_id)?;
+        let executable = self
+            .executables
+            .executable_for(verified.provider)
+            .ok_or_else(|| anyhow!("{} executable is unavailable", verified.provider.label()))?
+            .to_path_buf();
+        validate_executable(&executable, verified.provider.label())?;
+        let id = new_registration_id(now_ms);
+        let registration = ManagedLaunchRegistration {
+            id: id.clone(),
+            status: ManagedLaunchStatus::Binding,
+            provider: verified.provider,
+            target: verified.target,
+            session_alias: verified.session_alias,
+            description: verified.description,
+            binding_initializer: false,
+            provider_command: ProviderNewCommand {
+                executable,
+                arguments: registry()
+                    .runtime_control(verified.provider)?
+                    .resume_session_args(&verified.native_session_id),
+            },
+            tmux: PrivateTmuxEnvironment {
+                socket_name: format!("sessionmesh-{id}"),
+                session_name: "managed".to_string(),
+            },
+            created_at_ms: now_ms,
+            launched_at_ms: None,
+            launch_evidence: None,
+            terminal_opened_at_ms: None,
+            terminal_error: None,
+            binding_error: None,
+        };
+        self.store.insert_resume(
+            &registration,
+            &ManagedResumeTarget {
+                provider: verified.provider,
+                native_session_id: verified.native_session_id,
+                prior_run_id: verified.prior_run_id,
+            },
+        )?;
+        let launch_evidence = self
+            .launch_broker
+            .launch(&registration)
+            .context("Managed Provider Resume launch failed")?;
+        self.store
+            .record_launched(&registration.id, now_ms, launch_evidence)?;
+        let launched = self
+            .store
+            .get(&registration.id)?
+            .ok_or_else(|| anyhow!("Managed Resume Registration disappeared after launch"))?;
+        let terminal_opened = match self.terminal_access.open(&launched) {
+            Ok(()) => {
+                self.store
+                    .record_terminal_opened(&registration.id, now_ms)?;
+                true
+            }
+            Err(error) => {
+                self.store
+                    .record_terminal_error(&registration.id, &error.to_string())?;
+                false
+            }
+        };
+        let registration = self.store.get(&registration.id)?.ok_or_else(|| {
+            anyhow!("Managed Resume Registration disappeared after Terminal access")
+        })?;
+        Ok(ManagedResumeOutcome {
             registration,
             terminal_opened,
         })
@@ -1115,6 +1676,104 @@ fn ensure_managed_current_run_opaque_refs(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn allow_managed_current_run_history(conn: &mut Connection) -> Result<()> {
+    let schema = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'managed_current_runs'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    let compact = schema
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    if !compact.contains("UNIQUE(provider,native_session_id)") {
+        return Ok(());
+    }
+    conn.execute_batch("DROP INDEX IF EXISTS managed_current_runs_opaque_ref_unique;")?;
+    let transaction = conn.transaction()?;
+    transaction.execute_batch(
+        r#"
+        CREATE TABLE managed_current_run_history (
+            run_id TEXT PRIMARY KEY,
+            opaque_ref TEXT,
+            provider TEXT NOT NULL,
+            native_session_id TEXT NOT NULL,
+            provider_pid INTEGER NOT NULL,
+            provider_started_at_ms INTEGER NOT NULL,
+            tmux_socket_name TEXT NOT NULL,
+            tmux_session_name TEXT NOT NULL,
+            binding_receipt_id TEXT NOT NULL UNIQUE
+        );
+        INSERT INTO managed_current_run_history (
+            run_id, opaque_ref, provider, native_session_id, provider_pid,
+            provider_started_at_ms, tmux_socket_name, tmux_session_name,
+            binding_receipt_id
+        )
+        SELECT run_id, opaque_ref, provider, native_session_id, provider_pid,
+               provider_started_at_ms, tmux_socket_name, tmux_session_name,
+               binding_receipt_id
+        FROM managed_current_runs;
+        DROP TABLE managed_current_runs;
+        ALTER TABLE managed_current_run_history RENAME TO managed_current_runs;
+        "#,
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn insert_registration(conn: &Connection, registration: &ManagedLaunchRegistration) -> Result<()> {
+    let (project_kind, project_path) = project_identity_parts(&registration.target.project);
+    conn.execute(
+        r#"
+        INSERT INTO managed_launch_registrations (
+            registration_id, status, provider, project_kind, project_path,
+            project_label, worktree_root, working_directory, session_alias,
+            description, tmux_socket_name, tmux_session_name, created_at_ms,
+            launched_at_ms, tmux_pane_id, provider_pid, provider_started_at_ms,
+            terminal_opened_at_ms, terminal_error, binding_error
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20
+        )
+        "#,
+        params![
+            registration.id,
+            registration.status.as_str(),
+            registration.provider.as_str(),
+            project_kind,
+            project_path,
+            registration.target.project_label,
+            registration.target.worktree_root.as_deref().map(path_bytes),
+            path_bytes(&registration.target.working_directory),
+            registration.session_alias,
+            registration.description,
+            registration.tmux.socket_name,
+            registration.tmux.session_name,
+            registration.created_at_ms,
+            registration.launched_at_ms,
+            registration
+                .launch_evidence
+                .as_ref()
+                .map(|evidence| &evidence.tmux_pane_id),
+            registration
+                .launch_evidence
+                .as_ref()
+                .map(|evidence| evidence.provider_process.pid),
+            registration
+                .launch_evidence
+                .as_ref()
+                .map(|evidence| evidence.provider_process.started_at_ms),
+            registration.terminal_opened_at_ms,
+            registration.terminal_error,
+            registration.binding_error,
+        ],
+    )?;
+    Ok(())
+}
+
 impl ManagedLaunchStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -1190,7 +1849,13 @@ impl ManagedLaunchStore {
                 provider_started_at_ms INTEGER NOT NULL,
                 tmux_socket_name TEXT NOT NULL,
                 tmux_session_name TEXT NOT NULL,
-                binding_receipt_id TEXT NOT NULL UNIQUE,
+                binding_receipt_id TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE IF NOT EXISTS managed_resume_registrations (
+                registration_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                native_session_id TEXT NOT NULL,
+                prior_run_id TEXT NOT NULL,
                 UNIQUE (provider, native_session_id)
             );
             CREATE TABLE IF NOT EXISTS managed_metadata_syncs (
@@ -1203,57 +1868,76 @@ impl ManagedLaunchStore {
         add_binding_error_column_if_missing(&conn)?;
         remove_persisted_provider_commands(&mut conn)?;
         ensure_managed_current_run_opaque_refs(&conn)?;
+        allow_managed_current_run_history(&mut conn)?;
+        ensure_managed_current_run_opaque_refs(&conn)?;
         Ok(Self { conn })
     }
 
     pub fn insert(&self, registration: &ManagedLaunchRegistration) -> Result<()> {
-        let (project_kind, project_path) = project_identity_parts(&registration.target.project);
-        self.conn.execute(
-            r#"
-            INSERT INTO managed_launch_registrations (
-                registration_id, status, provider, project_kind, project_path,
-                project_label, worktree_root, working_directory, session_alias,
-                description, tmux_socket_name, tmux_session_name, created_at_ms,
-                launched_at_ms, tmux_pane_id, provider_pid, provider_started_at_ms,
-                terminal_opened_at_ms, terminal_error, binding_error
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18, ?19, ?20
-            )
-            "#,
+        insert_registration(&self.conn, registration)
+    }
+
+    pub fn insert_resume(
+        &mut self,
+        registration: &ManagedLaunchRegistration,
+        target: &ManagedResumeTarget,
+    ) -> Result<()> {
+        if registration.provider != target.provider {
+            return Err(anyhow!("Resume Provider disagrees with its Registration"));
+        }
+        let transaction = self.conn.transaction()?;
+        insert_registration(&transaction, registration)?;
+        transaction.execute(
+            "INSERT INTO managed_resume_registrations (registration_id, provider, native_session_id, prior_run_id) VALUES (?1, ?2, ?3, ?4)",
             params![
                 registration.id,
-                registration.status.as_str(),
-                registration.provider.as_str(),
-                project_kind,
-                project_path,
-                registration.target.project_label,
-                registration.target.worktree_root.as_deref().map(path_bytes),
-                path_bytes(&registration.target.working_directory),
-                registration.session_alias,
-                registration.description,
-                registration.tmux.socket_name,
-                registration.tmux.session_name,
-                registration.created_at_ms,
-                registration.launched_at_ms,
-                registration
-                    .launch_evidence
-                    .as_ref()
-                    .map(|evidence| &evidence.tmux_pane_id),
-                registration
-                    .launch_evidence
-                    .as_ref()
-                    .map(|evidence| evidence.provider_process.pid),
-                registration
-                    .launch_evidence
-                    .as_ref()
-                    .map(|evidence| evidence.provider_process.started_at_ms),
-                registration.terminal_opened_at_ms,
-                registration.terminal_error,
-                registration.binding_error,
+                target.provider.as_str(),
+                target.native_session_id,
+                target.prior_run_id,
             ],
         )?;
+        transaction.commit()?;
         Ok(())
+    }
+
+    pub fn managed_resume_target(
+        &self,
+        registration_id: &str,
+    ) -> Result<Option<ManagedResumeTarget>> {
+        self.conn
+            .query_row(
+                "SELECT provider, native_session_id, prior_run_id FROM managed_resume_registrations WHERE registration_id = ?1",
+                [registration_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(|(provider, native_session_id, prior_run_id)| {
+                Ok(ManagedResumeTarget {
+                    provider: Provider::parse(&provider)
+                        .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
+                    native_session_id,
+                    prior_run_id,
+                })
+            })
+            .transpose()
+    }
+
+    fn has_pending_resume(&self, provider: Provider, native_session_id: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM managed_resume_registrations WHERE provider = ?1 AND native_session_id = ?2",
+                params![provider.as_str(), native_session_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
     }
 
     pub fn get(&self, registration_id: &str) -> Result<Option<ManagedLaunchRegistration>> {
@@ -1531,10 +2215,14 @@ impl ManagedLaunchStore {
         provider: Provider,
         native_session_id: &str,
     ) -> Result<Option<ManagedCurrentRunRecord>> {
-        Ok(self
-            .managed_current_runs()?
-            .into_iter()
-            .find(|run| run.provider == provider && run.native_session_id == native_session_id))
+        let authority_receipt = self
+            .managed_session(provider, native_session_id)?
+            .map(|session| session.binding_receipt_id);
+        Ok(self.managed_current_runs()?.into_iter().find(|run| {
+            run.provider == provider
+                && run.native_session_id == native_session_id
+                && authority_receipt.as_deref() == Some(run.binding_receipt_id.as_str())
+        }))
     }
 
     pub fn managed_current_runs(&self) -> Result<Vec<ManagedCurrentRunRecord>> {
@@ -1639,6 +2327,30 @@ impl ManagedLaunchStore {
             .launch_evidence
             .as_ref()
             .ok_or_else(|| anyhow!("Binding requires conclusive launch evidence"))?;
+        let resume = self.managed_resume_target(&registration.id)?;
+        let resume_authority = resume
+            .as_ref()
+            .map(|target| {
+                let run = self
+                    .managed_current_run(target.provider, &target.native_session_id)?
+                    .ok_or_else(|| anyhow!("Resume prior Managed Current Run is unavailable"))?;
+                let session = self
+                    .managed_session(target.provider, &target.native_session_id)?
+                    .ok_or_else(|| anyhow!("Resume Managed Session is unavailable"))?;
+                if run.id != target.prior_run_id
+                    || session.binding_receipt_id != run.binding_receipt_id
+                    || registration.provider != target.provider
+                    || receipt.provider != target.provider
+                    || receipt.native_session_id != target.native_session_id
+                    || registration.target != session.target
+                    || registration.session_alias != session.session_alias
+                    || registration.description != session.description
+                {
+                    return Err(anyhow!("Resume authority changed before Receipt issuance"));
+                }
+                Ok(run.binding_receipt_id)
+            })
+            .transpose()?;
         let (project_kind, project_path) = project_identity_parts(&registration.target.project);
         let opaque_ref = new_opaque_run_ref()?;
         let transaction = self.conn.transaction()?;
@@ -1655,21 +2367,36 @@ impl ManagedLaunchStore {
                 receipt.issued_at_ms,
             ],
         )?;
-        transaction.execute(
-            "INSERT INTO managed_sessions (provider, native_session_id, project_kind, project_path, project_label, worktree_root, working_directory, session_alias, description, binding_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                receipt.provider.as_str(),
-                receipt.native_session_id,
-                project_kind,
-                project_path,
-                registration.target.project_label,
-                registration.target.worktree_root.as_deref().map(path_bytes),
-                path_bytes(&registration.target.working_directory),
-                registration.session_alias,
-                registration.description,
-                receipt.id,
-            ],
-        )?;
+        if let Some(prior_receipt_id) = resume_authority {
+            update_one(
+                transaction.execute(
+                    "UPDATE managed_sessions SET binding_receipt_id = ?3 WHERE provider = ?1 AND native_session_id = ?2 AND binding_receipt_id = ?4",
+                    params![
+                        receipt.provider.as_str(),
+                        receipt.native_session_id,
+                        receipt.id,
+                        prior_receipt_id,
+                    ],
+                )?,
+                &registration.id,
+            )?;
+        } else {
+            transaction.execute(
+                "INSERT INTO managed_sessions (provider, native_session_id, project_kind, project_path, project_label, worktree_root, working_directory, session_alias, description, binding_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    receipt.provider.as_str(),
+                    receipt.native_session_id,
+                    project_kind,
+                    project_path,
+                    registration.target.project_label,
+                    registration.target.worktree_root.as_deref().map(path_bytes),
+                    path_bytes(&registration.target.working_directory),
+                    registration.session_alias,
+                    registration.description,
+                    receipt.id,
+                ],
+            )?;
+        }
         transaction.execute(
             "INSERT INTO managed_current_runs (run_id, opaque_ref, provider, native_session_id, provider_pid, provider_started_at_ms, tmux_socket_name, tmux_session_name, binding_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
@@ -1683,6 +2410,10 @@ impl ManagedLaunchStore {
                 registration.tmux.session_name,
                 receipt.id,
             ],
+        )?;
+        transaction.execute(
+            "DELETE FROM managed_resume_registrations WHERE registration_id = ?1",
+            [registration.id.as_str()],
         )?;
         update_one(
             transaction.execute(
@@ -1747,14 +2478,21 @@ impl ManagedLaunchStore {
         )
     }
 
-    fn remove_binding(&self, registration_id: &str) -> Result<()> {
+    fn remove_binding(&mut self, registration_id: &str) -> Result<()> {
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "DELETE FROM managed_resume_registrations WHERE registration_id = ?1",
+            [registration_id],
+        )?;
         update_one(
-            self.conn.execute(
+            transaction.execute(
                 "DELETE FROM managed_launch_registrations WHERE registration_id = ?1 AND status = 'binding'",
                 [registration_id],
             )?,
             registration_id,
-        )
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     fn mark_needs_review(&self, registration_id: &str, error: &str) -> Result<()> {
@@ -1767,14 +2505,21 @@ impl ManagedLaunchStore {
         )
     }
 
-    fn mark_failed(&self, registration_id: &str, error: &str) -> Result<()> {
+    fn mark_failed(&mut self, registration_id: &str, error: &str) -> Result<()> {
+        let transaction = self.conn.transaction()?;
         update_one(
-            self.conn.execute(
+            transaction.execute(
                 "UPDATE managed_launch_registrations SET status = 'failed', binding_error = ?2 WHERE registration_id = ?1 AND status = 'binding'",
                 params![registration_id, error],
             )?,
             registration_id,
-        )
+        )?;
+        transaction.execute(
+            "DELETE FROM managed_resume_registrations WHERE registration_id = ?1",
+            [registration_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 }
 

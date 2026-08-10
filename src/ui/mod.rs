@@ -33,7 +33,9 @@ use crate::app::{Snapshot, Tab};
 use crate::attention::{AttentionEngine, AttentionSnapshot};
 use crate::clipboard::Clipboard;
 use crate::domain::{Project, ProjectIdentity, Provider, Session, SessionIdentity, SessionState};
-use crate::managed_sessions::{ManagedLaunchAction, ManagedLaunchTarget, ManagedNewRequest};
+use crate::managed_sessions::{
+    ManagedLaunchAction, ManagedLaunchTarget, ManagedNewRequest, ManagedResumeRequest,
+};
 use crate::session_labels::SessionLabels;
 use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
@@ -105,6 +107,12 @@ struct HandoffConfirmation {
     source_state: SessionState,
     successor_provider: Provider,
     end_current_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManagedResumeConfirmation {
+    provider: Provider,
+    native_session_id: String,
 }
 
 /// 取消非终态 Operation Task 前的确认状态。
@@ -430,6 +438,7 @@ pub struct Ui {
     new_session: Option<NewSessionForm>,
     edit_session: Option<SessionEditor>,
     handoff_confirmation: Option<HandoffConfirmation>,
+    managed_resume_confirmation: Option<ManagedResumeConfirmation>,
     task_cancellation_confirmation: Option<TaskCancellationConfirmation>,
     task_deletion_confirmation: Option<TaskDeletionConfirmation>,
     task_retry_confirmation: Option<TaskRetryConfirmation>,
@@ -498,6 +507,9 @@ pub enum UiAction {
     StartManagedNew {
         request: ManagedNewRequest,
     },
+    StartManagedResume {
+        request: ManagedResumeRequest,
+    },
     CancelManagedStart {
         registration_id: String,
     },
@@ -547,6 +559,7 @@ impl Default for Ui {
             new_session: None,
             edit_session: None,
             handoff_confirmation: None,
+            managed_resume_confirmation: None,
             task_cancellation_confirmation: None,
             task_deletion_confirmation: None,
             task_retry_confirmation: None,
@@ -763,6 +776,24 @@ impl Ui {
             self.handle_session_editor_key(key);
             return Ok(UiAction::None);
         }
+        if let Some(target) = self.managed_resume_confirmation.clone() {
+            return match key.code {
+                crossterm::event::KeyCode::Esc => {
+                    self.managed_resume_confirmation = None;
+                    Ok(UiAction::None)
+                }
+                crossterm::event::KeyCode::Enter => {
+                    self.managed_resume_confirmation = None;
+                    Ok(UiAction::StartManagedResume {
+                        request: ManagedResumeRequest {
+                            provider: target.provider,
+                            native_session_id: target.native_session_id,
+                        },
+                    })
+                }
+                _ => Ok(UiAction::None),
+            };
+        }
         // 每一种确认框都只接受自身声明的按键，确保一次授权只对应一次操作。
         if let Some(target) = self.handoff_confirmation.clone() {
             return match key.code {
@@ -907,6 +938,13 @@ impl Ui {
                         return Ok(UiAction::ChooseManagedNewDirectory);
                     }
                 }
+            }
+            crossterm::event::KeyCode::Char('r') if self.detail_managed_resume(snap).is_some() => {
+                let resume = self.detail_managed_resume(snap).expect("checked above");
+                self.managed_resume_confirmation = Some(ManagedResumeConfirmation {
+                    provider: resume.provider,
+                    native_session_id: resume.native_session_id.clone(),
+                });
             }
             crossterm::event::KeyCode::Char('r') => {
                 self.labels.reload();
@@ -1303,6 +1341,7 @@ impl Ui {
         self.detail = None;
         self.new_session = None;
         self.handoff_confirmation = None;
+        self.managed_resume_confirmation = None;
         self.task_cancellation_confirmation = None;
         self.task_deletion_confirmation = None;
         self.task_retry_confirmation = None;
@@ -1534,6 +1573,16 @@ impl Ui {
         snap.verified_managed_current_runs
             .iter()
             .find(|run| run.is_verified_open_for(session))
+    }
+
+    fn detail_managed_resume<'a>(
+        &self,
+        snap: &'a Snapshot,
+    ) -> Option<&'a crate::read_model::ManagedResumeSummary> {
+        let session = self.detail_session(snap)?;
+        snap.resumable_managed_sessions
+            .iter()
+            .find(|resume| resume.is_verified_exited_for(session))
     }
 
     /// 用任务 ID 从最新快照解析详情页 Operation Task。

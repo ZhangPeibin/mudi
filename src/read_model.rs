@@ -6,7 +6,8 @@ use crate::collector::ScanStats;
 use crate::domain::Session;
 use crate::domain::{ProjectIdentity, Provider};
 use crate::managed_sessions::{
-    ManagedLaunchAction, ManagedLaunchRegistration, ManagedLaunchStatus, VerifiedManagedCurrentRun,
+    ManagedLaunchAction, ManagedLaunchRegistration, ManagedLaunchStatus,
+    VerifiedExitedManagedSession, VerifiedManagedCurrentRun,
 };
 use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
@@ -87,6 +88,31 @@ pub struct ManagedCurrentRunSummary {
     pub opaque_ref: String,
 }
 
+/// Metadata-only reference to a Managed Session whose prior Current Run is verified Exited.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedResumeSummary {
+    pub provider: Provider,
+    pub native_session_id: String,
+}
+
+impl ManagedResumeSummary {
+    pub fn is_verified_exited_for(&self, session: &Session) -> bool {
+        session.provenance == crate::domain::SessionProvenance::Managed
+            && session.state == crate::domain::SessionState::Exited
+            && self.provider == session.provider
+            && self.native_session_id == session.id
+    }
+}
+
+impl From<&VerifiedExitedManagedSession> for ManagedResumeSummary {
+    fn from(session: &VerifiedExitedManagedSession) -> Self {
+        Self {
+            provider: session.provider,
+            native_session_id: session.native_session_id.clone(),
+        }
+    }
+}
+
 impl From<&ManagedLaunchRegistration> for ManagedLaunchSummary {
     fn from(registration: &ManagedLaunchRegistration) -> Self {
         let terminal_state = if registration.terminal_error.is_some() {
@@ -147,6 +173,7 @@ pub struct RefreshSnapshot {
     pub tasks: Vec<OperationTask>,
     pub managed_launches: Vec<ManagedLaunchSummary>,
     pub verified_managed_current_runs: Vec<ManagedCurrentRunSummary>,
+    pub resumable_managed_sessions: Vec<ManagedResumeSummary>,
     pub recent_signals: Vec<RecentSignal>,
     pub attention: Option<AttentionSnapshot>,
     pub stats: ScanStats,

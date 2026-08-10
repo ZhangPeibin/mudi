@@ -80,6 +80,10 @@ impl RuntimeControlPort for ClaudeAdapter {
             .collect()
     }
 
+    fn resume_session_args(&self, native_session_id: &str) -> Vec<String> {
+        vec!["--resume".to_string(), native_session_id.to_string()]
+    }
+
     fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String> {
         [
             "--print",

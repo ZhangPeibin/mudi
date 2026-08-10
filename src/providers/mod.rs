@@ -71,6 +71,8 @@ pub trait RuntimeControlPort: Sync {
     ) -> Option<ProviderBindingEvidence>;
     /// Provider-native arguments for starting a new interactive Session.
     fn new_session_args(&self, binding_initializer: bool) -> Vec<String>;
+    /// Provider-native arguments for resuming one exact interactive Session.
+    fn resume_session_args(&self, native_session_id: &str) -> Vec<String>;
     /// Provider-native arguments for read-only, noninteractive Handoff generation.
     fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String>;
     /// Resolve one exact launched process to a Provider-native Successor Session.

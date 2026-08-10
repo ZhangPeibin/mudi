@@ -29,7 +29,8 @@ use sessionmesh::handoff_skill::ManagedHandoffSkills;
 use sessionmesh::managed_sessions::{
     discover_tmux_executable, run_attach_from_args, MacosManagedTerminalAccess,
     ManagedCurrentRunAccessService, ManagedCurrentRunVerifier, ManagedLaunchStore,
-    ManagedSessionService, SystemManagedCurrentRunEvidence, TmuxLaunchBroker,
+    ManagedResumeVerifier, ManagedSessionService, SystemManagedCurrentRunEvidence,
+    SystemManagedResumeEvidence, TmuxLaunchBroker,
 };
 use sessionmesh::read_model::{InMemoryReadModelCache, ReadModelCache};
 use sessionmesh::refresh::RefreshService;
@@ -69,7 +70,11 @@ async fn main() -> Result<()> {
         provider_executables.clone(),
         Box::new(TmuxLaunchBroker::new(tmux_executable.clone())),
         Box::new(MacosManagedTerminalAccess::new(tmux_executable.clone())),
-    );
+    )
+    .with_resume_verifier(ManagedResumeVerifier::new(
+        cfg.clone(),
+        Box::new(SystemManagedResumeEvidence::default()),
+    ));
     let managed_current_runs = ManagedCurrentRunAccessService::new(
         ManagedLaunchStore::open(cfg.managed_launch_store_path())?,
         ManagedCurrentRunVerifier::new(cfg.clone(), Box::new(SystemManagedCurrentRunEvidence)),
