@@ -284,6 +284,18 @@ fn detail_lines(
     ));
     lines.push(DetailLine::field("Session ID", &session.id, true));
     lines.push(DetailLine::field("State", state, true));
+    if snap
+        .verified_managed_current_runs
+        .iter()
+        .any(|run| run.is_verified_open_for(session))
+    {
+        lines.push(DetailLine::Content(Line::from("")));
+        lines.push(heading("Managed Current Run", theme));
+        lines.push(content(
+            "  o Open Terminal | a Copy Attach Command",
+            Style::default().fg(theme.foreground),
+        ));
+    }
     lines.push(DetailLine::Content(Line::from("")));
 
     lines.push(heading("Current Context", theme));

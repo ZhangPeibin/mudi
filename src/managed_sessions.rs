@@ -10,6 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -181,11 +182,283 @@ pub struct ManagedSessionRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedCurrentRunRecord {
     pub id: String,
+    pub opaque_ref: String,
     pub provider: Provider,
     pub native_session_id: String,
     pub provider_process: ProcessIdentity,
     pub tmux: PrivateTmuxEnvironment,
     pub binding_receipt_id: String,
+}
+
+/// System boundary for proving that stored management metadata still names one Open Run.
+pub trait ManagedCurrentRunEvidence: Send + Sync {
+    fn revalidate(
+        &self,
+        config: &crate::config::Config,
+        run: &ManagedCurrentRunRecord,
+        session: &ManagedSessionRecord,
+        receipt: &BindingReceipt,
+    ) -> Result<()>;
+}
+
+pub struct SystemManagedCurrentRunEvidence;
+
+impl ManagedCurrentRunEvidence for SystemManagedCurrentRunEvidence {
+    fn revalidate(
+        &self,
+        config: &crate::config::Config,
+        run: &ManagedCurrentRunRecord,
+        session: &ManagedSessionRecord,
+        receipt: &BindingReceipt,
+    ) -> Result<()> {
+        match SystemProcessEvidence.observe(run.provider_process.pid) {
+            ProviderProcessObservation::Live(identity) if identity == run.provider_process => {}
+            ProviderProcessObservation::Live(_) | ProviderProcessObservation::Absent => {
+                return Err(anyhow!("Managed Current Run process identity is stale"));
+            }
+            ProviderProcessObservation::Unknown => {
+                return Err(anyhow!(
+                    "Managed Current Run process identity could not be verified"
+                ));
+            }
+        }
+        let evidence = registry()
+            .runtime_control(run.provider)?
+            .binding_evidence(config, run.provider_process)
+            .ok_or_else(|| anyhow!("Managed Current Run is not verified Open"))?;
+        if evidence.provider != run.provider
+            || evidence.source_session_id != run.native_session_id
+            || evidence.process_session_id != run.native_session_id
+            || evidence.provider_process != run.provider_process
+            || evidence.source != receipt.source
+            || evidence.working_directory != session.target.working_directory
+        {
+            return Err(anyhow!(
+                "Managed Current Run live evidence no longer matches its Binding Receipt"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A revalidated target. Private terminal addressing intentionally has no public accessor.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VerifiedManagedCurrentRun {
+    pub opaque_ref: String,
+    pub provider: Provider,
+    pub native_session_id: String,
+    tmux: PrivateTmuxEnvironment,
+}
+
+pub struct ManagedCurrentRunVerifier {
+    config: crate::config::Config,
+    evidence: Box<dyn ManagedCurrentRunEvidence>,
+}
+
+impl ManagedCurrentRunVerifier {
+    pub fn new(
+        config: crate::config::Config,
+        evidence: Box<dyn ManagedCurrentRunEvidence>,
+    ) -> Self {
+        Self { config, evidence }
+    }
+
+    pub fn verify_ref(
+        &self,
+        store: &ManagedLaunchStore,
+        opaque_ref: &str,
+    ) -> Result<VerifiedManagedCurrentRun> {
+        if !valid_opaque_run_ref(opaque_ref) {
+            return Err(anyhow!("Managed Current Run reference is invalid"));
+        }
+        let candidates = store
+            .managed_current_runs()?
+            .into_iter()
+            .filter(|run| run.opaque_ref == opaque_ref)
+            .collect::<Vec<_>>();
+        let [run] = candidates.as_slice() else {
+            return Err(if candidates.is_empty() {
+                anyhow!("Managed Current Run reference is stale or unavailable")
+            } else {
+                anyhow!("Managed Current Run reference is ambiguous")
+            });
+        };
+        let session = store
+            .managed_session(run.provider, &run.native_session_id)?
+            .ok_or_else(|| anyhow!("Managed Current Run has no Managed Session authority"))?;
+        let receipt = store
+            .binding_receipt_by_id(&run.binding_receipt_id)?
+            .ok_or_else(|| anyhow!("Managed Current Run Binding Receipt is unavailable"))?;
+        if session.provider != run.provider
+            || session.native_session_id != run.native_session_id
+            || session.binding_receipt_id != run.binding_receipt_id
+            || receipt.provider != run.provider
+            || receipt.native_session_id != run.native_session_id
+            || receipt.provider_process != run.provider_process
+            || receipt.id != run.binding_receipt_id
+        {
+            return Err(anyhow!(
+                "Managed Current Run authority metadata is contradictory"
+            ));
+        }
+        validate_tmux_name(&run.tmux.socket_name)?;
+        validate_tmux_name(&run.tmux.session_name)?;
+        self.evidence
+            .revalidate(&self.config, run, &session, &receipt)?;
+        Ok(VerifiedManagedCurrentRun {
+            opaque_ref: run.opaque_ref.clone(),
+            provider: run.provider,
+            native_session_id: run.native_session_id.clone(),
+            tmux: run.tmux.clone(),
+        })
+    }
+
+    pub fn verified_runs(
+        &self,
+        store: &ManagedLaunchStore,
+    ) -> Result<Vec<VerifiedManagedCurrentRun>> {
+        let references = store
+            .managed_current_runs()?
+            .into_iter()
+            .map(|run| run.opaque_ref)
+            .collect::<Vec<_>>();
+        Ok(references
+            .iter()
+            .filter_map(|opaque_ref| self.verify_ref(store, opaque_ref).ok())
+            .collect())
+    }
+}
+
+/// Terminal side effects allowed after a Managed Current Run has been revalidated.
+pub trait ManagedCurrentRunTerminalAccess: Send {
+    fn open_terminal(&mut self, run: &VerifiedManagedCurrentRun) -> Result<()>;
+    fn attach_foreground(&mut self, run: &VerifiedManagedCurrentRun) -> Result<()>;
+}
+
+/// Application service shared by TUI re-entry actions and the public attach command.
+pub struct ManagedCurrentRunAccessService {
+    store: ManagedLaunchStore,
+    verifier: ManagedCurrentRunVerifier,
+    terminal_access: Box<dyn ManagedCurrentRunTerminalAccess>,
+}
+
+impl ManagedCurrentRunAccessService {
+    pub fn new(
+        store: ManagedLaunchStore,
+        verifier: ManagedCurrentRunVerifier,
+        terminal_access: Box<dyn ManagedCurrentRunTerminalAccess>,
+    ) -> Self {
+        Self {
+            store,
+            verifier,
+            terminal_access,
+        }
+    }
+
+    pub fn open_terminal(
+        &mut self,
+        provider: Provider,
+        native_session_id: &str,
+        opaque_ref: &str,
+    ) -> Result<()> {
+        let run = self.verify_identity(provider, native_session_id, opaque_ref)?;
+        self.terminal_access.open_terminal(&run)
+    }
+
+    pub fn attach_command(
+        &self,
+        provider: Provider,
+        native_session_id: &str,
+        opaque_ref: &str,
+    ) -> Result<String> {
+        let run = self.verify_identity(provider, native_session_id, opaque_ref)?;
+        Ok(format!("sessionmesh attach {}", run.opaque_ref))
+    }
+
+    pub fn attach_foreground(&mut self, opaque_ref: &str) -> Result<()> {
+        let run = self.verifier.verify_ref(&self.store, opaque_ref)?;
+        self.terminal_access.attach_foreground(&run)
+    }
+
+    fn verify_identity(
+        &self,
+        provider: Provider,
+        native_session_id: &str,
+        opaque_ref: &str,
+    ) -> Result<VerifiedManagedCurrentRun> {
+        let run = self.verifier.verify_ref(&self.store, opaque_ref)?;
+        if run.provider != provider || run.native_session_id != native_session_id {
+            return Err(anyhow!(
+                "Managed Current Run reference does not match the selected Session"
+            ));
+        }
+        Ok(run)
+    }
+}
+
+/// Handle the public `sessionmesh attach <opaque-run-ref>` contract with injected access.
+/// Returns false when the arguments belong to the normal TUI or another helper mode.
+pub fn run_attach_from_args_with_access<I, S>(
+    args: I,
+    access: &mut ManagedCurrentRunAccessService,
+) -> Result<bool>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+{
+    let mut args = args.into_iter().map(Into::into);
+    let _program = args.next();
+    if args.next().as_deref() != Some(OsStr::new("attach")) {
+        return Ok(false);
+    }
+    let opaque_ref = args
+        .next()
+        .ok_or_else(|| anyhow!("missing opaque Managed Current Run reference"))?
+        .into_string()
+        .map_err(|_| anyhow!("Managed Current Run reference is not valid UTF-8"))?;
+    if args.next().is_some() {
+        return Err(anyhow!("unexpected attach command arguments"));
+    }
+    access.attach_foreground(&opaque_ref)?;
+    Ok(true)
+}
+
+pub fn run_attach_from_args<I, S>(args: I) -> Result<bool>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+{
+    let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    if args.get(1).map(OsString::as_os_str) != Some(OsStr::new("attach")) {
+        return Ok(false);
+    }
+    let config = crate::config::Config::load();
+    let tmux_executable = discover_tmux_executable().unwrap_or_default();
+    let mut access = ManagedCurrentRunAccessService::new(
+        ManagedLaunchStore::open(config.managed_launch_store_path())?,
+        ManagedCurrentRunVerifier::new(config, Box::new(SystemManagedCurrentRunEvidence)),
+        Box::new(MacosManagedTerminalAccess::new(tmux_executable)),
+    );
+    run_attach_from_args_with_access(args, &mut access)
+}
+
+fn valid_opaque_run_ref(value: &str) -> bool {
+    value.len() == 36
+        && value.starts_with("run_")
+        && value[4..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn new_opaque_run_ref() -> Result<String> {
+    let mut random = [0_u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .context("could not create an opaque Managed Current Run reference")?
+        .read_exact(&mut random)
+        .context("could not create an opaque Managed Current Run reference")?;
+    let encoded = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(format!("run_{encoded}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -702,6 +975,38 @@ fn add_binding_error_column_if_missing(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn ensure_managed_current_run_opaque_refs(conn: &Connection) -> Result<()> {
+    let mut statement = conn.prepare("PRAGMA table_info(managed_current_runs)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    if !columns.iter().any(|column| column == "opaque_ref") {
+        conn.execute(
+            "ALTER TABLE managed_current_runs ADD COLUMN opaque_ref TEXT",
+            [],
+        )?;
+    }
+    let mut statement = conn.prepare(
+        "SELECT run_id FROM managed_current_runs WHERE opaque_ref IS NULL OR opaque_ref = ''",
+    )?;
+    let run_ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    for run_id in run_ids {
+        conn.execute(
+            "UPDATE managed_current_runs SET opaque_ref = ?1 WHERE run_id = ?2",
+            params![new_opaque_run_ref()?, run_id],
+        )?;
+    }
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS managed_current_runs_opaque_ref_unique ON managed_current_runs (opaque_ref)",
+        [],
+    )?;
+    Ok(())
+}
+
 impl ManagedLaunchStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -773,6 +1078,7 @@ impl ManagedLaunchStore {
             );
             CREATE TABLE IF NOT EXISTS managed_current_runs (
                 run_id TEXT PRIMARY KEY,
+                opaque_ref TEXT,
                 provider TEXT NOT NULL,
                 native_session_id TEXT NOT NULL,
                 provider_pid INTEGER NOT NULL,
@@ -790,6 +1096,7 @@ impl ManagedLaunchStore {
             "#,
         )?;
         add_binding_error_column_if_missing(&conn)?;
+        ensure_managed_current_run_opaque_refs(&conn)?;
         Ok(Self { conn })
     }
 
@@ -1054,6 +1361,21 @@ impl ManagedLaunchStore {
             .transpose()
     }
 
+    fn binding_receipt_by_id(&self, receipt_id: &str) -> Result<Option<BindingReceipt>> {
+        let registration_id = self
+            .conn
+            .query_row(
+                "SELECT registration_id FROM binding_receipts WHERE receipt_id = ?1",
+                [receipt_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        registration_id
+            .map(|registration_id| self.binding_receipt(&registration_id))
+            .transpose()
+            .map(Option::flatten)
+    }
+
     pub fn managed_session(
         &self,
         provider: Provider,
@@ -1126,23 +1448,25 @@ impl ManagedLaunchStore {
 
     pub fn managed_current_runs(&self) -> Result<Vec<ManagedCurrentRunRecord>> {
         let mut statement = self.conn.prepare(
-            "SELECT run_id, provider, native_session_id, provider_pid, provider_started_at_ms, tmux_socket_name, tmux_session_name, binding_receipt_id FROM managed_current_runs ORDER BY run_id",
+            "SELECT run_id, opaque_ref, provider, native_session_id, provider_pid, provider_started_at_ms, tmux_socket_name, tmux_session_name, binding_receipt_id FROM managed_current_runs ORDER BY run_id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, u32>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, String>(5)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, u32>(4)?,
+                row.get::<_, i64>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })?;
         rows.map(|row| {
             let (
                 id,
+                opaque_ref,
                 provider,
                 native_session_id,
                 pid,
@@ -1153,6 +1477,7 @@ impl ManagedLaunchStore {
             ) = row?;
             Ok(ManagedCurrentRunRecord {
                 id,
+                opaque_ref,
                 provider: Provider::parse(&provider)
                     .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
                 native_session_id,
@@ -1224,6 +1549,7 @@ impl ManagedLaunchStore {
             .as_ref()
             .ok_or_else(|| anyhow!("Binding requires conclusive launch evidence"))?;
         let (project_kind, project_path) = project_identity_parts(&registration.target.project);
+        let opaque_ref = new_opaque_run_ref()?;
         let transaction = self.conn.transaction()?;
         transaction.execute(
             "INSERT INTO binding_receipts (receipt_id, registration_id, provider, native_session_id, source_path, source_format, provider_pid, provider_started_at_ms, issued_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, 'jsonl', ?6, ?7, ?8)",
@@ -1254,9 +1580,10 @@ impl ManagedLaunchStore {
             ],
         )?;
         transaction.execute(
-            "INSERT INTO managed_current_runs (run_id, provider, native_session_id, provider_pid, provider_started_at_ms, tmux_socket_name, tmux_session_name, binding_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO managed_current_runs (run_id, opaque_ref, provider, native_session_id, provider_pid, provider_started_at_ms, tmux_socket_name, tmux_session_name, binding_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 format!("run-{}", registration.id),
+                opaque_ref,
                 receipt.provider.as_str(),
                 receipt.native_session_id,
                 launch.provider_process.pid,
@@ -1559,20 +1886,18 @@ impl MacosManagedTerminalAccess {
             osascript_executable,
         }
     }
-}
 
-impl ManagedTerminalAccess for MacosManagedTerminalAccess {
-    fn open(&mut self, registration: &ManagedLaunchRegistration) -> Result<()> {
+    fn open_private_tmux(&self, tmux: &PrivateTmuxEnvironment) -> Result<()> {
         validate_executable(&self.tmux_executable, "tmux")?;
-        validate_tmux_name(&registration.tmux.socket_name)?;
-        validate_tmux_name(&registration.tmux.session_name)?;
+        validate_tmux_name(&tmux.socket_name)?;
+        validate_tmux_name(&tmux.session_name)?;
         let command = [
             shell_quote_os(self.tmux_executable.as_os_str())?,
             "-L".to_string(),
-            shell_quote(&registration.tmux.socket_name),
+            shell_quote(&tmux.socket_name),
             "attach-session".to_string(),
             "-t".to_string(),
-            shell_quote(&registration.tmux.session_name),
+            shell_quote(&tmux.session_name),
         ]
         .join(" ");
         let status = Command::new(&self.osascript_executable)
@@ -1601,6 +1926,40 @@ impl ManagedTerminalAccess for MacosManagedTerminalAccess {
             Ok(())
         } else {
             Err(anyhow!("Terminal.app launch failed"))
+        }
+    }
+}
+
+impl ManagedTerminalAccess for MacosManagedTerminalAccess {
+    fn open(&mut self, registration: &ManagedLaunchRegistration) -> Result<()> {
+        self.open_private_tmux(&registration.tmux)
+    }
+}
+
+impl ManagedCurrentRunTerminalAccess for MacosManagedTerminalAccess {
+    fn open_terminal(&mut self, run: &VerifiedManagedCurrentRun) -> Result<()> {
+        self.open_private_tmux(&run.tmux)
+    }
+
+    fn attach_foreground(&mut self, run: &VerifiedManagedCurrentRun) -> Result<()> {
+        validate_executable(&self.tmux_executable, "tmux")?;
+        validate_tmux_name(&run.tmux.socket_name)?;
+        validate_tmux_name(&run.tmux.session_name)?;
+        let status = Command::new(&self.tmux_executable)
+            .env_remove("TMUX")
+            .args([
+                OsStr::new("-L"),
+                OsStr::new(&run.tmux.socket_name),
+                OsStr::new("attach-session"),
+                OsStr::new("-t"),
+                OsStr::new(&run.tmux.session_name),
+            ])
+            .status()
+            .context("could not attach to the Managed Current Run")?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(anyhow!("Managed Current Run attach failed"))
         }
     }
 }

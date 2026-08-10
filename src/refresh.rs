@@ -6,7 +6,8 @@ use crate::collector::{self, ProjectResolverCache, ScanStats};
 use crate::config::Config;
 use crate::index::Index;
 use crate::managed_sessions::{
-    discover_tmux_executable, BindingOutcome, EvidenceBinder, ManagedLaunchStore,
+    discover_tmux_executable, BindingOutcome, EvidenceBinder, ManagedCurrentRunEvidence,
+    ManagedCurrentRunVerifier, ManagedLaunchStore, SystemManagedCurrentRunEvidence,
     SystemProcessEvidence, TmuxManagedLaunchCleanup,
 };
 use crate::models::ModelCatalog;
@@ -22,6 +23,7 @@ pub struct RefreshService {
     index: std::result::Result<Index, String>,
     task_store: std::result::Result<TaskStore, String>,
     managed_store: std::result::Result<ManagedLaunchStore, String>,
+    managed_current_run_verifier: ManagedCurrentRunVerifier,
     models: ModelCatalog,
     alert_engine: AlertEngine,
     attention_engine: AttentionEngine,
@@ -37,6 +39,10 @@ impl RefreshService {
         let managed_store = ManagedLaunchStore::open(cfg.managed_launch_store_path())
             .map_err(|error| error.to_string());
         Self {
+            managed_current_run_verifier: ManagedCurrentRunVerifier::new(
+                cfg.clone(),
+                Box::new(SystemManagedCurrentRunEvidence),
+            ),
             models: ModelCatalog::load(Some(&cfg.model_catalog_override_path())),
             alert_engine: AlertEngine::new(cfg.label_store_path()),
             cfg,
@@ -50,6 +56,15 @@ impl RefreshService {
         }
     }
 
+    pub fn with_managed_current_run_evidence(
+        mut self,
+        evidence: Box<dyn ManagedCurrentRunEvidence>,
+    ) -> Self {
+        self.managed_current_run_verifier =
+            ManagedCurrentRunVerifier::new(self.cfg.clone(), evidence);
+        self
+    }
+
     /// Build one snapshot even when a persistence dependency is unavailable.
     pub fn refresh(&mut self) -> RefreshSnapshot {
         self.revision = self.revision.saturating_add(1);
@@ -58,6 +73,7 @@ impl RefreshService {
         let mut stats = ScanStats::default();
         let mut sessions = Vec::new();
         let mut managed_launches = Vec::new();
+        let mut verified_managed_current_runs = Vec::new();
 
         match self.index.as_mut() {
             Ok(index) => match collector::refresh_checked(&self.cfg, index) {
@@ -140,6 +156,18 @@ impl RefreshService {
                         error.to_string(),
                     ));
                 }
+                match self.managed_current_run_verifier.verified_runs(store) {
+                    Ok(runs) => {
+                        verified_managed_current_runs = runs
+                            .iter()
+                            .map(crate::read_model::ManagedCurrentRunSummary::from)
+                            .collect();
+                    }
+                    Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Current Run Registry",
+                        error.to_string(),
+                    )),
+                }
                 match store.registrations() {
                     Ok(registrations) => {
                         managed_launches = registrations
@@ -185,6 +213,7 @@ impl RefreshService {
             sessions,
             tasks,
             managed_launches,
+            verified_managed_current_runs,
             recent_signals,
             attention: Some(attention),
             stats,

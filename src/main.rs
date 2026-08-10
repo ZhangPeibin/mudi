@@ -27,8 +27,9 @@ use sessionmesh::handoff::{
 };
 use sessionmesh::handoff_skill::ManagedHandoffSkills;
 use sessionmesh::managed_sessions::{
-    discover_tmux_executable, MacosManagedTerminalAccess, ManagedLaunchStore,
-    ManagedSessionService, TmuxLaunchBroker,
+    discover_tmux_executable, run_attach_from_args, MacosManagedTerminalAccess,
+    ManagedCurrentRunAccessService, ManagedCurrentRunVerifier, ManagedLaunchStore,
+    ManagedSessionService, SystemManagedCurrentRunEvidence, TmuxLaunchBroker,
 };
 use sessionmesh::read_model::{InMemoryReadModelCache, ReadModelCache};
 use sessionmesh::refresh::RefreshService;
@@ -40,6 +41,9 @@ type Shared = Arc<dyn ReadModelCache>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if run_attach_from_args(std::env::args_os())? {
+        return Ok(());
+    }
     if sessionmesh::successor::run_successor_from_args(std::env::args_os())? {
         return Ok(());
     }
@@ -64,6 +68,11 @@ async fn main() -> Result<()> {
         ManagedLaunchStore::open(cfg.managed_launch_store_path())?,
         provider_executables.clone(),
         Box::new(TmuxLaunchBroker::new(tmux_executable.clone())),
+        Box::new(MacosManagedTerminalAccess::new(tmux_executable.clone())),
+    );
+    let managed_current_runs = ManagedCurrentRunAccessService::new(
+        ManagedLaunchStore::open(cfg.managed_launch_store_path())?,
+        ManagedCurrentRunVerifier::new(cfg.clone(), Box::new(SystemManagedCurrentRunEvidence)),
         Box::new(MacosManagedTerminalAccess::new(tmux_executable)),
     );
     let claude_sessions_dir = cfg.claude_sessions_dir();
@@ -84,7 +93,8 @@ async fn main() -> Result<()> {
         Arc::new(MacosCurrentRunControl::new(claude_sessions_dir)),
     )?
     .with_managed_handoff_skills(managed_handoff_skills);
-    let mut controller = ApplicationController::new(handoff, terminal_launcher, managed_sessions);
+    let mut controller = ApplicationController::new(handoff, terminal_launcher, managed_sessions)
+        .with_managed_current_run_access(managed_current_runs);
     controller.reconcile_tasks(chrono::Utc::now().timestamp_millis())?;
     let shared: Shared = Arc::new(InMemoryReadModelCache::default());
     // Channel to request an out-of-band rescan (the `r` key).

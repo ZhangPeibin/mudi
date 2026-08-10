@@ -4,6 +4,7 @@ use crate::clipboard::Clipboard;
 use crate::handoff::{
     CompletionNotice, CompletionNotifier, HandoffService, MacosCompletionNotifier, WorkerLauncher,
 };
+use crate::managed_sessions::ManagedCurrentRunAccessService;
 use crate::managed_sessions::ManagedLaunchTarget;
 use crate::managed_sessions::ManagedSessionService;
 use crate::project::resolve_selected_directory;
@@ -33,6 +34,7 @@ pub struct ApplicationController<L, T> {
     handoff: HandoffService<L>,
     terminal_launcher: T,
     managed_sessions: ManagedSessionService,
+    managed_current_runs: Option<ManagedCurrentRunAccessService>,
     directory_picker: Box<dyn DirectoryPicker>,
 }
 
@@ -46,12 +48,21 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
             handoff,
             terminal_launcher,
             managed_sessions,
+            managed_current_runs: None,
             directory_picker: Box::new(RfdDirectoryPicker),
         }
     }
 
     pub fn with_directory_picker(mut self, directory_picker: Box<dyn DirectoryPicker>) -> Self {
         self.directory_picker = directory_picker;
+        self
+    }
+
+    pub fn with_managed_current_run_access(
+        mut self,
+        access: ManagedCurrentRunAccessService,
+    ) -> Self {
+        self.managed_current_runs = Some(access);
         self
     }
 
@@ -314,6 +325,50 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
                         ui.copy_to_clipboard(clipboard, "Managed Launch Diagnostics", &diagnostics)
                     }
                     Err(error) => ui.show_notice(format!("Copy Diagnostics failed: {error}")),
+                }
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::OpenManagedCurrentRunTerminal {
+                provider,
+                native_session_id,
+                opaque_ref,
+            } => {
+                let message = match self.managed_current_runs.as_mut() {
+                    Some(access) => {
+                        match access.open_terminal(provider, &native_session_id, &opaque_ref) {
+                            Ok(()) => "Opened Managed Current Run in Terminal.app".to_string(),
+                            Err(error) => format!("Open Terminal failed: {error}"),
+                        }
+                    }
+                    None => "Open Terminal failed: Managed Current Run access is unavailable"
+                        .to_string(),
+                };
+                ui.show_notice(message);
+                let _ = rescan_tx.send(());
+                false
+            }
+            UiIntent::CopyManagedCurrentRunAttachCommand {
+                provider,
+                native_session_id,
+                opaque_ref,
+            } => {
+                match self.managed_current_runs.as_ref() {
+                    Some(access) => {
+                        match access.attach_command(provider, &native_session_id, &opaque_ref) {
+                            Ok(command) => ui.copy_to_clipboard(
+                                clipboard,
+                                "Managed Current Run Attach Command",
+                                &command,
+                            ),
+                            Err(error) => {
+                                ui.show_notice(format!("Copy Attach Command failed: {error}"))
+                            }
+                        }
+                    }
+                    None => ui.show_notice(
+                        "Copy Attach Command failed: Managed Current Run access is unavailable",
+                    ),
                 }
                 let _ = rescan_tx.send(());
                 false

@@ -510,6 +510,16 @@ pub enum UiAction {
     CopyManagedLaunchDiagnostics {
         registration_id: String,
     },
+    OpenManagedCurrentRunTerminal {
+        provider: Provider,
+        native_session_id: String,
+        opaque_ref: String,
+    },
+    CopyManagedCurrentRunAttachCommand {
+        provider: Provider,
+        native_session_id: String,
+        opaque_ref: String,
+    },
     Quit,
 }
 
@@ -924,6 +934,30 @@ impl Ui {
                     source_state: session.state,
                     successor_provider: session.provider,
                     end_current_run: session.state.is_open(),
+                });
+            }
+            crossterm::event::KeyCode::Char('o')
+                if self.detail_managed_current_run(snap).is_some() =>
+            {
+                let run = self
+                    .detail_managed_current_run(snap)
+                    .expect("checked above");
+                return Ok(UiAction::OpenManagedCurrentRunTerminal {
+                    provider: run.provider,
+                    native_session_id: run.native_session_id.clone(),
+                    opaque_ref: run.opaque_ref.clone(),
+                });
+            }
+            crossterm::event::KeyCode::Char('a')
+                if self.detail_managed_current_run(snap).is_some() =>
+            {
+                let run = self
+                    .detail_managed_current_run(snap)
+                    .expect("checked above");
+                return Ok(UiAction::CopyManagedCurrentRunAttachCommand {
+                    provider: run.provider,
+                    native_session_id: run.native_session_id.clone(),
+                    opaque_ref: run.opaque_ref.clone(),
                 });
             }
             crossterm::event::KeyCode::Char('x')
@@ -1490,6 +1524,16 @@ impl Ui {
         snap.sessions.iter().find(|session| {
             session.provider == identity.provider && session.id == identity.native_id
         })
+    }
+
+    fn detail_managed_current_run<'a>(
+        &self,
+        snap: &'a Snapshot,
+    ) -> Option<&'a crate::read_model::ManagedCurrentRunSummary> {
+        let session = self.detail_session(snap)?;
+        snap.verified_managed_current_runs
+            .iter()
+            .find(|run| run.is_verified_open_for(session))
     }
 
     /// 用任务 ID 从最新快照解析详情页 Operation Task。

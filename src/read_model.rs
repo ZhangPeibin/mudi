@@ -6,7 +6,7 @@ use crate::collector::ScanStats;
 use crate::domain::Session;
 use crate::domain::{ProjectIdentity, Provider};
 use crate::managed_sessions::{
-    ManagedLaunchAction, ManagedLaunchRegistration, ManagedLaunchStatus,
+    ManagedLaunchAction, ManagedLaunchRegistration, ManagedLaunchStatus, VerifiedManagedCurrentRun,
 };
 use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
@@ -78,6 +78,15 @@ pub struct ManagedLaunchSummary {
     pub available_actions: Vec<ManagedLaunchAction>,
 }
 
+/// Metadata-only reference to a Managed Current Run revalidated as Open for this snapshot.
+/// Private tmux addressing remains behind the application and terminal-adapter boundaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedCurrentRunSummary {
+    pub provider: Provider,
+    pub native_session_id: String,
+    pub opaque_ref: String,
+}
+
 impl From<&ManagedLaunchRegistration> for ManagedLaunchSummary {
     fn from(registration: &ManagedLaunchRegistration) -> Self {
         let terminal_state = if registration.terminal_error.is_some() {
@@ -105,6 +114,25 @@ impl From<&ManagedLaunchRegistration> for ManagedLaunchSummary {
     }
 }
 
+impl ManagedCurrentRunSummary {
+    pub fn is_verified_open_for(&self, session: &Session) -> bool {
+        session.provenance == crate::domain::SessionProvenance::Managed
+            && session.state.is_open()
+            && self.provider == session.provider
+            && self.native_session_id == session.id
+    }
+}
+
+impl From<&VerifiedManagedCurrentRun> for ManagedCurrentRunSummary {
+    fn from(run: &VerifiedManagedCurrentRun) -> Self {
+        Self {
+            provider: run.provider,
+            native_session_id: run.native_session_id.clone(),
+            opaque_ref: run.opaque_ref.clone(),
+        }
+    }
+}
+
 /// The read-only projection of the latest observed local state.
 ///
 /// It intentionally contains only normalized metadata. Provider conversation content,
@@ -118,6 +146,7 @@ pub struct RefreshSnapshot {
     pub sessions: Vec<Session>,
     pub tasks: Vec<OperationTask>,
     pub managed_launches: Vec<ManagedLaunchSummary>,
+    pub verified_managed_current_runs: Vec<ManagedCurrentRunSummary>,
     pub recent_signals: Vec<RecentSignal>,
     pub attention: Option<AttentionSnapshot>,
     pub stats: ScanStats,
