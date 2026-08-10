@@ -4,18 +4,36 @@ use crate::clipboard::Clipboard;
 use crate::handoff::{
     CompletionNotice, CompletionNotifier, HandoffService, MacosCompletionNotifier, WorkerLauncher,
 };
+use crate::managed_sessions::ManagedLaunchTarget;
 use crate::managed_sessions::ManagedSessionService;
+use crate::project::resolve_selected_directory;
 use crate::read_model::RefreshSnapshot;
 use crate::successor::TerminalLauncher;
 use crate::ui::{Ui, UiIntent};
 use anyhow::Result;
+use std::path::PathBuf;
 use tokio::sync::mpsc;
+
+pub trait DirectoryPicker {
+    fn pick_directory(&mut self) -> Result<Option<PathBuf>>;
+}
+
+pub struct RfdDirectoryPicker;
+
+impl DirectoryPicker for RfdDirectoryPicker {
+    fn pick_directory(&mut self) -> Result<Option<PathBuf>> {
+        Ok(rfd::FileDialog::new()
+            .set_title("Choose Session directory")
+            .pick_folder())
+    }
+}
 
 /// Performs authorized effects requested by the UI and schedules a subsequent refresh.
 pub struct ApplicationController<L, T> {
     handoff: HandoffService<L>,
     terminal_launcher: T,
     managed_sessions: ManagedSessionService,
+    directory_picker: Box<dyn DirectoryPicker>,
 }
 
 impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
@@ -28,7 +46,13 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
             handoff,
             terminal_launcher,
             managed_sessions,
+            directory_picker: Box::new(RfdDirectoryPicker),
         }
+    }
+
+    pub fn with_directory_picker(mut self, directory_picker: Box<dyn DirectoryPicker>) -> Self {
+        self.directory_picker = directory_picker;
+        self
     }
 
     pub fn reconcile_tasks(&mut self, now_ms: i64) -> Result<()> {
@@ -186,6 +210,23 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
                 let _ = rescan_tx.send(());
                 false
             }
+            UiIntent::ChooseManagedNewDirectory => {
+                let selection = self
+                    .directory_picker
+                    .pick_directory()
+                    .map_err(|error| format!("Directory chooser failed: {error}"))
+                    .and_then(|selected| {
+                        selected
+                            .map(|directory| {
+                                resolve_selected_directory(&directory)
+                                    .and_then(canonical_context_target)
+                                    .map_err(|error| error.to_string())
+                            })
+                            .transpose()
+                    });
+                ui.finish_managed_new_directory_selection(selection);
+                false
+            }
             UiIntent::StartManagedNew { request } => {
                 let message = match self
                     .managed_sessions
@@ -214,6 +255,26 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
             UiIntent::Quit => true,
         }
     }
+}
+
+fn canonical_context_target(
+    context: crate::project::CanonicalProjectContext,
+) -> Result<ManagedLaunchTarget> {
+    let worktree_root = context
+        .worktree
+        .as_ref()
+        .map(|worktree| worktree.root.clone());
+    let working_directory = match (&context.project.identity, &worktree_root) {
+        (crate::domain::ProjectIdentity::GitCommonDir(_), Some(root)) => root.clone(),
+        (crate::domain::ProjectIdentity::CanonicalCwd(root), None) => root.clone(),
+        _ => anyhow::bail!("Selected directory has an ambiguous Project or Worktree identity"),
+    };
+    Ok(ManagedLaunchTarget {
+        project: context.project.identity,
+        project_label: context.project.label,
+        worktree_root,
+        working_directory,
+    })
 }
 
 fn short_registration_id(registration_id: &str) -> String {

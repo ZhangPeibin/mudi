@@ -752,6 +752,51 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
 }
 
 #[test]
+fn new_without_project_tree_context_requests_a_directory() {
+    let snapshot = Snapshot {
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap(),
+        UiAction::ChooseManagedNewDirectory
+    );
+}
+
+#[test]
+fn directory_context_can_be_reselected_before_new_is_confirmed() {
+    let snapshot = Snapshot {
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.finish_managed_new_directory_selection(Ok(Some(
+        crate::managed_sessions::ManagedLaunchTarget {
+            project: ProjectIdentity::CanonicalCwd(PathBuf::from("/Users/x/code/notes")),
+            project_label: "notes".into(),
+            worktree_root: None,
+            working_directory: PathBuf::from("/Users/x/code/notes"),
+        },
+    )));
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+        UiAction::ChooseManagedNewDirectory
+    );
+
+    ui.finish_managed_new_directory_selection(Err("ambiguous Git identity".into()));
+    let rendered = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(rendered.contains("Choose Directory"));
+    assert!(rendered.contains("ambiguous Git identity"));
+    assert!(!rendered.contains("/Users/x/code/notes"));
+}
+
+#[test]
 fn selected_worktree_new_requires_title_and_does_not_remember_provider() {
     let snapshot = managed_new_snapshot();
     let mut ui = Ui::default();

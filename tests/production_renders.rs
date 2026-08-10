@@ -4359,7 +4359,7 @@ fn navigation_guide_lists_global_and_contextual_controls_without_theme_cycling()
 
     for required in [
         "1 / 2 / 3  Open a page",
-        "n  New from selected Project or Worktree",
+        "n  New Session",
         "Tab / Shift+Tab  Change region or Guide pane",
         "Up/Down or j/k  Move or scroll",
         "Enter  Inspect or expand",

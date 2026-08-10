@@ -69,10 +69,9 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
     let title_input = text::visible_input_tail(&form.title, value_width);
     let description_input = text::visible_input_tail(&form.description, value_width);
     let target = form.targets.get(form.target_index);
-    let target_text = target
-        .map(|target| target.working_directory.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Unavailable".to_string());
-    let target_text = text::visible_input_tail(&target_text, value_width);
+    let target_text = target.map(|target| {
+        text::visible_input_tail(&target.working_directory.to_string_lossy(), value_width)
+    });
     let field_line = |label: &str, value: String, field: NewSessionField| {
         let focused = form.field == field;
         let style = if focused {
@@ -105,13 +104,21 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         Line::from(""),
         field_line("Provider", provider, NewSessionField::Provider),
         field_line(
-            "Worktree",
-            format!(
-                "{}  {}/{}",
-                target_text,
-                form.target_index + 1,
-                target_count
-            ),
+            if form.directory_context {
+                "Directory"
+            } else {
+                "Worktree"
+            },
+            match target_text {
+                Some(target_text) if form.directory_context => target_text,
+                Some(target_text) => format!(
+                    "{}  {}/{}",
+                    target_text,
+                    form.target_index + 1,
+                    target_count
+                ),
+                None => "Choose Directory".to_string(),
+            },
             NewSessionField::Target,
         ),
         field_line("Title", title_input.clone(), NewSessionField::Title),

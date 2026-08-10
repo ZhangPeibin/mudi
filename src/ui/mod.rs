@@ -210,6 +210,7 @@ impl NewSessionField {
 struct NewSessionForm {
     targets: Vec<ManagedLaunchTarget>,
     target_index: usize,
+    directory_context: bool,
     provider: Option<Provider>,
     title: String,
     description: String,
@@ -219,6 +220,24 @@ struct NewSessionForm {
 }
 
 impl NewSessionForm {
+    fn new(
+        targets: Vec<ManagedLaunchTarget>,
+        target_index: usize,
+        directory_context: bool,
+    ) -> Self {
+        Self {
+            targets,
+            target_index,
+            directory_context,
+            provider: None,
+            title: String::new(),
+            description: String::new(),
+            binding_initializer: false,
+            field: NewSessionField::Provider,
+            error: None,
+        }
+    }
+
     fn active_input_mut(&mut self) -> Option<&mut String> {
         match self.field {
             NewSessionField::Title => Some(&mut self.title),
@@ -470,6 +489,7 @@ pub enum UiAction {
     OpenSuccessorTerminal {
         task_id: String,
     },
+    ChooseManagedNewDirectory,
     StartManagedNew {
         request: ManagedNewRequest,
     },
@@ -573,6 +593,45 @@ impl Ui {
     /// 显示一条四秒后自动失效的状态提示。
     pub fn show_notice(&mut self, message: impl Into<String>) {
         self.status_notice = Some((message.into(), Instant::now() + Duration::from_secs(4)));
+    }
+
+    pub fn finish_managed_new_directory_selection(
+        &mut self,
+        selection: Result<Option<ManagedLaunchTarget>, String>,
+    ) {
+        match selection {
+            Ok(Some(target)) => {
+                if let Some(form) = self
+                    .new_session
+                    .as_mut()
+                    .filter(|form| form.directory_context)
+                {
+                    form.targets = vec![target];
+                    form.target_index = 0;
+                    form.error = None;
+                } else {
+                    self.new_session = Some(NewSessionForm::new(vec![target], 0, true));
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                if let Some(form) = self
+                    .new_session
+                    .as_mut()
+                    .filter(|form| form.directory_context)
+                {
+                    form.targets.clear();
+                    form.target_index = 0;
+                    form.error = Some(error);
+                    form.field = NewSessionField::Target;
+                } else {
+                    let mut form = NewSessionForm::new(Vec::new(), 0, true);
+                    form.field = NewSessionField::Target;
+                    form.error = Some(error);
+                    self.new_session = Some(form);
+                }
+            }
+        }
     }
 
     /// Route one terminal event through the public UI interaction boundary.
@@ -807,18 +866,13 @@ impl Ui {
             crossterm::event::KeyCode::Char('n') => {
                 if self.tab == Tab::All && self.detail.is_none() {
                     if let Some(selection) = self.project_tree.new_target_selection(snap) {
-                        self.new_session = Some(NewSessionForm {
-                            targets: selection.targets,
-                            target_index: selection.selected,
-                            provider: None,
-                            title: String::new(),
-                            description: String::new(),
-                            binding_initializer: false,
-                            field: NewSessionField::Provider,
-                            error: None,
-                        });
+                        self.new_session = Some(NewSessionForm::new(
+                            selection.targets,
+                            selection.selected,
+                            false,
+                        ));
                     } else {
-                        self.show_notice("New requires a selected Project or Worktree");
+                        return Ok(UiAction::ChooseManagedNewDirectory);
                     }
                 }
             }
@@ -1164,6 +1218,11 @@ impl Ui {
                     }
                     Err(error) => form.error = Some(error),
                 }
+            }
+            crossterm::event::KeyCode::Enter
+                if form.field == NewSessionField::Target && form.directory_context =>
+            {
+                return UiAction::ChooseManagedNewDirectory;
             }
             crossterm::event::KeyCode::Enter => form.field = form.field.move_by(1),
             _ => {}

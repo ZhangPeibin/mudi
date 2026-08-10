@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use sessionmesh::app::Snapshot;
-use sessionmesh::application::ApplicationController;
+use sessionmesh::application::{ApplicationController, DirectoryPicker};
 use sessionmesh::clipboard::Clipboard;
 use sessionmesh::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceMetadata, Usage,
@@ -19,6 +19,7 @@ use sessionmesh::providers::ProviderExecutables;
 use sessionmesh::providers::{registry, BINDING_INITIALIZER};
 use sessionmesh::successor::TerminalLauncher;
 use sessionmesh::ui::{draw, Ui, UiAction};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -391,6 +392,144 @@ impl Clipboard for NoopClipboard {
     fn write_text(&mut self, _value: &str) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+struct FakeDirectoryPicker {
+    selected: VecDeque<PathBuf>,
+}
+
+impl DirectoryPicker for FakeDirectoryPicker {
+    fn pick_directory(&mut self) -> Result<Option<PathBuf>> {
+        Ok(self.selected.pop_front())
+    }
+}
+
+#[test]
+fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
+    let temp = TempDir::new("picked-directory");
+    let selected = temp.path().join("notes");
+    let selected_alias = temp.path().join("notes-alias");
+    let replacement = temp.path().join("replacement-notes");
+    let broken = temp.path().join("broken-worktree");
+    fs::create_dir(&selected).unwrap();
+    fs::create_dir(&replacement).unwrap();
+    fs::create_dir(&broken).unwrap();
+    fs::write(broken.join(".git"), "gitdir: ../missing-git-dir\n").unwrap();
+    std::os::unix::fs::symlink(&selected, &selected_alias).unwrap();
+    let claude = executable(temp.path(), "claude");
+    let codex = executable(temp.path(), "codex");
+    let executables = ProviderExecutables::new(claude, codex);
+    let store_path = temp.path().join("managed-launches.db");
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let managed_sessions = ManagedSessionService::new(
+        ManagedLaunchStore::open(&store_path).unwrap(),
+        executables.clone(),
+        Box::new(AssertPersistedBeforeLaunch {
+            store_path: store_path.clone(),
+            launched: launched.clone(),
+        }),
+        Box::new(AssertLaunchPersistedBeforeTerminal {
+            store_path: store_path.clone(),
+            opened: opened.clone(),
+        }),
+    );
+    let handoff = HandoffService::open(
+        HandoffPaths {
+            task_store: temp.path().join("tasks.db"),
+            artifact_root: temp.path().join("artifacts"),
+        },
+        executables,
+        NeverLaunchHandoff,
+    )
+    .unwrap();
+    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions)
+        .with_directory_picker(Box::new(FakeDirectoryPicker {
+            selected: VecDeque::from([broken, selected_alias.clone(), replacement.clone()]),
+        }));
+    let snapshot = Snapshot {
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    let action = ui
+        .handle_key(
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            &snapshot,
+        )
+        .unwrap();
+    let (rescan_tx, mut rescan_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    assert!(!controller.handle(action, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+
+    assert!(rescan_rx.try_recv().is_err());
+    let rejected = render_ui(&ui, &snapshot);
+    assert!(
+        rejected.contains("ambiguous Git identity"),
+        "resolution error was not visible:\n{rejected}"
+    );
+    assert!(launched.lock().unwrap().is_empty());
+
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    let retry = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    assert_eq!(retry, UiAction::ChooseManagedNewDirectory);
+    assert!(!controller.handle(retry, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    let rendered = render_ui(&ui, &snapshot);
+    assert!(
+        rendered.contains("New Session"),
+        "form did not open:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("notes"),
+        "Project was not visible:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains(
+            selected_alias
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        ),
+        "directory alias was not canonicalized:\n{rendered}"
+    );
+
+    let switch = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    assert_eq!(switch, UiAction::ChooseManagedNewDirectory);
+    assert!(!controller.handle(switch, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    let switched = render_ui(&ui, &snapshot);
+    assert!(
+        switched.contains("replacement-notes"),
+        "replacement context was not visible:\n{switched}"
+    );
+
+    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Picked directory launch".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    let start = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    assert!(matches!(start, UiAction::StartManagedNew { .. }));
+    assert!(!controller.handle(start, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+
+    let registration_id = launched.lock().unwrap().first().unwrap().clone();
+    assert_eq!(*opened.lock().unwrap(), vec![registration_id.clone()]);
+    let registration = ManagedLaunchStore::open(&store_path)
+        .unwrap()
+        .get(&registration_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        registration.target.working_directory,
+        fs::canonicalize(replacement).unwrap()
+    );
+    assert_eq!(registration.session_alias, "Picked directory launch");
 }
 
 #[test]

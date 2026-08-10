@@ -3,12 +3,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use sessionmesh::collector::build_sessions;
 use sessionmesh::config::Config;
 use sessionmesh::domain::{ContextState, ProjectIdentity, Provider, Usage};
 use sessionmesh::index::{Fingerprint, Index};
 use sessionmesh::models::ModelCatalog;
-use sessionmesh::project::resolve;
+use sessionmesh::project::{resolve, resolve_selected_directory};
 use sessionmesh::providers::ParsedSession;
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
@@ -117,6 +120,89 @@ fn linked_worktrees_share_project_identity_and_keep_worktree_metadata() {
     assert_eq!(feature_worktree.branch.as_deref(), Some("feature/identity"));
     assert!(main_worktree.writable);
     assert!(feature_worktree.writable);
+}
+
+#[test]
+fn selected_git_subdirectory_resolves_to_canonical_project_and_worktree() {
+    let temp = TempDir::new();
+    let repository = temp.path().join("sessionmesh");
+    let nested = repository.join("src/domain");
+    repository_with_commit(&repository);
+    fs::create_dir_all(&nested).unwrap();
+
+    let resolved = resolve_selected_directory(&nested).unwrap();
+
+    assert_eq!(
+        resolved.project.identity,
+        ProjectIdentity::GitCommonDir(fs::canonicalize(repository.join(".git")).unwrap())
+    );
+    assert_eq!(
+        resolved.worktree.unwrap().root,
+        fs::canonicalize(repository).unwrap()
+    );
+}
+
+#[test]
+fn selected_directory_with_broken_git_metadata_is_rejected_as_ambiguous() {
+    let temp = TempDir::new();
+    let directory = temp.path().join("broken-worktree");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join(".git"), "gitdir: ../missing-git-dir\n").unwrap();
+
+    let error = resolve_selected_directory(&directory).unwrap_err();
+
+    assert!(
+        error.to_string().contains("ambiguous Git identity"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn selected_non_git_directory_becomes_its_own_canonical_project() {
+    let temp = TempDir::new();
+    let directory = temp.path().join("notes");
+    fs::create_dir(&directory).unwrap();
+
+    let resolved = resolve_selected_directory(&directory).unwrap();
+    let canonical = fs::canonicalize(&directory).unwrap();
+
+    assert_eq!(
+        resolved.project.identity,
+        ProjectIdentity::CanonicalCwd(canonical)
+    );
+    assert_eq!(resolved.project.label, "notes");
+    assert!(resolved.worktree.is_none());
+}
+
+#[test]
+fn selected_non_canonical_directory_is_rejected_without_guessing() {
+    let temp = TempDir::new();
+    let missing = temp.path().join("missing");
+
+    let error = resolve_selected_directory(&missing).unwrap_err();
+
+    assert!(
+        error.to_string().contains("cannot be canonicalized"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_unreadable_directory_is_rejected() {
+    let temp = TempDir::new();
+    let directory = temp.path().join("unreadable");
+    fs::create_dir(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = resolve_selected_directory(&directory);
+
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    let error = result.unwrap_err();
+    assert!(
+        error.to_string().contains("unreadable"),
+        "unexpected error: {error:#}"
+    );
 }
 
 #[test]
