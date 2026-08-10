@@ -25,18 +25,24 @@ static REGISTRATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedLaunchStatus {
     Binding,
+    NeedsReview,
+    Failed,
 }
 
 impl ManagedLaunchStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Binding => "binding",
+            Self::NeedsReview => "needs_review",
+            Self::Failed => "failed",
         }
     }
 
     fn parse(value: &str) -> Result<Self> {
         match value {
             "binding" => Ok(Self::Binding),
+            "needs_review" => Ok(Self::NeedsReview),
+            "failed" => Ok(Self::Failed),
             _ => Err(anyhow!(
                 "unknown Managed Launch Registration status {value:?}"
             )),
@@ -89,6 +95,45 @@ pub struct ManagedLaunchRegistration {
     pub launch_evidence: Option<ManagedLaunchEvidence>,
     pub terminal_opened_at_ms: Option<i64>,
     pub terminal_error: Option<String>,
+    pub binding_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedLaunchAction {
+    CancelStart,
+    OpenTerminal,
+    RetryOpenTerminal,
+    CopyDiagnostics,
+    Resume,
+    RetryBinding,
+    AdoptAsManaged,
+}
+
+impl ManagedLaunchRegistration {
+    pub fn available_actions(&self) -> Vec<ManagedLaunchAction> {
+        match (self.status, self.terminal_error.is_some()) {
+            (ManagedLaunchStatus::Binding, false) => {
+                vec![ManagedLaunchAction::CancelStart]
+            }
+            (ManagedLaunchStatus::Binding, true) => vec![
+                ManagedLaunchAction::CancelStart,
+                ManagedLaunchAction::RetryOpenTerminal,
+            ],
+            (ManagedLaunchStatus::NeedsReview, false) => vec![
+                ManagedLaunchAction::OpenTerminal,
+                ManagedLaunchAction::CopyDiagnostics,
+            ],
+            (ManagedLaunchStatus::NeedsReview, true) => vec![
+                ManagedLaunchAction::RetryOpenTerminal,
+                ManagedLaunchAction::CopyDiagnostics,
+            ],
+            (ManagedLaunchStatus::Failed, _) => Vec::new(),
+        }
+    }
+
+    pub fn allows(&self, action: ManagedLaunchAction) -> bool {
+        self.available_actions().contains(&action)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +146,12 @@ pub struct ManagedLaunchEvidence {
 pub struct ManagedNewOutcome {
     pub registration: ManagedLaunchRegistration,
     pub terminal_opened: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedTerminalOutcome {
+    pub registration: ManagedLaunchRegistration,
+    pub opened: bool,
 }
 
 /// Conclusive record that atomically established a Managed Session and Current Run.
@@ -141,29 +192,85 @@ pub struct ManagedCurrentRunRecord {
 pub enum BindingOutcome {
     Waiting,
     Bound(BindingReceipt),
+    NeedsReview,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderProcessObservation {
+    Live(ProcessIdentity),
+    Absent,
+    Unknown,
 }
 
 /// Revalidates exact process identity immediately before receipt issuance.
 pub trait ProcessEvidence: Send + Sync {
-    fn current_identity(&self, pid: u32) -> Option<ProcessIdentity>;
+    fn observe(&self, pid: u32) -> ProviderProcessObservation;
 }
 
 pub struct SystemProcessEvidence;
 
+impl SystemProcessEvidence {
+    pub fn current_identity(&self, pid: u32) -> Option<ProcessIdentity> {
+        match self.observe(pid) {
+            ProviderProcessObservation::Live(identity) => Some(identity),
+            ProviderProcessObservation::Absent | ProviderProcessObservation::Unknown => None,
+        }
+    }
+}
+
 impl ProcessEvidence for SystemProcessEvidence {
-    fn current_identity(&self, pid: u32) -> Option<ProcessIdentity> {
-        crate::providers::state::process_identity(pid)
+    fn observe(&self, pid: u32) -> ProviderProcessObservation {
+        match crate::providers::state::inspect_process_identity(pid) {
+            crate::providers::state::ProcessInspection::Present(identity, false) => {
+                ProviderProcessObservation::Live(identity)
+            }
+            crate::providers::state::ProcessInspection::Present(_, true)
+            | crate::providers::state::ProcessInspection::Absent => {
+                ProviderProcessObservation::Absent
+            }
+            crate::providers::state::ProcessInspection::Unknown => {
+                ProviderProcessObservation::Unknown
+            }
+        }
+    }
+}
+
+pub trait ManagedLaunchCleanup: Send + Sync {
+    fn clean_empty(&self, registration: &ManagedLaunchRegistration) -> Result<()>;
+}
+
+pub struct TmuxManagedLaunchCleanup {
+    tmux_executable: PathBuf,
+}
+
+impl TmuxManagedLaunchCleanup {
+    pub fn new(tmux_executable: PathBuf) -> Self {
+        Self { tmux_executable }
+    }
+}
+
+impl ManagedLaunchCleanup for TmuxManagedLaunchCleanup {
+    fn clean_empty(&self, registration: &ManagedLaunchRegistration) -> Result<()> {
+        clean_empty_private_tmux(&self.tmux_executable, &registration.tmux)
     }
 }
 
 /// Sole issuer of Binding Receipts.
 pub struct EvidenceBinder {
     process_evidence: Box<dyn ProcessEvidence>,
+    cleanup: Box<dyn ManagedLaunchCleanup>,
 }
 
 impl EvidenceBinder {
-    pub fn new(process_evidence: Box<dyn ProcessEvidence>) -> Self {
-        Self { process_evidence }
+    pub fn new(
+        process_evidence: Box<dyn ProcessEvidence>,
+        cleanup: Box<dyn ManagedLaunchCleanup>,
+    ) -> Self {
+        Self {
+            process_evidence,
+            cleanup,
+        }
     }
 
     pub fn bind(
@@ -173,9 +280,6 @@ impl EvidenceBinder {
         evidence: Option<ProviderBindingEvidence>,
         now_ms: i64,
     ) -> Result<BindingOutcome> {
-        let Some(evidence) = evidence else {
-            return Ok(BindingOutcome::Waiting);
-        };
         let registration = store.get(registration_id)?.ok_or_else(|| {
             anyhow!("Binding Managed Launch Registration {registration_id} is unavailable")
         })?;
@@ -187,86 +291,132 @@ impl EvidenceBinder {
         if registration.status != ManagedLaunchStatus::Binding {
             return Err(anyhow!("only a Binding registration can issue a Receipt"));
         }
-        if evidence.provider != registration.provider {
-            return Err(anyhow!(
-                "Provider source evidence disagrees with the launch"
-            ));
+        match self.process_evidence.observe(launch.provider_process.pid) {
+            ProviderProcessObservation::Absent => {
+                if let Err(error) = self.cleanup.clean_empty(&registration) {
+                    store.mark_needs_review(
+                        registration_id,
+                        &format!("empty private tmux could not be confirmed: {error}"),
+                    )?;
+                    return Ok(BindingOutcome::NeedsReview);
+                }
+                store.mark_failed(registration_id, "Provider process is confirmed absent")?;
+                return Ok(BindingOutcome::Failed);
+            }
+            ProviderProcessObservation::Unknown => {
+                store.mark_needs_review(
+                    registration_id,
+                    "launched Provider process could not be verified",
+                )?;
+                return Ok(BindingOutcome::NeedsReview);
+            }
+            ProviderProcessObservation::Live(identity) if identity != launch.provider_process => {
+                store.mark_needs_review(
+                    registration_id,
+                    "launched Provider process is stale or its PID was reused",
+                )?;
+                return Ok(BindingOutcome::NeedsReview);
+            }
+            ProviderProcessObservation::Live(_) => {}
         }
-        if evidence.source_session_id.is_empty()
-            || evidence.process_session_id.is_empty()
-            || evidence.source_session_id != evidence.process_session_id
-        {
-            return Err(anyhow!(
-                "native Session ID evidence is incomplete or conflicting"
-            ));
-        }
-        if evidence.provider_process != launch.provider_process {
-            return Err(anyhow!(
-                "Provider process evidence disagrees with the launch"
-            ));
-        }
-        let source_path = evidence
-            .source
-            .path
-            .canonicalize()
-            .context("Binding Provider source is unavailable")?;
-        if !source_path.is_file() {
-            return Err(anyhow!("Binding Provider source is not a file"));
-        }
-        let working_directory = evidence
-            .working_directory
-            .canonicalize()
-            .context("Binding working directory is unavailable")?;
-        let target_directory = registration
-            .target
-            .working_directory
-            .canonicalize()
-            .context("Managed launch target is unavailable")?;
-        if working_directory != target_directory {
-            return Err(anyhow!(
-                "Provider source working directory disagrees with the launch"
-            ));
-        }
-        let resolved = crate::project::resolve(Some(&working_directory));
-        if resolved.project.as_ref().map(|project| &project.identity)
-            != Some(&registration.target.project)
-            || resolved.worktree.as_ref().map(|worktree| &worktree.root)
-                != registration.target.worktree_root.as_ref()
-        {
-            return Err(anyhow!(
-                "Provider source Project or Worktree disagrees with the launch"
-            ));
-        }
-        if self
-            .process_evidence
-            .current_identity(launch.provider_process.pid)
-            != Some(launch.provider_process)
-        {
-            return Err(anyhow!(
-                "launched Provider process is stale or its PID was reused"
-            ));
-        }
-
-        let receipt = BindingReceipt {
-            id: format!("receipt-{registration_id}"),
-            registration_id: registration.id.clone(),
-            provider: registration.provider,
-            native_session_id: evidence.source_session_id,
-            source: SourceMetadata {
-                path: source_path,
-                format: evidence.source.format,
-            },
-            provider_process: launch.provider_process,
-            issued_at_ms: now_ms,
+        let Some(evidence) = evidence else {
+            return Ok(BindingOutcome::Waiting);
         };
-        store.establish_management(&registration, &receipt)?;
+        let receipt = match binding_receipt_candidate(&registration, evidence, now_ms) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                store.mark_needs_review(registration_id, &error.to_string())?;
+                return Ok(BindingOutcome::NeedsReview);
+            }
+        };
+        if let Err(error) = store.establish_management(&registration, &receipt) {
+            store.mark_needs_review(registration_id, &error.to_string())?;
+            return Ok(BindingOutcome::NeedsReview);
+        }
         Ok(BindingOutcome::Bound(receipt))
     }
+}
+
+fn binding_receipt_candidate(
+    registration: &ManagedLaunchRegistration,
+    evidence: ProviderBindingEvidence,
+    now_ms: i64,
+) -> Result<BindingReceipt> {
+    let launch = registration
+        .launch_evidence
+        .as_ref()
+        .ok_or_else(|| anyhow!("Binding requires conclusive launch evidence"))?;
+    if evidence.provider != registration.provider {
+        return Err(anyhow!(
+            "Provider source evidence disagrees with the launch"
+        ));
+    }
+    if evidence.source_session_id.is_empty()
+        || evidence.process_session_id.is_empty()
+        || evidence.source_session_id != evidence.process_session_id
+    {
+        return Err(anyhow!(
+            "native Session ID evidence is incomplete or conflicting"
+        ));
+    }
+    if evidence.provider_process != launch.provider_process {
+        return Err(anyhow!(
+            "Provider process evidence disagrees with the launch"
+        ));
+    }
+    let source_path = evidence
+        .source
+        .path
+        .canonicalize()
+        .context("Binding Provider source is unavailable")?;
+    if !source_path.is_file() {
+        return Err(anyhow!("Binding Provider source is not a file"));
+    }
+    let working_directory = evidence
+        .working_directory
+        .canonicalize()
+        .context("Binding working directory is unavailable")?;
+    let target_directory = registration
+        .target
+        .working_directory
+        .canonicalize()
+        .context("Managed launch target is unavailable")?;
+    if working_directory != target_directory {
+        return Err(anyhow!(
+            "Provider source working directory disagrees with the launch"
+        ));
+    }
+    let resolved = crate::project::resolve(Some(&working_directory));
+    if resolved.project.as_ref().map(|project| &project.identity)
+        != Some(&registration.target.project)
+        || resolved.worktree.as_ref().map(|worktree| &worktree.root)
+            != registration.target.worktree_root.as_ref()
+    {
+        return Err(anyhow!(
+            "Provider source Project or Worktree disagrees with the launch"
+        ));
+    }
+    Ok(BindingReceipt {
+        id: format!("receipt-{}", registration.id),
+        registration_id: registration.id.clone(),
+        provider: registration.provider,
+        native_session_id: evidence.source_session_id,
+        source: SourceMetadata {
+            path: source_path,
+            format: evidence.source.format,
+        },
+        provider_process: launch.provider_process,
+        issued_at_ms: now_ms,
+    })
 }
 
 pub trait ManagedLaunchBroker {
     fn launch(&mut self, registration: &ManagedLaunchRegistration)
         -> Result<ManagedLaunchEvidence>;
+
+    fn cancel(&mut self, _registration: &ManagedLaunchRegistration) -> Result<()> {
+        Err(anyhow!("Managed launch cancellation is unavailable"))
+    }
 }
 
 pub trait ManagedTerminalAccess {
@@ -339,6 +489,7 @@ impl ManagedSessionService {
             launch_evidence: None,
             terminal_opened_at_ms: None,
             terminal_error: None,
+            binding_error: None,
         };
 
         self.store.insert(&registration)?;
@@ -371,6 +522,132 @@ impl ManagedSessionService {
         Ok(ManagedNewOutcome {
             registration,
             terminal_opened,
+        })
+    }
+
+    pub fn cancel_start(&mut self, registration_id: &str) -> Result<()> {
+        let registration = self.store.get(registration_id)?.ok_or_else(|| {
+            anyhow!("Managed Launch Registration {registration_id} is unavailable")
+        })?;
+        if registration.status != ManagedLaunchStatus::Binding {
+            return Err(anyhow!("Cancel Start is available only while Binding"));
+        }
+        self.launch_broker
+            .cancel(&registration)
+            .context("Cancel Start could not stop the Managed launch")?;
+        self.store.remove_binding(registration_id)
+    }
+
+    pub fn retry_open_terminal(
+        &mut self,
+        registration_id: &str,
+        now_ms: i64,
+    ) -> Result<ManagedTerminalOutcome> {
+        self.access_terminal(
+            registration_id,
+            now_ms,
+            ManagedLaunchAction::RetryOpenTerminal,
+            "Retry Open Terminal",
+        )
+    }
+
+    pub fn open_terminal(
+        &mut self,
+        registration_id: &str,
+        now_ms: i64,
+    ) -> Result<ManagedTerminalOutcome> {
+        self.access_terminal(
+            registration_id,
+            now_ms,
+            ManagedLaunchAction::OpenTerminal,
+            "Open Terminal",
+        )
+    }
+
+    pub fn copy_diagnostics(&self, registration_id: &str) -> Result<String> {
+        let registration = self.store.get(registration_id)?.ok_or_else(|| {
+            anyhow!("Managed Launch Registration {registration_id} is unavailable")
+        })?;
+        if !registration.allows(ManagedLaunchAction::CopyDiagnostics) {
+            return Err(anyhow!(
+                "Copy Diagnostics is unavailable for this Managed launch"
+            ));
+        }
+        let project_path = match &registration.target.project {
+            ProjectIdentity::GitCommonDir(path) | ProjectIdentity::CanonicalCwd(path) => path,
+        };
+        let worktree = registration
+            .target
+            .worktree_root
+            .as_deref()
+            .map_or_else(|| "N/A".to_string(), |path| path.display().to_string());
+        let launch = registration
+            .launch_evidence
+            .as_ref()
+            .ok_or_else(|| anyhow!("Managed launch evidence is unavailable"))?;
+        let mut diagnostics = vec![
+            format!("Managed Launch Registration: {}", registration.id),
+            "Status: Needs Review".to_string(),
+            format!("Provider: {}", registration.provider.label()),
+            format!(
+                "Project: {} ({})",
+                registration.target.project_label,
+                project_path.display()
+            ),
+            format!("Worktree: {worktree}"),
+            format!(
+                "Working directory: {}",
+                registration.target.working_directory.display()
+            ),
+            format!(
+                "Provider process: pid {}, started {}",
+                launch.provider_process.pid, launch.provider_process.started_at_ms
+            ),
+            format!(
+                "Evidence: private tmux pane {}; Binding Receipt not issued",
+                launch.tmux_pane_id
+            ),
+            format!(
+                "Binding error: {}",
+                registration.binding_error.as_deref().unwrap_or("unknown")
+            ),
+        ];
+        if let Some(error) = registration.terminal_error.as_deref() {
+            diagnostics.push(format!("Terminal error: {error}"));
+        }
+        Ok(diagnostics.join("\n"))
+    }
+
+    fn access_terminal(
+        &mut self,
+        registration_id: &str,
+        now_ms: i64,
+        action: ManagedLaunchAction,
+        label: &str,
+    ) -> Result<ManagedTerminalOutcome> {
+        let registration = self.store.get(registration_id)?.ok_or_else(|| {
+            anyhow!("Managed Launch Registration {registration_id} is unavailable")
+        })?;
+        if !registration.allows(action) {
+            return Err(anyhow!("{label} is unavailable for this Managed launch"));
+        }
+        let opened = match self.terminal_access.open(&registration) {
+            Ok(()) => {
+                self.store.record_terminal_opened(registration_id, now_ms)?;
+                true
+            }
+            Err(error) => {
+                self.store
+                    .record_terminal_error(registration_id, &error.to_string())?;
+                false
+            }
+        };
+        let registration = self.store.get(registration_id)?.ok_or_else(|| {
+            anyhow!("Managed Launch Registration disappeared after Terminal access")
+        })?;
+        Ok(ManagedTerminalOutcome {
+            registration,
+            opened,
         })
     }
 }
@@ -408,6 +685,21 @@ fn new_registration_id(_now_ms: i64) -> String {
 
 pub struct ManagedLaunchStore {
     conn: Connection,
+}
+
+fn add_binding_error_column_if_missing(conn: &Connection) -> Result<()> {
+    let mut statement = conn.prepare("PRAGMA table_info(managed_launch_registrations)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    if !columns.iter().any(|column| column == "binding_error") {
+        conn.execute(
+            "ALTER TABLE managed_launch_registrations ADD COLUMN binding_error TEXT",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 impl ManagedLaunchStore {
@@ -452,7 +744,8 @@ impl ManagedLaunchStore {
                 provider_pid INTEGER,
                 provider_started_at_ms INTEGER,
                 terminal_opened_at_ms INTEGER,
-                terminal_error TEXT
+                terminal_error TEXT,
+                binding_error TEXT
             );
             CREATE TABLE IF NOT EXISTS binding_receipts (
                 receipt_id TEXT PRIMARY KEY,
@@ -496,6 +789,7 @@ impl ManagedLaunchStore {
             );
             "#,
         )?;
+        add_binding_error_column_if_missing(&conn)?;
         Ok(Self { conn })
     }
 
@@ -509,10 +803,11 @@ impl ManagedLaunchStore {
                 description, binding_initializer, provider_executable,
                 provider_arguments_json, tmux_socket_name, tmux_session_name,
                 created_at_ms, launched_at_ms, tmux_pane_id, provider_pid,
-                provider_started_at_ms, terminal_opened_at_ms, terminal_error
+                provider_started_at_ms, terminal_opened_at_ms, terminal_error,
+                binding_error
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
+                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
             )
             "#,
             params![
@@ -547,6 +842,7 @@ impl ManagedLaunchStore {
                     .map(|evidence| evidence.provider_process.started_at_ms),
                 registration.terminal_opened_at_ms,
                 registration.terminal_error,
+                registration.binding_error,
             ],
         )?;
         Ok(())
@@ -560,7 +856,7 @@ impl ManagedLaunchStore {
                    binding_initializer, provider_executable, provider_arguments_json,
                    tmux_socket_name, tmux_session_name, created_at_ms, launched_at_ms,
                    tmux_pane_id, provider_pid, provider_started_at_ms,
-                   terminal_opened_at_ms, terminal_error
+                   terminal_opened_at_ms, terminal_error, binding_error
             FROM managed_launch_registrations
             WHERE registration_id = ?1
             "#,
@@ -600,6 +896,7 @@ impl ManagedLaunchStore {
                     provider_started_at_ms,
                     row.get::<_, Option<i64>>(19)?,
                     row.get::<_, Option<String>>(20)?,
+                    row.get::<_, Option<String>>(21)?,
                 ))
             })
             .optional()?
@@ -626,6 +923,7 @@ impl ManagedLaunchStore {
                     provider_started_at_ms,
                     terminal_opened_at_ms,
                     terminal_error,
+                    binding_error,
                 )| {
                     Ok(ManagedLaunchRegistration {
                         id: registration_id.to_string(),
@@ -659,6 +957,7 @@ impl ManagedLaunchStore {
                         )?,
                         terminal_opened_at_ms,
                         terminal_error,
+                        binding_error,
                     })
                 },
             )
@@ -1007,6 +1306,36 @@ impl ManagedLaunchStore {
             registration_id,
         )
     }
+
+    fn remove_binding(&self, registration_id: &str) -> Result<()> {
+        update_one(
+            self.conn.execute(
+                "DELETE FROM managed_launch_registrations WHERE registration_id = ?1 AND status = 'binding'",
+                [registration_id],
+            )?,
+            registration_id,
+        )
+    }
+
+    fn mark_needs_review(&self, registration_id: &str, error: &str) -> Result<()> {
+        update_one(
+            self.conn.execute(
+                "UPDATE managed_launch_registrations SET status = 'needs_review', binding_error = ?2 WHERE registration_id = ?1 AND status = 'binding'",
+                params![registration_id, error],
+            )?,
+            registration_id,
+        )
+    }
+
+    fn mark_failed(&self, registration_id: &str, error: &str) -> Result<()> {
+        update_one(
+            self.conn.execute(
+                "UPDATE managed_launch_registrations SET status = 'failed', binding_error = ?2 WHERE registration_id = ?1 AND status = 'binding'",
+                params![registration_id, error],
+            )?,
+            registration_id,
+        )
+    }
 }
 
 fn persisted_launch_evidence(
@@ -1134,6 +1463,61 @@ impl ManagedLaunchBroker for TmuxLaunchBroker {
             tmux_pane_id: tmux_pane_id.to_string(),
             provider_process,
         })
+    }
+
+    fn cancel(&mut self, registration: &ManagedLaunchRegistration) -> Result<()> {
+        terminate_private_tmux(&self.tmux_executable, &registration.tmux)
+    }
+}
+
+fn terminate_private_tmux(
+    tmux_executable: &Path,
+    environment: &PrivateTmuxEnvironment,
+) -> Result<()> {
+    validate_executable(tmux_executable, "tmux")?;
+    validate_tmux_name(&environment.socket_name)?;
+    validate_tmux_name(&environment.session_name)?;
+    let status = Command::new(tmux_executable)
+        .env_remove("TMUX")
+        .args([OsStr::new("-f"), OsStr::new("/dev/null"), OsStr::new("-L")])
+        .arg(&environment.socket_name)
+        .arg("kill-server")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("could not clean private tmux")?;
+    if status.success() || status.code() == Some(1) {
+        Ok(())
+    } else {
+        Err(anyhow!("private tmux cleanup failed"))
+    }
+}
+
+fn clean_empty_private_tmux(
+    tmux_executable: &Path,
+    environment: &PrivateTmuxEnvironment,
+) -> Result<()> {
+    validate_executable(tmux_executable, "tmux")?;
+    validate_tmux_name(&environment.socket_name)?;
+    validate_tmux_name(&environment.session_name)?;
+    let probe = Command::new(tmux_executable)
+        .env_remove("TMUX")
+        .args([OsStr::new("-f"), OsStr::new("/dev/null"), OsStr::new("-L")])
+        .arg(&environment.socket_name)
+        .args([OsStr::new("has-session"), OsStr::new("-t")])
+        .arg(&environment.session_name)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("could not inspect private tmux")?;
+    if probe.code() == Some(1) {
+        Ok(())
+    } else if probe.success() {
+        Err(anyhow!("private tmux environment is not empty"))
+    } else {
+        Err(anyhow!("private tmux environment could not be inspected"))
     }
 }
 

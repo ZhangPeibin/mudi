@@ -6,7 +6,8 @@ use crate::collector::{self, ProjectResolverCache, ScanStats};
 use crate::config::Config;
 use crate::index::Index;
 use crate::managed_sessions::{
-    BindingOutcome, EvidenceBinder, ManagedLaunchStore, SystemProcessEvidence,
+    discover_tmux_executable, BindingOutcome, EvidenceBinder, ManagedLaunchStore,
+    SystemProcessEvidence, TmuxManagedLaunchCleanup,
 };
 use crate::models::ModelCatalog;
 use crate::providers::registry;
@@ -89,7 +90,12 @@ impl RefreshService {
 
         match self.managed_store.as_mut() {
             Ok(store) => {
-                let binder = EvidenceBinder::new(Box::new(SystemProcessEvidence));
+                let binder = EvidenceBinder::new(
+                    Box::new(SystemProcessEvidence),
+                    Box::new(TmuxManagedLaunchCleanup::new(
+                        discover_tmux_executable().unwrap_or_default(),
+                    )),
+                );
                 match store.binding_registrations() {
                     Ok(registrations) => {
                         for registration in registrations {
@@ -104,11 +110,11 @@ impl RefreshService {
                                 .runtime_control(registration.provider)
                                 .ok()
                                 .and_then(|adapter| adapter.binding_evidence(&self.cfg, process));
-                            if evidence.is_none() {
-                                continue;
-                            }
                             match binder.bind(store, &registration.id, evidence, now) {
-                                Ok(BindingOutcome::Bound(_)) | Ok(BindingOutcome::Waiting) => {}
+                                Ok(BindingOutcome::Bound(_))
+                                | Ok(BindingOutcome::Waiting)
+                                | Ok(BindingOutcome::NeedsReview)
+                                | Ok(BindingOutcome::Failed) => {}
                                 Err(error) => diagnostics.push(RefreshDiagnostic::new(
                                     "Managed Binding",
                                     error.to_string(),

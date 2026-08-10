@@ -8,9 +8,10 @@ use sessionmesh::domain::{
     Usage,
 };
 use sessionmesh::managed_sessions::{
-    BindingOutcome, EvidenceBinder, ManagedLaunchEvidence, ManagedLaunchRegistration,
-    ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget, PrivateTmuxEnvironment,
-    ProcessEvidence, ProviderNewCommand, SystemProcessEvidence,
+    BindingOutcome, EvidenceBinder, ManagedLaunchCleanup, ManagedLaunchEvidence,
+    ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget,
+    PrivateTmuxEnvironment, ProcessEvidence, ProviderNewCommand, ProviderProcessObservation,
+    SystemProcessEvidence,
 };
 use sessionmesh::providers::state::ProcessIdentity;
 use sessionmesh::providers::{registry, ProviderBindingEvidence};
@@ -25,8 +26,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct FixedProcessEvidence(Option<ProcessIdentity>);
 
 impl ProcessEvidence for FixedProcessEvidence {
-    fn current_identity(&self, _pid: u32) -> Option<ProcessIdentity> {
-        self.0
+    fn observe(&self, _pid: u32) -> ProviderProcessObservation {
+        self.0.map_or(
+            ProviderProcessObservation::Unknown,
+            ProviderProcessObservation::Live,
+        )
+    }
+}
+
+struct NoopCleanup;
+
+impl ManagedLaunchCleanup for NoopCleanup {
+    fn clean_empty(&self, _registration: &ManagedLaunchRegistration) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -39,7 +51,10 @@ fn binding_receipt_atomically_establishes_the_managed_session_and_current_run() 
     let registration = registration("launch-atomic", Provider::CodexCli, &worktree, process);
     let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(Box::new(FixedProcessEvidence(Some(process))));
+    let binder = EvidenceBinder::new(
+        Box::new(FixedProcessEvidence(Some(process))),
+        Box::new(NoopCleanup),
+    );
 
     let outcome = binder
         .bind(
@@ -116,7 +131,10 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
             InvalidEvidence::ReusedPid => Some(process(42, 49_000)),
             _ => Some(launch_process),
         };
-        let binder = EvidenceBinder::new(Box::new(FixedProcessEvidence(current_process)));
+        let binder = EvidenceBinder::new(
+            Box::new(FixedProcessEvidence(current_process)),
+            Box::new(NoopCleanup),
+        );
         let evidence = match case {
             InvalidEvidence::MissingSource => None,
             InvalidEvidence::ProviderMismatch => Some(binding_evidence(
@@ -166,12 +184,15 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
         if matches!(case, InvalidEvidence::MissingSource) {
             assert_eq!(outcome.unwrap(), BindingOutcome::Waiting, "{case:?}");
         } else {
-            assert!(outcome.is_err(), "{case:?} unexpectedly issued a Receipt");
+            assert_eq!(outcome.unwrap(), BindingOutcome::NeedsReview, "{case:?}");
         }
-        assert!(
-            store.get(&registration.id).unwrap().is_some(),
-            "{case:?} removed the Binding registration"
-        );
+        let retained = store.get(&registration.id).unwrap().unwrap();
+        let expected_status = if matches!(case, InvalidEvidence::MissingSource) {
+            ManagedLaunchStatus::Binding
+        } else {
+            ManagedLaunchStatus::NeedsReview
+        };
+        assert_eq!(retained.status, expected_status, "{case:?}");
         assert!(
             store
                 .managed_session(Provider::CodexCli, "native-session")
@@ -183,13 +204,16 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
 }
 
 #[test]
-fn conflicting_managed_identity_rolls_back_the_entire_receipt_transition() {
+fn conflicting_managed_identity_rolls_back_and_needs_review() {
     let temp = TempDir::new("rollback");
     let worktree = temp.directory("worktree");
     let source_path = temp.file("source.jsonl", "{}\n");
     let process = process(42, 41_000);
     let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
-    let binder = EvidenceBinder::new(Box::new(FixedProcessEvidence(Some(process))));
+    let binder = EvidenceBinder::new(
+        Box::new(FixedProcessEvidence(Some(process))),
+        Box::new(NoopCleanup),
+    );
 
     for registration_id in ["launch-first", "launch-conflict"] {
         store
@@ -231,8 +255,11 @@ fn conflicting_managed_identity_rolls_back_the_entire_receipt_transition() {
         51_000,
     );
 
-    assert!(conflict.is_err());
-    assert!(store.get("launch-conflict").unwrap().is_some());
+    assert_eq!(conflict.unwrap(), BindingOutcome::NeedsReview);
+    assert_eq!(
+        store.get("launch-conflict").unwrap().unwrap().status,
+        ManagedLaunchStatus::NeedsReview
+    );
     assert!(store.binding_receipt("launch-conflict").unwrap().is_none());
     assert_eq!(store.managed_sessions().unwrap().len(), 1);
     assert_eq!(store.managed_current_runs().unwrap().len(), 1);
@@ -668,6 +695,7 @@ fn registration(
         }),
         terminal_opened_at_ms: Some(42_000),
         terminal_error: None,
+        binding_error: None,
     }
 }
 

@@ -27,6 +27,12 @@ pub struct ProcessIdentity {
     pub started_at_ms: i64,
 }
 
+pub(crate) enum ProcessInspection {
+    Present(ProcessIdentity, bool),
+    Absent,
+    Unknown,
+}
+
 /// Live lifecycle evidence and the validated start of its Current Run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiveState {
@@ -187,22 +193,40 @@ pub(crate) fn process_identity_is_live(identity: ProcessIdentity) -> bool {
 }
 
 fn observe_process_identity(pid: u32) -> Option<(ProcessIdentity, bool)> {
-    let output = Command::new("ps")
+    match inspect_process_identity(pid) {
+        ProcessInspection::Present(identity, is_zombie) => Some((identity, is_zombie)),
+        ProcessInspection::Absent | ProcessInspection::Unknown => None,
+    }
+}
+
+pub(crate) fn inspect_process_identity(pid: u32) -> ProcessInspection {
+    let output = match Command::new("ps")
         .args(["-o", "stat=", "-o", "lstart=", "-p", &pid.to_string()])
         .env("LC_ALL", "C")
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(_) => return ProcessInspection::Unknown,
+    };
     if !output.status.success() {
-        return None;
+        return if output.status.code() == Some(1) {
+            ProcessInspection::Absent
+        } else {
+            ProcessInspection::Unknown
+        };
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut fields = stdout.trim().splitn(2, char::is_whitespace);
-    let state = fields.next()?;
-    let started_at_ms = parse_lstart(fields.next()?.trim())?;
-    Some((
+    let Some(state) = fields.next().filter(|state| !state.is_empty()) else {
+        return ProcessInspection::Absent;
+    };
+    let Some(started_at_ms) = fields.next().and_then(|value| parse_lstart(value.trim())) else {
+        return ProcessInspection::Unknown;
+    };
+    ProcessInspection::Present(
         ProcessIdentity { pid, started_at_ms },
         state.starts_with('Z'),
-    ))
+    )
 }
 
 pub(crate) fn process_identity(pid: u32) -> Option<ProcessIdentity> {
