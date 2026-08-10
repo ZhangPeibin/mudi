@@ -308,10 +308,7 @@ fn retry_open_terminal_only_reuses_the_preserved_launch_scene() {
         ManagedLaunchStatus::NeedsReview
     );
     assert_eq!(outcome.registration.launch_evidence, original_evidence);
-    assert_eq!(
-        outcome.registration.provider_command.arguments,
-        vec!["initializer-must-not-repeat"]
-    );
+    assert!(outcome.registration.provider_command.arguments.is_empty());
     assert_eq!(outcome.registration.terminal_opened_at_ms, Some(50_000));
     assert!(outcome.registration.terminal_error.is_none());
     let store = ManagedLaunchStore::open(&store_path).unwrap();

@@ -55,7 +55,14 @@ impl ManagedLaunchBroker for AssertPersistedBeforeLaunch {
         let persisted = ManagedLaunchStore::open(&self.store_path)?
             .get(&registration.id)?
             .expect("registration must exist before launch");
-        assert_eq!(persisted, *registration);
+        assert_eq!(persisted.id, registration.id);
+        assert_eq!(persisted.provider, registration.provider);
+        assert_eq!(persisted.target, registration.target);
+        assert_eq!(persisted.session_alias, registration.session_alias);
+        assert_eq!(persisted.description, registration.description);
+        assert!(!persisted.binding_initializer);
+        assert!(persisted.provider_command.executable.as_os_str().is_empty());
+        assert!(persisted.provider_command.arguments.is_empty());
         assert!(persisted.launched_at_ms.is_none());
         assert!(persisted.launch_evidence.is_none());
         self.launched.lock().unwrap().push(registration.id.clone());
@@ -146,7 +153,7 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
         persisted.description.as_deref(),
         Some("Trace the selected-context path")
     );
-    assert_eq!(persisted.provider_command.executable, codex);
+    assert!(persisted.provider_command.executable.as_os_str().is_empty());
     assert!(persisted.provider_command.arguments.is_empty());
     assert!(!persisted.binding_initializer);
     assert!(persisted.launched_at_ms.is_some());
@@ -654,7 +661,11 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
     assert_eq!(registration.provider, Provider::ClaudeCode);
     assert_eq!(registration.target.working_directory, project_root);
     assert_eq!(registration.session_alias, "Application launch");
-    assert_eq!(registration.provider_command.executable, claude);
+    assert!(registration
+        .provider_command
+        .executable
+        .as_os_str()
+        .is_empty());
     assert!(registration.terminal_opened_at_ms.is_some());
 }
 
@@ -762,10 +773,7 @@ fn application_routes_managed_launch_recovery_without_replaying_provider_launch(
         .unwrap()
         .unwrap();
     assert_eq!(retained_retry.status, ManagedLaunchStatus::NeedsReview);
-    assert_eq!(
-        retained_retry.provider_command.arguments,
-        vec!["private initializer"]
-    );
+    assert!(retained_retry.provider_command.arguments.is_empty());
     assert_eq!(retained_retry.launch_evidence, review_retry.launch_evidence);
 }
 

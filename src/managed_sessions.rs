@@ -553,6 +553,28 @@ impl EvidenceBinder {
         evidence: Option<ProviderBindingEvidence>,
         now_ms: i64,
     ) -> Result<BindingOutcome> {
+        self.bind_with_policy(store, registration_id, evidence, now_ms, true)
+    }
+
+    /// Reconcile a launch retained across a SessionMesh restart without cleanup side effects.
+    pub fn reconcile_after_restart(
+        &self,
+        store: &mut ManagedLaunchStore,
+        registration_id: &str,
+        evidence: Option<ProviderBindingEvidence>,
+        now_ms: i64,
+    ) -> Result<BindingOutcome> {
+        self.bind_with_policy(store, registration_id, evidence, now_ms, false)
+    }
+
+    fn bind_with_policy(
+        &self,
+        store: &mut ManagedLaunchStore,
+        registration_id: &str,
+        evidence: Option<ProviderBindingEvidence>,
+        now_ms: i64,
+        clean_confirmed_absence: bool,
+    ) -> Result<BindingOutcome> {
         let registration = store.get(registration_id)?.ok_or_else(|| {
             anyhow!("Binding Managed Launch Registration {registration_id} is unavailable")
         })?;
@@ -566,6 +588,13 @@ impl EvidenceBinder {
         }
         match self.process_evidence.observe(launch.provider_process.pid) {
             ProviderProcessObservation::Absent => {
+                if !clean_confirmed_absence {
+                    store.mark_needs_review(
+                        registration_id,
+                        "Provider process is absent after restart; launch scene was preserved",
+                    )?;
+                    return Ok(BindingOutcome::NeedsReview);
+                }
                 if let Err(error) = self.cleanup.clean_empty(&registration) {
                     store.mark_needs_review(
                         registration_id,
@@ -960,6 +989,31 @@ pub struct ManagedLaunchStore {
     conn: Connection,
 }
 
+const MANAGED_LAUNCH_REGISTRATION_SCHEMA: &str = r#"
+    CREATE TABLE managed_launch_registrations (
+        registration_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        project_kind TEXT NOT NULL,
+        project_path BLOB NOT NULL,
+        project_label TEXT NOT NULL,
+        worktree_root BLOB,
+        working_directory BLOB NOT NULL,
+        session_alias TEXT NOT NULL,
+        description TEXT,
+        tmux_socket_name TEXT NOT NULL,
+        tmux_session_name TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        launched_at_ms INTEGER,
+        tmux_pane_id TEXT,
+        provider_pid INTEGER,
+        provider_started_at_ms INTEGER,
+        terminal_opened_at_ms INTEGER,
+        terminal_error TEXT,
+        binding_error TEXT
+    );
+"#;
+
 fn add_binding_error_column_if_missing(conn: &Connection) -> Result<()> {
     let mut statement = conn.prepare("PRAGMA table_info(managed_launch_registrations)")?;
     let columns = statement
@@ -972,6 +1026,60 @@ fn add_binding_error_column_if_missing(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    Ok(())
+}
+
+fn remove_persisted_provider_commands(conn: &mut Connection) -> Result<()> {
+    let mut statement = conn.prepare("PRAGMA table_info(managed_launch_registrations)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    if !columns.iter().any(|column| {
+        matches!(
+            column.as_str(),
+            "binding_initializer" | "provider_executable" | "provider_arguments_json"
+        )
+    }) {
+        return Ok(());
+    }
+
+    conn.execute_batch("PRAGMA secure_delete = ON;")?;
+    let transaction = conn.transaction()?;
+    transaction.execute_batch(&format!(
+        r#"
+        DROP TABLE IF EXISTS managed_launch_registrations_content_safe;
+        {}
+        ALTER TABLE managed_launch_registrations RENAME TO managed_launch_registrations_legacy;
+        ALTER TABLE managed_launch_registrations_content_safe RENAME TO managed_launch_registrations;
+        "#,
+        MANAGED_LAUNCH_REGISTRATION_SCHEMA.replace(
+            "managed_launch_registrations",
+            "managed_launch_registrations_content_safe"
+        )
+    ))?;
+    transaction.execute_batch(
+        r#"
+        INSERT INTO managed_launch_registrations (
+            registration_id, status, provider, project_kind, project_path,
+            project_label, worktree_root, working_directory, session_alias,
+            description, tmux_socket_name, tmux_session_name, created_at_ms,
+            launched_at_ms, tmux_pane_id, provider_pid, provider_started_at_ms,
+            terminal_opened_at_ms, terminal_error, binding_error
+        )
+        SELECT registration_id, status, provider, project_kind, project_path,
+               project_label, worktree_root, working_directory, session_alias,
+               description, tmux_socket_name, tmux_session_name, created_at_ms,
+               launched_at_ms, tmux_pane_id, provider_pid, provider_started_at_ms,
+               terminal_opened_at_ms, terminal_error, binding_error
+        FROM managed_launch_registrations_legacy;
+        DROP TABLE managed_launch_registrations_legacy;
+        "#,
+    )?;
+    transaction.commit()?;
+    conn.execute_batch(
+        "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
+    )?;
     Ok(())
 }
 
@@ -1021,7 +1129,7 @@ impl ManagedLaunchStore {
             #[cfg(unix)]
             std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
         }
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         #[cfg(unix)]
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         conn.execute_batch(
@@ -1038,9 +1146,6 @@ impl ManagedLaunchStore {
                 working_directory BLOB NOT NULL,
                 session_alias TEXT NOT NULL,
                 description TEXT,
-                binding_initializer INTEGER NOT NULL,
-                provider_executable BLOB NOT NULL,
-                provider_arguments_json TEXT NOT NULL,
                 tmux_socket_name TEXT NOT NULL,
                 tmux_session_name TEXT NOT NULL,
                 created_at_ms INTEGER NOT NULL,
@@ -1096,6 +1201,7 @@ impl ManagedLaunchStore {
             "#,
         )?;
         add_binding_error_column_if_missing(&conn)?;
+        remove_persisted_provider_commands(&mut conn)?;
         ensure_managed_current_run_opaque_refs(&conn)?;
         Ok(Self { conn })
     }
@@ -1107,14 +1213,12 @@ impl ManagedLaunchStore {
             INSERT INTO managed_launch_registrations (
                 registration_id, status, provider, project_kind, project_path,
                 project_label, worktree_root, working_directory, session_alias,
-                description, binding_initializer, provider_executable,
-                provider_arguments_json, tmux_socket_name, tmux_session_name,
-                created_at_ms, launched_at_ms, tmux_pane_id, provider_pid,
-                provider_started_at_ms, terminal_opened_at_ms, terminal_error,
-                binding_error
+                description, tmux_socket_name, tmux_session_name, created_at_ms,
+                launched_at_ms, tmux_pane_id, provider_pid, provider_started_at_ms,
+                terminal_opened_at_ms, terminal_error, binding_error
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+                ?14, ?15, ?16, ?17, ?18, ?19, ?20
             )
             "#,
             params![
@@ -1128,9 +1232,6 @@ impl ManagedLaunchStore {
                 path_bytes(&registration.target.working_directory),
                 registration.session_alias,
                 registration.description,
-                registration.binding_initializer,
-                path_bytes(&registration.provider_command.executable),
-                serde_json::to_string(&registration.provider_command.arguments)?,
                 registration.tmux.socket_name,
                 registration.tmux.session_name,
                 registration.created_at_ms,
@@ -1160,7 +1261,6 @@ impl ManagedLaunchStore {
             r#"
             SELECT status, provider, project_kind, project_path, project_label,
                    worktree_root, working_directory, session_alias, description,
-                   binding_initializer, provider_executable, provider_arguments_json,
                    tmux_socket_name, tmux_session_name, created_at_ms, launched_at_ms,
                    tmux_pane_id, provider_pid, provider_started_at_ms,
                    terminal_opened_at_ms, terminal_error, binding_error
@@ -1176,11 +1276,9 @@ impl ManagedLaunchStore {
                 let project_path: Vec<u8> = row.get(3)?;
                 let worktree_root = row.get::<_, Option<Vec<u8>>>(5)?.map(path_from_bytes);
                 let working_directory = path_from_bytes(row.get(6)?);
-                let provider_executable = path_from_bytes(row.get(10)?);
-                let arguments_json: String = row.get(11)?;
-                let tmux_pane_id = row.get::<_, Option<String>>(16)?;
-                let provider_pid = row.get::<_, Option<u32>>(17)?;
-                let provider_started_at_ms = row.get::<_, Option<i64>>(18)?;
+                let tmux_pane_id = row.get::<_, Option<String>>(13)?;
+                let provider_pid = row.get::<_, Option<u32>>(14)?;
+                let provider_started_at_ms = row.get::<_, Option<i64>>(15)?;
                 Ok((
                     status,
                     provider,
@@ -1191,19 +1289,16 @@ impl ManagedLaunchStore {
                     working_directory,
                     row.get::<_, String>(7)?,
                     row.get::<_, Option<String>>(8)?,
-                    row.get::<_, bool>(9)?,
-                    provider_executable,
-                    arguments_json,
-                    row.get::<_, String>(12)?,
-                    row.get::<_, String>(13)?,
-                    row.get::<_, i64>(14)?,
-                    row.get::<_, Option<i64>>(15)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, Option<i64>>(12)?,
                     tmux_pane_id,
                     provider_pid,
                     provider_started_at_ms,
-                    row.get::<_, Option<i64>>(19)?,
-                    row.get::<_, Option<String>>(20)?,
-                    row.get::<_, Option<String>>(21)?,
+                    row.get::<_, Option<i64>>(16)?,
+                    row.get::<_, Option<String>>(17)?,
+                    row.get::<_, Option<String>>(18)?,
                 ))
             })
             .optional()?
@@ -1218,9 +1313,6 @@ impl ManagedLaunchStore {
                     working_directory,
                     session_alias,
                     description,
-                    binding_initializer,
-                    provider_executable,
-                    arguments_json,
                     tmux_socket_name,
                     tmux_session_name,
                     created_at_ms,
@@ -1245,11 +1337,10 @@ impl ManagedLaunchStore {
                         },
                         session_alias,
                         description,
-                        binding_initializer,
+                        binding_initializer: false,
                         provider_command: ProviderNewCommand {
-                            executable: provider_executable,
-                            arguments: serde_json::from_str(&arguments_json)
-                                .map_err(|_| anyhow!("invalid persisted Provider New arguments"))?,
+                            executable: PathBuf::new(),
+                            arguments: Vec::new(),
                         },
                         tmux: PrivateTmuxEnvironment {
                             socket_name: tmux_socket_name,

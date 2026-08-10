@@ -16,6 +16,7 @@ use crate::read_model::{ReadModelCache, RefreshDiagnostic, RefreshHealth, Refres
 use crate::session_labels::SessionLabels;
 use crate::signals::RecentSignalsEngine;
 use crate::tasks::TaskStore;
+use std::collections::HashSet;
 
 /// Owns source discovery, disposable indexing, derived signals, and read-model publication.
 pub struct RefreshService {
@@ -23,6 +24,8 @@ pub struct RefreshService {
     index: std::result::Result<Index, String>,
     task_store: std::result::Result<TaskStore, String>,
     managed_store: std::result::Result<ManagedLaunchStore, String>,
+    restart_binding_registrations: HashSet<String>,
+    managed_binding_reconciler: EvidenceBinder,
     managed_current_run_verifier: ManagedCurrentRunVerifier,
     models: ModelCatalog,
     alert_engine: AlertEngine,
@@ -38,7 +41,21 @@ impl RefreshService {
         let task_store = TaskStore::open(&cfg.task_store_path()).map_err(|error| error.to_string());
         let managed_store = ManagedLaunchStore::open(cfg.managed_launch_store_path())
             .map_err(|error| error.to_string());
+        let restart_binding_registrations = managed_store
+            .as_ref()
+            .ok()
+            .and_then(|store| store.binding_registrations().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|registration| registration.id)
+            .collect();
         Self {
+            managed_binding_reconciler: EvidenceBinder::new(
+                Box::new(SystemProcessEvidence),
+                Box::new(TmuxManagedLaunchCleanup::new(
+                    discover_tmux_executable().unwrap_or_default(),
+                )),
+            ),
             managed_current_run_verifier: ManagedCurrentRunVerifier::new(
                 cfg.clone(),
                 Box::new(SystemManagedCurrentRunEvidence),
@@ -49,6 +66,7 @@ impl RefreshService {
             index,
             task_store,
             managed_store,
+            restart_binding_registrations,
             attention_engine: AttentionEngine::default(),
             recent_signals_engine: RecentSignalsEngine::default(),
             project_resolver: ProjectResolverCache::default(),
@@ -62,6 +80,11 @@ impl RefreshService {
     ) -> Self {
         self.managed_current_run_verifier =
             ManagedCurrentRunVerifier::new(self.cfg.clone(), evidence);
+        self
+    }
+
+    pub fn with_managed_binding_reconciler(mut self, reconciler: EvidenceBinder) -> Self {
+        self.managed_binding_reconciler = reconciler;
         self
     }
 
@@ -107,12 +130,6 @@ impl RefreshService {
 
         match self.managed_store.as_mut() {
             Ok(store) => {
-                let binder = EvidenceBinder::new(
-                    Box::new(SystemProcessEvidence),
-                    Box::new(TmuxManagedLaunchCleanup::new(
-                        discover_tmux_executable().unwrap_or_default(),
-                    )),
-                );
                 match store.binding_registrations() {
                     Ok(registrations) => {
                         for registration in registrations {
@@ -127,11 +144,31 @@ impl RefreshService {
                                 .runtime_control(registration.provider)
                                 .ok()
                                 .and_then(|adapter| adapter.binding_evidence(&self.cfg, process));
-                            match binder.bind(store, &registration.id, evidence, now) {
+                            let outcome = if self
+                                .restart_binding_registrations
+                                .contains(&registration.id)
+                            {
+                                self.managed_binding_reconciler.reconcile_after_restart(
+                                    store,
+                                    &registration.id,
+                                    evidence,
+                                    now,
+                                )
+                            } else {
+                                self.managed_binding_reconciler.bind(
+                                    store,
+                                    &registration.id,
+                                    evidence,
+                                    now,
+                                )
+                            };
+                            match outcome {
                                 Ok(BindingOutcome::Bound(_))
-                                | Ok(BindingOutcome::Waiting)
                                 | Ok(BindingOutcome::NeedsReview)
-                                | Ok(BindingOutcome::Failed) => {}
+                                | Ok(BindingOutcome::Failed) => {
+                                    self.restart_binding_registrations.remove(&registration.id);
+                                }
+                                Ok(BindingOutcome::Waiting) => {}
                                 Err(error) => diagnostics.push(RefreshDiagnostic::new(
                                     "Managed Binding",
                                     error.to_string(),
