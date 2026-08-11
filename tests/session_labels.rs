@@ -1,8 +1,8 @@
 use sessionmesh::config::Config;
-use sessionmesh::domain::Provider;
+use sessionmesh::domain::{Provider, SessionIdentity};
 use sessionmesh::index::Index;
 use sessionmesh::providers::claude;
-use sessionmesh::session_labels::SessionLabels;
+use sessionmesh::session_labels::{CurationDisposition, SessionLabels};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -34,6 +34,117 @@ fn user_alias_survives_a_label_store_reload() {
     assert_eq!(
         reloaded.alias(Provider::ClaudeCode, "claude-session"),
         Some("Auth fix")
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn hidden_disposition_survives_reload_and_is_provider_scoped() {
+    let (directory, path) = temp_label_store("hidden-provider-identity");
+    let mut labels = SessionLabels::load(&path);
+    let claude = SessionIdentity {
+        provider: Provider::ClaudeCode,
+        native_id: "shared-native-id".into(),
+    };
+
+    labels.hide_sessions(std::slice::from_ref(&claude)).unwrap();
+
+    let reloaded = SessionLabels::load(&path);
+    assert_eq!(
+        reloaded.disposition(Provider::ClaudeCode, "shared-native-id"),
+        Some(CurationDisposition::Hidden)
+    );
+    assert_eq!(
+        reloaded.disposition(Provider::CodexCli, "shared-native-id"),
+        None
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn restore_and_permanent_exclusion_have_distinct_atomic_metadata_effects() {
+    let (directory, path) = temp_label_store("curation-actions");
+    let mut labels = SessionLabels::load(&path);
+    let restored = SessionIdentity {
+        provider: Provider::ClaudeCode,
+        native_id: "restore-me".into(),
+    };
+    let deleted = SessionIdentity {
+        provider: Provider::CodexCli,
+        native_id: "exclude-me".into(),
+    };
+    labels
+        .set_metadata(
+            deleted.provider,
+            &deleted.native_id,
+            "Disposable title",
+            "Disposable description",
+        )
+        .unwrap();
+    labels
+        .hide_sessions(&[restored.clone(), deleted.clone()])
+        .unwrap();
+
+    labels
+        .remove_from_hide(std::slice::from_ref(&restored))
+        .unwrap();
+    labels
+        .permanently_exclude_sessions(std::slice::from_ref(&deleted))
+        .unwrap();
+
+    let reloaded = SessionLabels::load(&path);
+    assert_eq!(
+        reloaded.disposition(restored.provider, &restored.native_id),
+        None
+    );
+    assert_eq!(
+        reloaded.disposition(deleted.provider, &deleted.native_id),
+        Some(CurationDisposition::PermanentlyExcluded)
+    );
+    assert_eq!(reloaded.alias(deleted.provider, &deleted.native_id), None);
+    assert_eq!(
+        reloaded.description(deleted.provider, &deleted.native_id),
+        None
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn permanent_exclusion_cannot_be_downgraded_or_relabelled() {
+    let (directory, path) = temp_label_store("permanent-exclusion-terminal");
+    let mut labels = SessionLabels::load(&path);
+    let session = SessionIdentity {
+        provider: Provider::CodexCli,
+        native_id: "excluded-session".into(),
+    };
+    labels
+        .permanently_exclude_sessions(std::slice::from_ref(&session))
+        .unwrap();
+
+    labels
+        .hide_sessions(std::slice::from_ref(&session))
+        .unwrap();
+    assert!(labels
+        .set_metadata(
+            session.provider,
+            &session.native_id,
+            "Should not return",
+            "Should not return",
+        )
+        .is_err());
+
+    let reloaded = SessionLabels::load(&path);
+    assert_eq!(
+        reloaded.disposition(session.provider, &session.native_id),
+        Some(CurationDisposition::PermanentlyExcluded)
+    );
+    assert_eq!(reloaded.alias(session.provider, &session.native_id), None);
+    assert_eq!(
+        reloaded.description(session.provider, &session.native_id),
+        None
     );
 
     std::fs::remove_dir_all(directory).unwrap();
@@ -83,7 +194,7 @@ fn version_one_store_migrates_when_description_is_saved() {
     );
     let written: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(written["version"], 2);
+    assert_eq!(written["version"], 3);
 
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -228,6 +339,82 @@ fn failed_metadata_save_publishes_neither_draft_in_memory() {
 }
 
 #[test]
+fn failed_permanent_exclusion_keeps_hidden_disposition_and_session_metadata() {
+    let (directory, path) = temp_label_store("permanent-exclusion-atomic-failure");
+    let mut labels = SessionLabels::load(&path);
+    let session = SessionIdentity {
+        provider: Provider::ClaudeCode,
+        native_id: "claude-session".into(),
+    };
+    labels
+        .set_metadata(
+            session.provider,
+            &session.native_id,
+            "Original title",
+            "Original description",
+        )
+        .unwrap();
+    labels
+        .hide_sessions(std::slice::from_ref(&session))
+        .unwrap();
+    std::fs::write(&path, b"broken during delete").unwrap();
+
+    assert!(labels
+        .permanently_exclude_sessions(std::slice::from_ref(&session))
+        .is_err());
+    assert_eq!(
+        labels.disposition(session.provider, &session.native_id),
+        Some(CurationDisposition::Hidden)
+    );
+    assert_eq!(
+        labels.alias(session.provider, &session.native_id),
+        Some("Original title")
+    );
+    assert_eq!(
+        labels.description(session.provider, &session.native_id),
+        Some("Original description")
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"broken during delete");
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn version_two_store_defaults_to_visible_and_migrates_on_first_curation_write() {
+    let (directory, path) = temp_label_store("v2-curation-migration");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        &path,
+        br#"{
+  "version": 2,
+  "aliases": [],
+  "descriptions": []
+}"#,
+    )
+    .unwrap();
+    let mut labels = SessionLabels::load(&path);
+    let session = SessionIdentity {
+        provider: Provider::CodexCli,
+        native_id: "legacy-session".into(),
+    };
+
+    assert_eq!(
+        labels.disposition(session.provider, &session.native_id),
+        None
+    );
+    labels
+        .hide_sessions(std::slice::from_ref(&session))
+        .unwrap();
+
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(written["version"], 3);
+    assert_eq!(written["curation"][0]["disposition"], "hidden");
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn malformed_label_store_is_preserved_and_disables_editing() {
     let (directory, path) = temp_label_store("malformed");
     std::fs::create_dir_all(&directory).unwrap();
@@ -250,7 +437,7 @@ fn malformed_label_store_is_preserved_and_disables_editing() {
 fn unsupported_label_store_version_is_preserved_and_disables_editing() {
     let (directory, path) = temp_label_store("unsupported-version");
     std::fs::create_dir_all(&directory).unwrap();
-    let original = br#"{"version":3,"aliases":[],"descriptions":[]}"#;
+    let original = br#"{"version":4,"aliases":[],"descriptions":[],"curation":[]}"#;
     std::fs::write(&path, original).unwrap();
 
     let labels = SessionLabels::load(&path);
@@ -259,7 +446,7 @@ fn unsupported_label_store_version_is_preserved_and_disables_editing() {
     assert!(labels
         .error()
         .unwrap()
-        .contains("unsupported schema version 3"));
+        .contains("unsupported schema version 4"));
     assert_eq!(std::fs::read(&path).unwrap(), original);
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -509,6 +696,12 @@ fn rebuilding_the_disposable_index_preserves_session_metadata() {
             "Persistent description",
         )
         .unwrap();
+    labels
+        .hide_sessions(&[SessionIdentity {
+            provider: Provider::ClaudeCode,
+            native_id: "claude-session".into(),
+        }])
+        .unwrap();
 
     drop(Index::open(&config.index_path()).unwrap());
     std::fs::remove_file(config.index_path()).unwrap();
@@ -523,6 +716,11 @@ fn rebuilding_the_disposable_index_preserves_session_metadata() {
         SessionLabels::load(config.label_store_path())
             .description(Provider::ClaudeCode, "claude-session"),
         Some("Persistent description")
+    );
+    assert_eq!(
+        SessionLabels::load(config.label_store_path())
+            .disposition(Provider::ClaudeCode, "claude-session"),
+        Some(CurationDisposition::Hidden)
     );
     std::fs::remove_dir_all(directory).unwrap();
 }

@@ -149,13 +149,15 @@ fn guide_content(
             heading(category.label()),
             Line::from("1 / 2 / 3  Open a page   n  New Session"),
             Line::from("Tab / Shift+Tab  Change region or Guide pane"),
-            Line::from("Up/Down or j/k  Move or scroll"),
+            Line::from("Up/Down or j/k  Move or scroll   Enter  Inspect or expand"),
             Line::from("Left/Right  Collapse, expand, or move through the Session Tree"),
-            Line::from("Enter  Inspect or expand"),
             Line::from("Enter  View an indexed linked Successor from Task Detail"),
-            Line::from("Esc  Back or close"),
+            Line::from("Esc  Back or close   ?  Guide   q  Quit"),
             Line::from("c  Copy the selected Session Detail field"),
             Line::from("h  Authorize a Handoff from Session Detail"),
+            Line::from("h  Open Hidden Tree from a top-level page"),
+            Line::from("H  Hide the selected Exited Session or Project snapshot"),
+            Line::from("u / d  Restore or permanently exclude from Hidden Tree"),
             Line::from("Left/Right  Choose a Successor Provider"),
             Line::from("o  Open a Ready Successor in Terminal.app"),
             Line::from("c  Copy a Ready Successor command"),
@@ -164,8 +166,6 @@ fn guide_content(
             Line::from("r  Refresh, or Retry an eligible Task"),
             Line::from("d  Delete a terminal Task and owned Artifact after confirmation"),
             Line::from("Tasks and Artifacts never expire automatically."),
-            Line::from("?  Guide"),
-            Line::from("q  Quit"),
         ],
         GuideCategory::Sessions => vec![
             heading(category.label()),
@@ -176,6 +176,8 @@ fn guide_content(
             Line::from("Short Session ID  The last eight characters used when no Alias exists."),
             Line::from("Duplicate Titles include their Short Session ID."),
             Line::from("e Edit session  Set or clear its local Title and Description."),
+            Line::from("Inventory: H hides Exited Sessions; h opens Hidden Tree."),
+            Line::from("u restores; d excludes permanently. Provider history stays unchanged."),
             heading("Providers"),
             Line::from(format!(
                 "{claude_mark} Claude Code   {codex_mark} Codex CLI"
@@ -186,8 +188,9 @@ fn guide_content(
             heading("Current Context"),
             Line::from("Current Context is the latest known content occupying the model window."),
             Line::from("It is not cumulative Processed Usage."),
-            Line::from(format!("Warning  {WARN_PCT:.0}%")),
-            Line::from(format!("Critical {CRIT_PCT:.0}%")),
+            Line::from(format!(
+                "Warning  {WARN_PCT:.0}%   Critical {CRIT_PCT:.0}%"
+            )),
         ],
         GuideCategory::Theme => vec![
             heading(category.label()),

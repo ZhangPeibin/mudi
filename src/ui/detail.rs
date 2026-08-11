@@ -25,6 +25,7 @@ enum DetailLine {
         value: String,
         selectable: bool,
         muted: bool,
+        hidden_list: bool,
     },
     Content(Line<'static>),
 }
@@ -36,6 +37,20 @@ impl DetailLine {
             value: value.into(),
             selectable,
             muted: false,
+            hidden_list: false,
+        }
+    }
+
+    fn hidden_list(count: usize) -> Self {
+        Self::Field {
+            label: "Hidden List",
+            value: format!(
+                "{count} hidden Session{}",
+                if count == 1 { "" } else { "s" }
+            ),
+            selectable: true,
+            muted: false,
+            hidden_list: true,
         }
     }
 
@@ -45,6 +60,7 @@ impl DetailLine {
             value: value.into(),
             selectable: false,
             muted: true,
+            hidden_list: false,
         }
     }
 
@@ -64,10 +80,21 @@ impl DetailLine {
                 label,
                 value,
                 selectable: true,
+                hidden_list: false,
                 ..
             } => Some((label, value.clone())),
             _ => None,
         }
+    }
+
+    fn opens_hidden_list(&self) -> bool {
+        matches!(
+            self,
+            Self::Field {
+                hidden_list: true,
+                ..
+            }
+        )
     }
 
     fn render(&self, selected: bool, theme: Theme) -> Line<'static> {
@@ -227,6 +254,11 @@ fn detail_lines(
         SessionState::Exited => "Exited",
     };
     let mut lines = Vec::new();
+    let hidden_count = super::hidden_tree::counts(snap, &ui.labels).1;
+    if hidden_count > 0 {
+        lines.push(DetailLine::hidden_list(hidden_count));
+        lines.push(DetailLine::Content(Line::from("")));
+    }
 
     let provider_model = session
         .latest_model
@@ -392,6 +424,18 @@ pub(super) fn selected_copy_request(snap: &Snapshot, ui: &Ui) -> Option<(&'stati
         .and_then(DetailLine::copy_value)
 }
 
+pub(super) fn selected_opens_hidden_list(snap: &Snapshot, ui: &Ui) -> bool {
+    let Some(session) = ui.detail_session(snap) else {
+        return false;
+    };
+    let Some(selected) = ui.detail.as_ref().map(|detail| detail.selected_field) else {
+        return false;
+    };
+    selectable_lines(snap, ui, session)
+        .get(selected)
+        .is_some_and(DetailLine::opens_hidden_list)
+}
+
 /// Move the Detail selection without changing the origin page's Session selection.
 pub(super) fn move_selected_field(ui: &mut Ui, snap: &Snapshot, forward: bool) {
     let Some(session) = ui.detail_session(snap) else {
@@ -456,6 +500,11 @@ pub(super) fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     }
     scroll = scroll.min(max_scroll);
     detail.scroll.set(scroll);
+    let footer = if super::hidden_tree::counts(snap, &ui.labels).1 > 0 {
+        " Up/Down Select | Enter Open | c Copy | h Handoff | Esc Close "
+    } else {
+        " Up/Down Select | c Copy | h Handoff | Esc Close "
+    };
 
     // Preserve the origin page while reducing its contrast before clearing the modal surface.
     f.render_widget(
@@ -472,11 +521,7 @@ pub(super) fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
                 .add_modifier(Modifier::BOLD),
         ))
         .title_bottom(
-            Line::from(Span::styled(
-                " Up/Down Select | c Copy | h Handoff | Esc Close ",
-                Style::default().fg(theme.muted),
-            ))
-            .left_aligned(),
+            Line::from(Span::styled(footer, Style::default().fg(theme.muted))).left_aligned(),
         )
         .title_bottom(
             Line::from(Span::styled(

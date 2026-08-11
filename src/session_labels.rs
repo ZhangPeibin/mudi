@@ -1,6 +1,6 @@
 //! Persistent, SessionMesh-owned metadata for provider-native Sessions.
 
-use crate::domain::Provider;
+use crate::domain::{Provider, SessionIdentity};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
-const SCHEMA_VERSION: u32 = 2;
-const LEGACY_SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 3;
+const LEGACY_SCHEMA_VERSIONS: [u32; 2] = [1, 2];
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -27,6 +27,8 @@ struct LabelFile {
     aliases: Vec<AliasRecord>,
     #[serde(default)]
     descriptions: Vec<DescriptionRecord>,
+    #[serde(default)]
+    curation: Vec<CurationRecord>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,10 +45,25 @@ struct DescriptionRecord {
     description: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurationDisposition {
+    Hidden,
+    PermanentlyExcluded,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CurationRecord {
+    provider: String,
+    session_id: String,
+    disposition: CurationDisposition,
+}
+
 #[derive(Debug, Default)]
 struct SessionMetadata {
     aliases: HashMap<SessionKey, String>,
     descriptions: HashMap<SessionKey, String>,
+    curation: HashMap<SessionKey, CurationDisposition>,
 }
 
 /// Authoritative local Session Alias and Description storage.
@@ -55,6 +72,7 @@ pub struct SessionLabels {
     path: Option<PathBuf>,
     aliases: HashMap<SessionKey, String>,
     descriptions: HashMap<SessionKey, String>,
+    curation: HashMap<SessionKey, CurationDisposition>,
     load_error: Option<String>,
 }
 
@@ -82,6 +100,7 @@ impl SessionLabels {
             path: Some(path),
             aliases: metadata.aliases,
             descriptions: metadata.descriptions,
+            curation: metadata.curation,
             load_error,
         }
     }
@@ -121,6 +140,76 @@ impl SessionLabels {
                 native_id: native_id.to_string(),
             })
             .map(String::as_str)
+    }
+
+    pub fn disposition(&self, provider: Provider, native_id: &str) -> Option<CurationDisposition> {
+        self.curation
+            .get(&SessionKey {
+                provider,
+                native_id: native_id.to_string(),
+            })
+            .copied()
+    }
+
+    pub fn hide_sessions(&mut self, sessions: &[SessionIdentity]) -> std::io::Result<()> {
+        if let Some(error) = &self.load_error {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        let mut next = self.latest_metadata()?;
+        for session in sessions {
+            let key = SessionKey {
+                provider: session.provider,
+                native_id: session.native_id.clone(),
+            };
+            if next.curation.get(&key) != Some(&CurationDisposition::PermanentlyExcluded) {
+                next.curation.insert(key, CurationDisposition::Hidden);
+            }
+        }
+        self.save(&next)?;
+        self.publish(next);
+        Ok(())
+    }
+
+    pub fn remove_from_hide(&mut self, sessions: &[SessionIdentity]) -> std::io::Result<()> {
+        if let Some(error) = &self.load_error {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        let mut next = self.latest_metadata()?;
+        for session in sessions {
+            let key = SessionKey {
+                provider: session.provider,
+                native_id: session.native_id.clone(),
+            };
+            if next.curation.get(&key) == Some(&CurationDisposition::Hidden) {
+                next.curation.remove(&key);
+            }
+        }
+        self.save(&next)?;
+        self.publish(next);
+        Ok(())
+    }
+
+    pub fn permanently_exclude_sessions(
+        &mut self,
+        sessions: &[SessionIdentity],
+    ) -> std::io::Result<()> {
+        if let Some(error) = &self.load_error {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        let mut next = self.latest_metadata()?;
+        for session in sessions {
+            let key = SessionKey {
+                provider: session.provider,
+                native_id: session.native_id.clone(),
+            };
+            next.aliases.remove(&key);
+            next.descriptions.remove(&key);
+            next.curation
+                .insert(key, CurationDisposition::PermanentlyExcluded);
+        }
+        self.save(&next)?;
+        self.publish(next);
+        Ok(())
     }
 
     /// Resolve one Session's current Title without surrounding Provider context.
@@ -179,13 +268,12 @@ impl SessionLabels {
         }
         let alias = validate_alias(alias)?;
         let mut next = self.latest_metadata()?;
-        next.aliases.insert(
-            SessionKey {
-                provider,
-                native_id: native_id.to_string(),
-            },
-            alias,
-        );
+        let key = SessionKey {
+            provider,
+            native_id: native_id.to_string(),
+        };
+        reject_permanent_exclusion(&next, &key)?;
+        next.aliases.insert(key, alias);
         self.save(&next)?;
         self.publish(next);
         Ok(())
@@ -225,6 +313,7 @@ impl SessionLabels {
             native_id: native_id.to_string(),
         };
         let mut next = self.latest_metadata()?;
+        reject_permanent_exclusion(&next, &key)?;
         replace_optional(&mut next.aliases, key.clone(), title);
         replace_optional(&mut next.descriptions, key, description);
         self.save(&next)?;
@@ -237,6 +326,7 @@ impl SessionLabels {
             return Ok(SessionMetadata {
                 aliases: self.aliases.clone(),
                 descriptions: self.descriptions.clone(),
+                curation: self.curation.clone(),
             });
         };
         match fs::read(path) {
@@ -283,10 +373,25 @@ impl SessionLabels {
                 .cmp(&right.provider)
                 .then_with(|| left.session_id.cmp(&right.session_id))
         });
+        let mut curation = metadata
+            .curation
+            .iter()
+            .map(|(key, disposition)| CurationRecord {
+                provider: key.provider.as_str().to_string(),
+                session_id: key.native_id.clone(),
+                disposition: *disposition,
+            })
+            .collect::<Vec<_>>();
+        curation.sort_by(|left, right| {
+            left.provider
+                .cmp(&right.provider)
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
         let contents = serde_json::to_vec_pretty(&LabelFile {
             version: SCHEMA_VERSION,
             aliases,
             descriptions,
+            curation,
         })
         .map_err(std::io::Error::other)?;
         atomic_write_private_file(path, &contents)
@@ -295,6 +400,18 @@ impl SessionLabels {
     fn publish(&mut self, metadata: SessionMetadata) {
         self.aliases = metadata.aliases;
         self.descriptions = metadata.descriptions;
+        self.curation = metadata.curation;
+    }
+}
+
+fn reject_permanent_exclusion(metadata: &SessionMetadata, key: &SessionKey) -> std::io::Result<()> {
+    if metadata.curation.get(key) == Some(&CurationDisposition::PermanentlyExcluded) {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Permanently excluded Session metadata cannot be edited",
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -455,9 +572,9 @@ fn atomic_write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()
 
 fn decode(contents: &[u8]) -> Result<SessionMetadata, String> {
     let file = serde_json::from_slice::<LabelFile>(contents).map_err(|error| error.to_string())?;
-    if !matches!(file.version, LEGACY_SCHEMA_VERSION | SCHEMA_VERSION) {
+    if file.version != SCHEMA_VERSION && !LEGACY_SCHEMA_VERSIONS.contains(&file.version) {
         return Err(format!(
-            "unsupported schema version {} (expected {LEGACY_SCHEMA_VERSION} or {SCHEMA_VERSION})",
+            "unsupported schema version {} (expected 1, 2, or {SCHEMA_VERSION})",
             file.version
         ));
     }
@@ -495,8 +612,24 @@ fn decode(contents: &[u8]) -> Result<SessionMetadata, String> {
             ))
         })
         .collect::<Result<HashMap<_, _>, String>>()?;
+    let curation = file
+        .curation
+        .into_iter()
+        .map(|record| {
+            let provider = Provider::parse(&record.provider)
+                .ok_or_else(|| format!("unknown Provider {:?}", record.provider))?;
+            Ok((
+                SessionKey {
+                    provider,
+                    native_id: record.session_id,
+                },
+                record.disposition,
+            ))
+        })
+        .collect::<Result<HashMap<_, _>, String>>()?;
     Ok(SessionMetadata {
         aliases,
         descriptions,
+        curation,
     })
 }

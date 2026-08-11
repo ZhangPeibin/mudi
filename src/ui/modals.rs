@@ -16,7 +16,8 @@ use unicode_width::UnicodeWidthStr;
 
 /// Whether a modal interaction layer currently owns input over page content.
 pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
-    ui.detail.is_some()
+    ui.hidden_tree_open
+        || ui.detail.is_some()
         || ui.guide_open
         || ui.new_session.is_some()
         || ui.edit_session.is_some()
@@ -25,12 +26,14 @@ pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
         || ui.task_cancellation_confirmation.is_some()
         || ui.task_deletion_confirmation.is_some()
         || ui.task_retry_confirmation.is_some()
+        || ui.hide_confirmation.is_some()
+        || ui.inventory_delete_confirmation.is_some()
 }
 
 /// 按层级绘制当前打开的 Detail、Guide、编辑器和授权确认框。
 pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     // 后绘制的确认框覆盖 Detail，保证授权流程始终处于最高优先级。
-    if ui.detail_session(snap).is_some() {
+    if !ui.hidden_tree_open && ui.detail_session(snap).is_some() {
         detail::draw(f, snap, ui);
     }
     if ui.guide_open {
@@ -57,6 +60,137 @@ pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     if ui.task_retry_confirmation.is_some() {
         draw_task_retry_confirmation(f, ui);
     }
+    if ui.hide_confirmation.is_some() {
+        draw_hide_confirmation(f, ui);
+    }
+    if ui.inventory_delete_confirmation.is_some() {
+        draw_inventory_delete_confirmation(f, ui);
+    }
+}
+
+fn draw_inventory_delete_confirmation(f: &mut Frame, ui: &Ui) {
+    let Some(target) = ui.inventory_delete_confirmation.as_ref() else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let count = target.sessions.len();
+    let plural = if count == 1 { "" } else { "s" };
+    let area = layout::centered_rect_with_max_width(72, 50, 72, f.area());
+    f.render_widget(Clear, area);
+    let lines = vec![
+        Line::from(Span::styled(
+            if count == 1 {
+                "Permanently Exclude Session?"
+            } else {
+                "Permanently Exclude Project Sessions?"
+            },
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!(
+            "{count} Session{plural} will be removed from SessionMesh inventory."
+        )),
+        Line::from("Alias and Description will be deleted."),
+        Line::from("Provider JSONL remains unchanged."),
+        Line::from("Managed, Task, Handoff, and Successor records remain unchanged."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter Delete   Esc Keep Hidden",
+            Style::default().fg(theme.accent),
+        )),
+    ];
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.critical))
+                    .title(" Permanent SessionMesh Exclusion "),
+            )
+            .style(Style::default().fg(theme.foreground).bg(theme.background)),
+        area,
+    );
+}
+
+fn draw_hide_confirmation(f: &mut Frame, ui: &Ui) {
+    let Some(target) = ui.hide_confirmation.as_ref() else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let area = layout::centered_rect_with_max_width(64, 42, 64, f.area());
+    f.render_widget(Clear, area);
+    let (title, lines, footer) = match target {
+        super::HideConfirmation::Session { session, title } => (
+            " Hide Session ",
+            vec![
+                Line::from(Span::styled(
+                    "Hide Session?",
+                    Style::default()
+                        .fg(theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(format!("Title       {title}")),
+                Line::from(format!("Provider    {}", session.provider.label())),
+                Line::from(format!("Session ID  {}", session.native_id)),
+                Line::from(""),
+                Line::from("Provider history remains unchanged."),
+                Line::from("The Session can be restored from Hidden Tree."),
+                Line::from(""),
+            ],
+            "Enter Hide   Esc Keep Visible".to_string(),
+        ),
+        super::HideConfirmation::Project {
+            project_label,
+            sessions,
+            open_count,
+        } => (
+            " Hide Project Sessions ",
+            vec![
+                Line::from(Span::styled(
+                    "Hide Project Sessions?",
+                    Style::default()
+                        .fg(theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(format!("Project  {project_label}")),
+                Line::from(format!(
+                    "{} Exited Session{} will be hidden",
+                    sessions.len(),
+                    if sessions.len() == 1 { "" } else { "s" }
+                )),
+                Line::from(format!(
+                    "{open_count} Open Session{} will remain visible",
+                    if *open_count == 1 { "" } else { "s" }
+                )),
+                Line::from("Future Sessions remain visible."),
+                Line::from("Provider history remains unchanged."),
+                Line::from(""),
+            ],
+            format!("Enter Hide {}   Esc Keep Visible", sessions.len()),
+        ),
+    };
+    let mut lines = lines;
+    lines.push(Line::from(Span::styled(
+        footer,
+        Style::default().fg(theme.accent),
+    )));
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(title),
+            )
+            .style(Style::default().fg(theme.foreground).bg(theme.background)),
+        area,
+    );
 }
 
 fn draw_managed_resume_confirmation(f: &mut Frame, ui: &Ui) {

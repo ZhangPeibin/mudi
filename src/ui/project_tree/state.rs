@@ -135,6 +135,13 @@ impl State {
         find_session(snap, &identity)
     }
 
+    pub(in crate::ui) fn selected_project(&self, snap: &Snapshot) -> Option<ProjectIdentity> {
+        let ProjectTreeKey::Project(identity) = self.effective_selection(snap)? else {
+            return None;
+        };
+        Some(identity)
+    }
+
     pub(in crate::ui) fn new_target_selection(
         &self,
         snap: &Snapshot,

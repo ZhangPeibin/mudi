@@ -13,6 +13,7 @@ use sessionmesh::domain::{
     SessionState, SourceFormat, SourceMetadata, Usage, UsageSummary, Worktree,
 };
 use sessionmesh::providers::state::ProcessIdentity;
+use sessionmesh::session_labels::{CurationDisposition, SessionLabels};
 use sessionmesh::signals::{
     ContextAlertLevel, RecentSignal, RecentSignalKind, SharedWorktreeRiskChange,
 };
@@ -589,6 +590,717 @@ fn assert_fixture(rendered: &ProductionRender, fixture: &str) {
 fn press(ui: &mut Ui, snapshot: &Snapshot, code: KeyCode) {
     ui.handle_key(KeyEvent::new(code, KeyModifiers::NONE), snapshot)
         .unwrap();
+}
+
+#[test]
+fn exited_session_hide_is_confirmed_persisted_and_removed_from_the_normal_tree() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hide-session-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let mut snapshot = production_snapshot();
+    let mut exited = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    exited.last_activity_ms = snapshot.generated_ms - 1_000;
+    snapshot.sessions = vec![exited.clone()];
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Right);
+    press(&mut ui, &snapshot, KeyCode::Down);
+
+    press(&mut ui, &snapshot, KeyCode::Char('H'));
+    let confirmation = render(&snapshot, &ui, 120, 30).text;
+    for required in [
+        "Hide Session?",
+        "Codex CLI",
+        "codex-exited",
+        "Enter Hide",
+        "Esc Keep Visible",
+    ] {
+        assert!(
+            confirmation.contains(required),
+            "missing Hide confirmation text {required:?}\n{confirmation}"
+        );
+    }
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let hidden = render(&snapshot, &ui, 120, 30).text;
+    assert!(!hidden.contains("x-exited"));
+    let labels = SessionLabels::load(directory.join("session-labels.json"));
+    assert_eq!(
+        labels.disposition(exited.provider, &exited.id),
+        Some(CurationDisposition::Hidden)
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn open_session_cannot_be_hidden() {
+    let source = production_snapshot();
+    let open = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "claude-critical")
+        .unwrap()
+        .clone();
+    let snapshot = Snapshot {
+        sessions: vec![open],
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+
+    press(&mut ui, &snapshot, KeyCode::Char('H'));
+
+    let rendered = render(&snapshot, &ui, 120, 30).text;
+    assert!(rendered.contains("Open Session cannot be hidden"));
+    assert!(!rendered.contains("Hide Session?"));
+}
+
+#[test]
+fn hide_confirmation_revalidates_that_the_session_is_still_exited() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hide-revalidation-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let source = production_snapshot();
+    let mut exited = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    exited.last_activity_ms = source.generated_ms - 1_000;
+    let mut snapshot = Snapshot {
+        sessions: vec![exited.clone()],
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Right);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Char('H'));
+
+    snapshot.sessions[0].state = SessionState::Busy;
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Open Session cannot be hidden"));
+    assert_eq!(
+        SessionLabels::load(directory.join("session-labels.json"))
+            .disposition(exited.provider, &exited.id),
+        None
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn project_hide_is_a_snapshot_that_skips_and_reports_open_sessions() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hide-project-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let source = production_snapshot();
+    let open = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "claude-critical")
+        .unwrap()
+        .clone();
+    let mut first_exited = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    first_exited.project = open.project.clone();
+    first_exited.worktree = open.worktree.clone();
+    first_exited.cwd = open.cwd.clone();
+    first_exited.last_activity_ms = source.generated_ms - 1_000;
+    let mut second_exited = first_exited.clone();
+    second_exited.provider = Provider::ClaudeCode;
+    second_exited.id = "claude-exited-too".into();
+    second_exited.last_activity_ms = source.generated_ms - 2_000;
+    let snapshot = Snapshot {
+        sessions: vec![open.clone(), first_exited.clone(), second_exited.clone()],
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Left);
+
+    press(&mut ui, &snapshot, KeyCode::Char('H'));
+    let confirmation = render(&snapshot, &ui, 120, 30).text;
+    for required in [
+        "Hide Project Sessions?",
+        "2 Exited Sessions will be hidden",
+        "1 Open Session will remain visible",
+        "Future Sessions remain visible",
+        "Enter Hide 2",
+    ] {
+        assert!(
+            confirmation.contains(required),
+            "missing Project Hide text {required:?}\n{confirmation}"
+        );
+    }
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let rendered = render(&snapshot, &ui, 120, 30).text;
+    assert!(rendered.contains("critical"));
+    assert!(!rendered.contains("x-exited"));
+    let labels = SessionLabels::load(directory.join("session-labels.json"));
+    for exited in [&first_exited, &second_exited] {
+        assert_eq!(
+            labels.disposition(exited.provider, &exited.id),
+            Some(CurationDisposition::Hidden)
+        );
+    }
+    assert_eq!(labels.disposition(open.provider, &open.id), None);
+
+    let mut future = first_exited.clone();
+    future.id = "codex-future-session".into();
+    future.state = SessionState::Busy;
+    future.last_activity_ms = source.generated_ms + 1_000;
+    let mut rediscovered = snapshot.clone();
+    rediscovered.sessions.push(future.clone());
+    let visible_again = render(&rediscovered, &ui, 120, 30).text;
+    assert!(visible_again.contains("-session"));
+    assert_eq!(labels.disposition(future.provider, &future.id), None);
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn global_hidden_tree_shortcut_reports_an_empty_state_without_opening_a_view() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+
+    press(&mut ui, &snapshot, KeyCode::Char('h'));
+
+    let rendered = render(&snapshot, &ui, 120, 30).text;
+    assert!(rendered.contains("No hidden sessions"));
+    assert!(!rendered.contains("HIDDEN SESSIONS"));
+}
+
+#[test]
+fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hidden-tree-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let mut snapshot = production_snapshot();
+    let mut first = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    first.project = Some(Project {
+        identity: ProjectIdentity::GitCommonDir(PathBuf::from(
+            "/Users/fixture/code/sessionmesh-exited/.git",
+        )),
+        label: "sessionmesh-exited".into(),
+    });
+    let mut second_project = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == "claude-older")
+        .unwrap()
+        .clone();
+    second_project.project = Some(Project {
+        identity: ProjectIdentity::GitCommonDir(PathBuf::from(
+            "/Users/fixture/code/sessionmesh-older/.git",
+        )),
+        label: "sessionmesh-older".into(),
+    });
+    let mut newer = first.clone();
+    newer.provider = Provider::ClaudeCode;
+    newer.id = "claude-newest-hidden".into();
+    newer.last_activity_ms = first.last_activity_ms + 1_000;
+    snapshot.sessions = vec![first.clone(), newer.clone(), second_project.clone()];
+    let label_path = directory.join("session-labels.json");
+    let mut labels = SessionLabels::load(&label_path);
+    labels
+        .set_metadata(newer.provider, &newer.id, "Newest hidden", "")
+        .unwrap();
+    labels
+        .set_metadata(first.provider, &first.id, "Older hidden", "")
+        .unwrap();
+    labels
+        .hide_sessions(&[
+            SessionIdentity::from(&first),
+            SessionIdentity::from(&newer),
+            SessionIdentity::from(&second_project),
+        ])
+        .unwrap();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+
+    press(&mut ui, &snapshot, KeyCode::Char('h'));
+    let collapsed = render(&snapshot, &ui, 120, 30).text;
+    assert!(collapsed.contains("HIDDEN SESSIONS"));
+    assert!(collapsed.contains("2 Projects"), "{collapsed}");
+    assert!(collapsed.contains("3 Sessions"));
+    assert!(collapsed.contains("sessionmesh-exited"));
+    assert!(collapsed.contains("sessionmesh-older"));
+    assert!(!collapsed.contains("Newest hidden"));
+    assert!(!collapsed.contains("Older hidden"));
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let expanded = render(&snapshot, &ui, 120, 30).text;
+    let newest = expanded.find("Newest hidden").unwrap();
+    let older = expanded.find("Older hidden").unwrap();
+    assert!(
+        newest < older,
+        "newest Session should render first\n{expanded}"
+    );
+    assert!(expanded.contains("done"));
+    press(&mut ui, &snapshot, KeyCode::Left);
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Newest hidden"));
+    press(&mut ui, &snapshot, KeyCode::Right);
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Newest hidden"));
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Char('d'));
+    assert!(!render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Permanently Exclude"));
+
+    let mut restarted = Ui::load(&profile_path, None).unwrap();
+    press(&mut restarted, &snapshot, KeyCode::Char('h'));
+    let restarted = render(&snapshot, &restarted, 120, 30).text;
+    assert!(!restarted.contains("Newest hidden"));
+    assert!(!restarted.contains("Older hidden"));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn session_detail_hidden_list_entry_opens_the_same_tree_and_restores_its_origin() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-detail-hidden-list-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let snapshot = production_snapshot();
+    let hidden = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap();
+    SessionLabels::load(directory.join("session-labels.json"))
+        .hide_sessions(&[SessionIdentity::from(hidden)])
+        .unwrap();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let detail = render(&snapshot, &ui, 120, 30).text;
+    assert!(detail.contains("Session Detail"));
+    assert!(detail.contains("Hidden List"));
+    assert!(detail.contains("1 hidden Session"));
+    assert!(detail.contains("h Handoff"));
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let hidden_tree = render(&snapshot, &ui, 120, 30).text;
+    assert!(hidden_tree.contains("HIDDEN SESSIONS"));
+    assert!(!hidden_tree.contains("Session Detail"));
+    press(&mut ui, &snapshot, KeyCode::Esc);
+    let restored = render(&snapshot, &ui, 120, 30).text;
+    assert!(restored.contains("Session Detail"));
+    assert!(restored.contains("Hidden List"));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn hidden_tree_u_restores_the_selected_session_to_its_origin_inventory() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hidden-restore-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let source = production_snapshot();
+    let mut hidden = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    hidden.last_activity_ms = source.generated_ms - 1_000;
+    let snapshot = Snapshot {
+        sessions: vec![hidden.clone()],
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let label_path = directory.join("session-labels.json");
+    SessionLabels::load(&label_path)
+        .hide_sessions(&[SessionIdentity::from(&hidden)])
+        .unwrap();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Char('3'));
+    press(&mut ui, &snapshot, KeyCode::Char('h'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+
+    press(&mut ui, &snapshot, KeyCode::Char('u'));
+
+    let restored = render(&snapshot, &ui, 120, 30).text;
+    assert!(!restored.contains("HIDDEN SESSIONS"));
+    assert!(restored.contains("x-exited"));
+    assert!(restored.contains("1 Session restored"));
+    assert_eq!(
+        SessionLabels::load(&label_path).disposition(hidden.provider, &hidden.id),
+        None
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn hidden_tree_d_permanently_excludes_metadata_without_touching_provider_jsonl() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hidden-delete-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    let source_path = directory.join("provider-session.jsonl");
+    let source_contents = br#"{"type":"provider-owned"}\n"#;
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    std::fs::write(&source_path, source_contents).unwrap();
+    let source = production_snapshot();
+    let mut hidden = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    hidden.source.path = source_path.clone();
+    hidden.last_activity_ms = source.generated_ms - 1_000;
+    let snapshot = Snapshot {
+        sessions: vec![hidden.clone()],
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let label_path = directory.join("session-labels.json");
+    let mut labels = SessionLabels::load(&label_path);
+    labels
+        .set_metadata(
+            hidden.provider,
+            &hidden.id,
+            "Delete me",
+            "No longer relevant",
+        )
+        .unwrap();
+    labels
+        .hide_sessions(&[SessionIdentity::from(&hidden)])
+        .unwrap();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Char('h'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+
+    press(&mut ui, &snapshot, KeyCode::Char('d'));
+    let confirmation = render(&snapshot, &ui, 120, 30).text;
+    for required in [
+        "Permanently Exclude Session?",
+        "1 Session",
+        "Alias and Description",
+        "Provider JSONL remains unchanged",
+        "Enter Delete",
+        "Esc Keep Hidden",
+    ] {
+        assert!(
+            confirmation.contains(required),
+            "missing Delete text {required:?}\n{confirmation}"
+        );
+    }
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let labels = SessionLabels::load(&label_path);
+    assert_eq!(
+        labels.disposition(hidden.provider, &hidden.id),
+        Some(CurationDisposition::PermanentlyExcluded)
+    );
+    assert_eq!(labels.alias(hidden.provider, &hidden.id), None);
+    assert_eq!(labels.description(hidden.provider, &hidden.id), None);
+    assert_eq!(std::fs::read(&source_path).unwrap(), source_contents);
+    assert!(!render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("HIDDEN SESSIONS"));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn hidden_tree_project_delete_applies_to_all_current_hidden_sessions() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hidden-project-delete-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let source = production_snapshot();
+    let first = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    let mut second = first.clone();
+    second.provider = Provider::ClaudeCode;
+    second.id = "claude-hidden-peer".into();
+    second.last_activity_ms -= 1_000;
+    let snapshot = Snapshot {
+        sessions: vec![first.clone(), second.clone()],
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let label_path = directory.join("session-labels.json");
+    SessionLabels::load(&label_path)
+        .hide_sessions(&[
+            SessionIdentity::from(&first),
+            SessionIdentity::from(&second),
+        ])
+        .unwrap();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Char('h'));
+
+    press(&mut ui, &snapshot, KeyCode::Char('d'));
+    let confirmation = render(&snapshot, &ui, 120, 30).text;
+    assert!(confirmation.contains("Permanently Exclude Project Sessions?"));
+    assert!(confirmation.contains("2 Sessions"));
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    let labels = SessionLabels::load(&label_path);
+    for session in [&first, &second] {
+        assert_eq!(
+            labels.disposition(session.provider, &session.id),
+            Some(CurationDisposition::PermanentlyExcluded)
+        );
+    }
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn hidden_tree_project_restore_applies_to_all_current_hidden_sessions() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hidden-project-restore-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let source = production_snapshot();
+    let first = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    let mut second = first.clone();
+    second.provider = Provider::ClaudeCode;
+    second.id = "claude-hidden-peer".into();
+    let snapshot = Snapshot {
+        sessions: vec![first.clone(), second.clone()],
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let label_path = directory.join("session-labels.json");
+    SessionLabels::load(&label_path)
+        .hide_sessions(&[
+            SessionIdentity::from(&first),
+            SessionIdentity::from(&second),
+        ])
+        .unwrap();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Char('h'));
+
+    press(&mut ui, &snapshot, KeyCode::Char('u'));
+
+    let restored = render(&snapshot, &ui, 120, 30).text;
+    assert!(!restored.contains("HIDDEN SESSIONS"));
+    assert!(restored.contains("2 Sessions restored"));
+    let labels = SessionLabels::load(&label_path);
+    for session in [&first, &second] {
+        assert_eq!(labels.disposition(session.provider, &session.id), None);
+    }
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn hidden_exited_visibility_is_consistent_and_only_validated_open_overrides_it() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hidden-projection-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let source = production_snapshot();
+    let mut session = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    session.last_activity_ms = source.generated_ms - 1_000;
+    let signal = RecentSignal::Session {
+        observed_at_ms: source.generated_ms - 500,
+        provider: session.provider,
+        session_id: session.id.clone(),
+        kind: RecentSignalKind::SessionStateChanged {
+            from: SessionState::Busy,
+            to: SessionState::Exited,
+        },
+    };
+    let mut snapshot = Snapshot {
+        sessions: vec![session.clone()],
+        recent_signals: vec![signal],
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    SessionLabels::load(directory.join("session-labels.json"))
+        .hide_sessions(&[SessionIdentity::from(&session)])
+        .unwrap();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+
+    let all_hidden = render(&snapshot, &ui, 120, 30).text;
+    assert!(!all_hidden.contains("x-exited"));
+    assert!(all_hidden.contains("In 0"));
+    assert!(all_hidden.contains("Out 0"));
+    assert!(all_hidden.contains("0 Projects"));
+    assert!(all_hidden.contains("RECENT SIGNALS 0"));
+    press(&mut ui, &snapshot, KeyCode::Char('3'));
+    assert!(!render(&snapshot, &ui, 120, 30).text.contains("x-exited"));
+
+    snapshot.sessions[0].last_activity_ms = source.generated_ms + 60_000;
+    assert!(!render(&snapshot, &ui, 120, 30).text.contains("x-exited"));
+
+    snapshot.sessions[0].state = SessionState::Busy;
+    let open = render(&snapshot, &ui, 120, 30).text;
+    assert!(open.contains("x-exited"));
+    press(&mut ui, &snapshot, KeyCode::Char('1'));
+    let open_all = render(&snapshot, &ui, 120, 30).text;
+    assert!(open_all.contains("x-exited"));
+    assert!(open_all.contains("Busy -> Exited"));
+
+    snapshot.sessions[0].state = SessionState::Exited;
+    assert!(!render(&snapshot, &ui, 120, 30).text.contains("x-exited"));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn hidden_curation_is_dormant_while_source_evidence_is_absent_and_resumes_on_return() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-hidden-source-return-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    let source = production_snapshot();
+    let hidden = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    let label_path = directory.join("session-labels.json");
+    SessionLabels::load(&label_path)
+        .hide_sessions(&[SessionIdentity::from(&hidden)])
+        .unwrap();
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let absent = Snapshot {
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+
+    press(&mut ui, &absent, KeyCode::Char('h'));
+    assert!(render(&absent, &ui, 120, 30)
+        .text
+        .contains("No hidden sessions"));
+    assert_eq!(
+        SessionLabels::load(&label_path).disposition(hidden.provider, &hidden.id),
+        Some(CurationDisposition::Hidden)
+    );
+
+    let returned = Snapshot {
+        sessions: vec![hidden],
+        revision: 1,
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    press(&mut ui, &returned, KeyCode::Char('h'));
+    assert!(render(&returned, &ui, 120, 30)
+        .text
+        .contains("HIDDEN SESSIONS"));
+
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 fn ui_with_theme(theme: &str) -> Ui {
@@ -4147,6 +4859,58 @@ fn malformed_label_store_disables_editing_until_rescan_reloads_it() {
     press(&mut ui, &snapshot, KeyCode::Char('r'));
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     assert!(render(&snapshot, &ui, 80, 24).text.contains("Edit Session"));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn malformed_label_store_disables_curation_until_rescan_reloads_it() {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "sessionmesh-curation-recovery-{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let profile_path = directory.join("profile.json");
+    let label_path = directory.join("session-labels.json");
+    std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+    std::fs::write(&label_path, b"broken").unwrap();
+    let source = production_snapshot();
+    let mut exited = source
+        .sessions
+        .iter()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .clone();
+    exited.last_activity_ms = source.generated_ms - 1_000;
+    let snapshot = Snapshot {
+        sessions: vec![exited],
+        generated_ms: source.generated_ms,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::load(&profile_path, None).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Right);
+    press(&mut ui, &snapshot, KeyCode::Down);
+
+    press(&mut ui, &snapshot, KeyCode::Char('H'));
+    let degraded = render(&snapshot, &ui, 120, 30).text;
+    assert!(!degraded.contains("Hide Session?"));
+    assert!(degraded.contains("Curation unavailable while Label Store is degraded"));
+    press(&mut ui, &snapshot, KeyCode::Char('h'));
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Hidden inventory unavailable: Label Store degraded"));
+    assert_eq!(std::fs::read(&label_path).unwrap(), b"broken");
+
+    std::fs::remove_file(&label_path).unwrap();
+    press(&mut ui, &snapshot, KeyCode::Char('r'));
+    press(&mut ui, &snapshot, KeyCode::Char('H'));
+    assert!(render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Hide Session?"));
 
     std::fs::remove_dir_all(directory).unwrap();
 }

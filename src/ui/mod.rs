@@ -12,6 +12,7 @@ mod detail;
 mod editor;
 mod field;
 mod guide;
+mod hidden_tree;
 mod layout;
 mod managed_start;
 mod modals;
@@ -135,6 +136,24 @@ struct TaskRetryConfirmation {
     source_state: SessionState,
     successor_provider: Provider,
     end_current_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HideConfirmation {
+    Session {
+        session: SessionIdentity,
+        title: String,
+    },
+    Project {
+        project_label: String,
+        sessions: Vec<SessionIdentity>,
+        open_count: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InventoryDeleteConfirmation {
+    sessions: Vec<SessionIdentity>,
 }
 
 /// Session Detail 的来源、字段选择和滚动状态。
@@ -427,6 +446,8 @@ pub struct Ui {
     task_selected: usize,
     /// 详情、展开分组及 Guide 的临时导航状态。
     detail: Option<DetailView>,
+    hidden_tree_open: bool,
+    hidden_tree: hidden_tree::State,
     expanded_provider_disclosures: HashSet<ProviderDisclosureKey>,
     guide_open: bool,
     guide_category: GuideCategory,
@@ -442,6 +463,8 @@ pub struct Ui {
     task_cancellation_confirmation: Option<TaskCancellationConfirmation>,
     task_deletion_confirmation: Option<TaskDeletionConfirmation>,
     task_retry_confirmation: Option<TaskRetryConfirmation>,
+    hide_confirmation: Option<HideConfirmation>,
+    inventory_delete_confirmation: Option<InventoryDeleteConfirmation>,
     /// Stable selection for the independent Managed Start status region.
     managed_launch_id: Option<String>,
     /// UI 自己拥有的 Session 元数据、Profile、主题和短期状态提示。
@@ -550,6 +573,8 @@ impl Default for Ui {
             signal_selected: 0,
             task_selected: 0,
             detail: None,
+            hidden_tree_open: false,
+            hidden_tree: hidden_tree::State::default(),
             expanded_provider_disclosures: HashSet::new(),
             guide_open: false,
             guide_category: GuideCategory::Overview,
@@ -563,6 +588,8 @@ impl Default for Ui {
             task_cancellation_confirmation: None,
             task_deletion_confirmation: None,
             task_retry_confirmation: None,
+            hide_confirmation: None,
+            inventory_delete_confirmation: None,
             managed_launch_id: None,
             labels: SessionLabels::default(),
             labels_snapshot_revision: 0,
@@ -708,6 +735,9 @@ impl Ui {
                 self.handle_key(key, snap)
             }
             crossterm::event::Event::Mouse(mouse) => {
+                self.clamp_selections(snap);
+                let normal_snapshot = self.normal_snapshot(snap);
+                let snap = &normal_snapshot;
                 if self.overview_split_is_interactive(terminal_area) {
                     let screen = layout::screen(terminal_area);
                     let workspace = overview::workspace_area(screen.content);
@@ -766,8 +796,11 @@ impl Ui {
         key: crossterm::event::KeyEvent,
         snap: &Snapshot,
     ) -> std::io::Result<UiAction> {
+        let observed_snapshot = snap;
         // 快照可能在两次按键之间变化，先把所有选择位置收回到有效范围。
         self.clamp_selections(snap);
+        let normal_snapshot = self.normal_snapshot(snap);
+        let snap = &normal_snapshot;
         if self.new_session.is_some() {
             return Ok(self.handle_new_session_key(key));
         }
@@ -881,6 +914,87 @@ impl Ui {
                 _ => Ok(UiAction::None),
             };
         }
+        if let Some(target) = self.hide_confirmation.clone() {
+            return match key.code {
+                crossterm::event::KeyCode::Esc => {
+                    self.hide_confirmation = None;
+                    Ok(UiAction::None)
+                }
+                crossterm::event::KeyCode::Enter => {
+                    let requested = match &target {
+                        HideConfirmation::Session { session, .. } => std::slice::from_ref(session),
+                        HideConfirmation::Project { sessions, .. } => sessions.as_slice(),
+                    };
+                    let sessions = requested
+                        .iter()
+                        .filter(|identity| {
+                            observed_snapshot.sessions.iter().any(|session| {
+                                session.provider == identity.provider
+                                    && session.id == identity.native_id
+                                    && !session.state.is_open()
+                            })
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let count = sessions.len();
+                    self.hide_confirmation = None;
+                    if sessions.is_empty() {
+                        let became_open = requested.iter().any(|identity| {
+                            observed_snapshot.sessions.iter().any(|session| {
+                                session.provider == identity.provider
+                                    && session.id == identity.native_id
+                                    && session.state.is_open()
+                            })
+                        });
+                        self.show_notice(if became_open {
+                            "Open Session cannot be hidden"
+                        } else {
+                            "No Exited Sessions to hide"
+                        });
+                        return Ok(UiAction::None);
+                    }
+                    let result = self.labels.hide_sessions(&sessions);
+                    match result {
+                        Ok(()) => self.show_notice(format!(
+                            "{count} Session{} hidden",
+                            if count == 1 { "" } else { "s" }
+                        )),
+                        Err(error) => self.show_notice(format!("Hide failed: {error}")),
+                    }
+                    Ok(UiAction::None)
+                }
+                _ => Ok(UiAction::None),
+            };
+        }
+        if let Some(target) = self.inventory_delete_confirmation.clone() {
+            return match key.code {
+                crossterm::event::KeyCode::Esc => {
+                    self.inventory_delete_confirmation = None;
+                    Ok(UiAction::None)
+                }
+                crossterm::event::KeyCode::Enter => {
+                    let count = target.sessions.len();
+                    let result = self.labels.permanently_exclude_sessions(&target.sessions);
+                    self.inventory_delete_confirmation = None;
+                    match result {
+                        Ok(()) => {
+                            if self.hidden_sessions(observed_snapshot).is_empty() {
+                                self.hidden_tree_open = false;
+                            } else {
+                                self.hidden_tree.reconcile(observed_snapshot, &self.labels);
+                            }
+                            self.show_notice(format!(
+                                "{count} Session{} permanently excluded",
+                                if count == 1 { "" } else { "s" }
+                            ));
+                        }
+                        Err(error) => self.show_notice(format!("Delete failed: {error}")),
+                    }
+                    Ok(UiAction::None)
+                }
+                _ => Ok(UiAction::None),
+            };
+        }
         // Retry 快捷键先建立确认状态，不会直接创建新的 Operation Task。
         if key.code == crossterm::event::KeyCode::Char('r')
             && self
@@ -915,6 +1029,57 @@ impl Ui {
                     .contains(crossterm::event::KeyModifiers::CONTROL))
         {
             return Ok(UiAction::Quit);
+        }
+        if self.hidden_tree_open {
+            match key.code {
+                crossterm::event::KeyCode::Esc => self.hidden_tree_open = false,
+                crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j') => {
+                    self.hidden_tree
+                        .move_vertical(observed_snapshot, &self.labels, true);
+                }
+                crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {
+                    self.hidden_tree
+                        .move_vertical(observed_snapshot, &self.labels, false);
+                }
+                crossterm::event::KeyCode::Enter => {
+                    self.hidden_tree.activate(observed_snapshot, &self.labels);
+                }
+                crossterm::event::KeyCode::Char('u') => {
+                    if let Some(sessions) = self
+                        .hidden_tree
+                        .selected_identities(observed_snapshot, &self.labels)
+                    {
+                        let count = sessions.len();
+                        match self.labels.remove_from_hide(&sessions) {
+                            Ok(()) => {
+                                if self.hidden_sessions(observed_snapshot).is_empty() {
+                                    self.hidden_tree_open = false;
+                                } else {
+                                    self.hidden_tree.reconcile(observed_snapshot, &self.labels);
+                                }
+                                self.show_notice(format!(
+                                    "{count} Session{} restored",
+                                    if count == 1 { "" } else { "s" }
+                                ));
+                            }
+                            Err(error) => {
+                                self.show_notice(format!("Restore failed: {error}"));
+                            }
+                        }
+                    }
+                }
+                crossterm::event::KeyCode::Char('d') => {
+                    if let Some(sessions) = self
+                        .hidden_tree
+                        .selected_identities(observed_snapshot, &self.labels)
+                    {
+                        self.inventory_delete_confirmation =
+                            Some(InventoryDeleteConfirmation { sessions });
+                    }
+                }
+                _ => {}
+            }
+            return Ok(UiAction::None);
         }
         // Guide 打开后拥有其余按键，防止帮助导航改变底层页面状态。
         if self.guide_open {
@@ -962,6 +1127,58 @@ impl Ui {
             crossterm::event::KeyCode::Char('e') if self.labels.is_editable() => {
                 self.open_session_editor(snap);
             }
+            crossterm::event::KeyCode::Char('H')
+                if self.detail.is_none() && !self.labels.is_editable() =>
+            {
+                self.show_notice("Curation unavailable while Label Store is degraded");
+            }
+            crossterm::event::KeyCode::Char('H')
+                if self.tab == Tab::All
+                    && self.detail.is_none()
+                    && self.all_region == AllRegion::Now =>
+            {
+                if let Some(session) = self.project_tree.selected_session(snap) {
+                    if session.state.is_open() {
+                        self.show_notice("Open Session cannot be hidden");
+                    } else {
+                        self.hide_confirmation = Some(HideConfirmation::Session {
+                            session: SessionIdentity::from(session),
+                            title: self.labels.title(session.provider, &session.id),
+                        });
+                    }
+                } else if let Some(project_identity) = self.project_tree.selected_project(snap) {
+                    let project_label = snap
+                        .sessions
+                        .iter()
+                        .filter_map(|session| session.project.as_ref())
+                        .find(|project| project.identity == project_identity)
+                        .map(|project| project.label.clone())
+                        .unwrap_or_else(|| project_identity.display_path().display().to_string());
+                    let project_sessions = snap.sessions.iter().filter(|session| {
+                        session
+                            .project
+                            .as_ref()
+                            .is_some_and(|project| project.identity == project_identity)
+                    });
+                    let open_count = project_sessions
+                        .clone()
+                        .filter(|session| session.state.is_open())
+                        .count();
+                    let sessions = project_sessions
+                        .filter(|session| !session.state.is_open())
+                        .map(SessionIdentity::from)
+                        .collect::<Vec<_>>();
+                    if sessions.is_empty() {
+                        self.show_notice("No Exited Sessions to hide");
+                    } else {
+                        self.hide_confirmation = Some(HideConfirmation::Project {
+                            project_label,
+                            sessions,
+                            open_count,
+                        });
+                    }
+                }
+            }
             crossterm::event::KeyCode::Char('h') if self.detail_session(snap).is_some() => {
                 let session = self.detail_session(snap).expect("checked above");
                 self.handoff_confirmation = Some(HandoffConfirmation {
@@ -973,6 +1190,16 @@ impl Ui {
                     successor_provider: session.provider,
                     end_current_run: session.state.is_open(),
                 });
+            }
+            crossterm::event::KeyCode::Char('h') if self.detail.is_none() => {
+                if !self.labels.is_editable() {
+                    self.show_notice("Hidden inventory unavailable: Label Store degraded");
+                } else if self.hidden_sessions(observed_snapshot).is_empty() {
+                    self.show_notice("No hidden sessions");
+                } else {
+                    self.hidden_tree.reconcile(observed_snapshot, &self.labels);
+                    self.hidden_tree_open = true;
+                }
             }
             crossterm::event::KeyCode::Char('o')
                 if self.detail_managed_current_run(snap).is_some() =>
@@ -1054,15 +1281,16 @@ impl Ui {
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
                 if self.detail_session(snap).is_some() =>
             {
-                detail::move_selected_field(self, snap, true);
+                detail::move_selected_field(self, observed_snapshot, true);
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
                 if self.detail_session(snap).is_some() =>
             {
-                detail::move_selected_field(self, snap, false);
+                detail::move_selected_field(self, observed_snapshot, false);
             }
             crossterm::event::KeyCode::Char('c') if self.detail_session(snap).is_some() => {
-                if let Some((field, value)) = detail::selected_copy_request(snap, self) {
+                if let Some((field, value)) = detail::selected_copy_request(observed_snapshot, self)
+                {
                     return Ok(UiAction::Copy { field, value });
                 }
             }
@@ -1154,6 +1382,12 @@ impl Ui {
             }
             crossterm::event::KeyCode::Enter if self.detail.is_none() => {
                 self.activate_selection(snap);
+            }
+            crossterm::event::KeyCode::Enter
+                if detail::selected_opens_hidden_list(observed_snapshot, self) =>
+            {
+                self.hidden_tree.reconcile(observed_snapshot, &self.labels);
+                self.hidden_tree_open = true;
             }
             crossterm::event::KeyCode::Enter if self.detail_task(snap).is_some() => {
                 let successor = self.detail_task(snap).and_then(|task| {
@@ -1339,12 +1573,15 @@ impl Ui {
         self.signal_selected = 0;
         self.task_selected = 0;
         self.detail = None;
+        self.hidden_tree_open = false;
         self.new_session = None;
         self.handoff_confirmation = None;
         self.managed_resume_confirmation = None;
         self.task_cancellation_confirmation = None;
         self.task_deletion_confirmation = None;
         self.task_retry_confirmation = None;
+        self.hide_confirmation = None;
+        self.inventory_delete_confirmation = None;
     }
 
     /// 根据当前页面和焦点选择最贴近上下文的 Guide 默认主题。
@@ -1410,6 +1647,8 @@ impl Ui {
 
     /// 按实际渲染顺序返回当前页可选择的 Session。
     pub fn visible(&self, snap: &Snapshot) -> Vec<Session> {
+        let normal_snapshot = self.normal_snapshot(snap);
+        let snap = &normal_snapshot;
         match self.tab.provider() {
             Some(_) => self
                 .provider_targets(snap)
@@ -1428,6 +1667,8 @@ impl Ui {
 
     /// 返回当前页可选择行的数量。
     pub fn selectable_len(&self, snap: &Snapshot) -> usize {
+        let normal_snapshot = self.normal_snapshot(snap);
+        let snap = &normal_snapshot;
         if self.tab.provider().is_some() {
             self.provider_targets(snap).len()
         } else {
@@ -1450,6 +1691,8 @@ impl Ui {
             self.labels.reload();
             self.labels_snapshot_revision = snap.revision;
         }
+        let normal_snapshot = self.normal_snapshot(snap);
+        let snap = &normal_snapshot;
         if self.tab == Tab::All {
             self.project_tree.reconcile(snap);
         } else {
@@ -1475,6 +1718,45 @@ impl Ui {
                 .first()
                 .map(|launch| launch.id.clone());
         }
+    }
+
+    fn normal_snapshot(&self, snap: &Snapshot) -> Snapshot {
+        let mut normal = snap.clone();
+        let observed_session_count = normal.sessions.len();
+        normal
+            .sessions
+            .retain(|session| self.session_is_normally_visible(session));
+        let excluded_count = observed_session_count.saturating_sub(normal.sessions.len());
+        normal.stats.discovered = normal.stats.discovered.saturating_sub(excluded_count);
+        normal.recent_signals.retain(|signal| match signal {
+            RecentSignal::Session {
+                provider,
+                session_id,
+                ..
+            } => match self.labels.disposition(*provider, session_id) {
+                Some(crate::session_labels::CurationDisposition::Hidden) => snap
+                    .sessions
+                    .iter()
+                    .find(|session| session.provider == *provider && session.id == *session_id)
+                    .is_some_and(|session| session.state.is_open()),
+                Some(crate::session_labels::CurationDisposition::PermanentlyExcluded) => false,
+                None => true,
+            },
+            RecentSignal::Worktree { .. } => true,
+        });
+        normal
+    }
+
+    fn session_is_normally_visible(&self, session: &Session) -> bool {
+        match self.labels.disposition(session.provider, &session.id) {
+            Some(crate::session_labels::CurationDisposition::Hidden) => session.state.is_open(),
+            Some(crate::session_labels::CurationDisposition::PermanentlyExcluded) => false,
+            None => true,
+        }
+    }
+
+    fn hidden_sessions<'a>(&self, snap: &'a Snapshot) -> Vec<&'a Session> {
+        hidden_tree::sessions(snap, &self.labels)
     }
 
     fn selected_managed_launch<'a>(
@@ -1856,6 +2138,9 @@ impl Ui {
 /// 先处理最小尺寸保护，再划分页头、主内容和页脚；Session Detail、Guide、
 /// 编辑器和确认框按照模态优先级覆盖在原始页面之上。
 pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
+    let observed_snapshot = snap;
+    let normal_snapshot = ui.normal_snapshot(snap);
+    let snap = &normal_snapshot;
     let theme = ui.theme.palette();
     f.render_widget(
         Block::default().style(Style::default().fg(theme.foreground).bg(theme.background)),
@@ -1872,7 +2157,16 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
 
     // Task Detail stays a full page. Session Detail is drawn later as a modal so its
     // origin remains visible and can be restored without reconstructing it.
-    if let Some(task) = ui.detail_task(snap) {
+    if ui.hidden_tree_open {
+        hidden_tree::draw(
+            f,
+            screen.content,
+            observed_snapshot,
+            &ui.hidden_tree,
+            &ui.labels,
+            theme,
+        );
+    } else if let Some(task) = ui.detail_task(snap) {
         tasks::draw_detail(f, screen.content, task, snap, ui);
     } else {
         match ui.tab {
@@ -1883,7 +2177,7 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
 
     chrome::draw_footer(f, screen.footer, snap, ui);
 
-    modals::draw_overlays(f, snap, ui);
+    modals::draw_overlays(f, observed_snapshot, ui);
 }
 
 /// 读取快照中的 Attention 结果；旧快照缺失时就地重算。

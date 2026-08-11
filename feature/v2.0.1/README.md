@@ -14,7 +14,8 @@ Managed Session Core; it is not an Action Runtime or Flow Scheduler.
 
 Give a developer an explicitly created, evidence-backed checkpoint for a selected Session
 and a clear continuation choice: precisely resume the same provider-native Session, or
-explicitly Handoff to a distinct Successor Session.
+explicitly Handoff to a distinct Successor Session. Keep the repeat-use inventory focused
+through explicit, durable curation without deleting Provider-native history.
 
 The primary question answered is: **what can the next Session safely do now?**
 
@@ -31,6 +32,9 @@ The primary question answered is: **what can the next Session safely do now?**
 - Display observed evidence separately from user-authored or Agent-proposed statements.
   Missing evidence must remain missing; SessionMesh never infers a passed check or completed
   task from terminal prose.
+- Let the developer explicitly hide Exited Sessions, restore them from a dedicated Hidden
+  Tree, or permanently exclude them from SessionMesh inventory. Project Hide is a snapshot
+  bulk action over currently observed Session identities and never suppresses future Sessions.
 - Reopen a checkpoint to show whether its source Session can be precisely resumed, is still
   Open, is Exited, or has unlinked evidence.
 - Offer the correct continuation route without conflating identities:
@@ -55,6 +59,9 @@ The primary question answered is: **what can the next Session safely do now?**
   avoid treating raw shell output as an authoritative completion signal.
 - Starting, resuming, and Handoff remain separate explicitly authorized operations. A
   checkpoint authorizes none of them.
+- Inventory curation is Session-scoped and developer-directed. A validated Open Session
+  temporarily overrides Hide, while permanent exclusion never deletes Provider-native logs
+  or cascades into independently owned control, task, Handoff, or Successor records.
 - Existing Handoff Artifact storage and Successor-linkage rules remain unchanged: the
   Artifact stays outside the Project, and a Successor link requires conclusive
   launched-process evidence.
@@ -93,6 +100,8 @@ v2.0.0  Managed Session Core
 
 - [`v2.0.0 Managed Session Core`](../v2.0.0/README.md)
 - [`Work Continuity requirements discussion`](../../docs/feature/v2.0.1/work-continuity/discussion.md)
+- [`Inventory Curation requirements discussion`](../../docs/feature/v2.0.1/inventory-curation/discussion.md)
+- [`Inventory Curation PRD`](https://github.com/ZhangPeibin/SessionMesh/issues/55)
 - [`legacy Assisted Handoff record`](../../docs/legacy/v1/assisted-handoff-prd.md)
 - [`docs/adr/0005-keep-handoff-artifacts-outside-projects.md`](../../docs/adr/0005-keep-handoff-artifacts-outside-projects.md)
 - [`docs/adr/0007-link-successors-through-launched-process-evidence.md`](../../docs/adr/0007-link-successors-through-launched-process-evidence.md)
