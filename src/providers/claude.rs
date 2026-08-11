@@ -175,6 +175,7 @@ fn binding_evidence(
             format: crate::domain::SourceFormat::JsonLines,
         },
         working_directory,
+        launch_process: process,
         provider_process: process,
     })
 }

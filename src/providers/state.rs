@@ -7,7 +7,7 @@
 use crate::domain::SessionState;
 use chrono::{Local, NaiveDateTime, TimeZone};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -349,6 +349,80 @@ pub(crate) fn files_held_by_process(process: ProcessIdentity) -> Option<Vec<Path
         .map(PathBuf::from)
         .collect::<Vec<_>>();
     process_identity_is_live(process).then_some(files)
+}
+
+/// Return a live process and every currently live descendant, preserving the
+/// supplied root identity to defend against PID reuse. This is used only while
+/// resolving a provider wrapper into the process that owns its source record.
+pub(crate) fn process_tree_identities(root: ProcessIdentity) -> Option<Vec<ProcessIdentity>> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,stat=,lstart="])
+        .env("LC_ALL", "C")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_process_tree_identities(root, &String::from_utf8_lossy(&output.stdout))
+}
+
+#[derive(Clone, Copy)]
+struct ProcessTreeEntry {
+    identity: ProcessIdentity,
+    parent_pid: u32,
+    zombie: bool,
+}
+
+fn parse_process_tree_identities(
+    root: ProcessIdentity,
+    stdout: &str,
+) -> Option<Vec<ProcessIdentity>> {
+    let mut entries = Vec::new();
+    let mut pids = HashSet::new();
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let mut fields = line.split_whitespace();
+        let pid = fields.next()?.parse::<u32>().ok()?;
+        let parent_pid = fields.next()?.parse::<u32>().ok()?;
+        let state = fields.next()?;
+        let started_at_ms = parse_lstart(&fields.collect::<Vec<_>>().join(" "))?;
+        if !pids.insert(pid) {
+            return None;
+        }
+        entries.push(ProcessTreeEntry {
+            identity: ProcessIdentity { pid, started_at_ms },
+            parent_pid,
+            zombie: state.starts_with('Z'),
+        });
+    }
+
+    let root_entry = entries
+        .iter()
+        .find(|entry| entry.identity.pid == root.pid)?;
+    if root_entry.identity != root || root_entry.zombie {
+        return None;
+    }
+
+    let mut pending = vec![root.pid];
+    let mut visited = HashSet::new();
+    let mut processes = Vec::new();
+    while let Some(pid) = pending.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+        let entry = entries.iter().find(|entry| entry.identity.pid == pid)?;
+        if entry.zombie {
+            continue;
+        }
+        processes.push(entry.identity);
+        for child in entries
+            .iter()
+            .filter(|candidate| candidate.parent_pid == pid)
+            .rev()
+        {
+            pending.push(child.identity.pid);
+        }
+    }
+    Some(processes)
 }
 
 /// Parse `ps -o etime` output (`[[DD-]HH:]MM:SS`) into elapsed seconds.
@@ -724,5 +798,36 @@ mod tests {
 
         assert_eq!(live.state, SessionState::Busy);
         assert_eq!(live.current_run_started_at_ms, None);
+    }
+
+    #[test]
+    fn process_tree_requires_the_exact_live_root_and_includes_only_descendants() {
+        let started_at_ms = Local
+            .with_ymd_and_hms(2026, 8, 11, 10, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let root = ProcessIdentity {
+            pid: 42,
+            started_at_ms,
+        };
+        let tree = parse_process_tree_identities(
+            root,
+            "42 1 Ss Tue Aug 11 10:00:00 2026\n43 42 S Tue Aug 11 10:00:01 2026\n44 43 S Tue Aug 11 10:00:02 2026\n45 1 S Tue Aug 11 10:00:03 2026\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            tree.iter().map(|identity| identity.pid).collect::<Vec<_>>(),
+            vec![42, 43, 44]
+        );
+        assert!(parse_process_tree_identities(
+            ProcessIdentity {
+                started_at_ms: started_at_ms + 1,
+                ..root
+            },
+            "42 1 Ss Tue Aug 11 10:00:00 2026\n",
+        )
+        .is_none());
     }
 }

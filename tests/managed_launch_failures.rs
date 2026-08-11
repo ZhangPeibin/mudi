@@ -153,6 +153,7 @@ fn contradictory_live_evidence_needs_review_without_retry_or_managed_authority()
             format: SourceFormat::JsonLines,
         },
         working_directory: temp.path().to_path_buf(),
+        launch_process: process,
         provider_process: process,
     };
 

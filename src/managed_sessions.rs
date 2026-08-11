@@ -146,6 +146,8 @@ impl ManagedLaunchRegistration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedLaunchEvidence {
     pub tmux_pane_id: String,
+    /// Root command PID reported by tmux for this pane. It may be a provider
+    /// wrapper rather than the process that later owns the source record.
     pub provider_process: ProcessIdentity,
 }
 
@@ -1074,6 +1076,30 @@ impl EvidenceBinder {
         let Some(evidence) = evidence else {
             return Ok(BindingOutcome::Waiting);
         };
+        match self.process_evidence.observe(evidence.provider_process.pid) {
+            ProviderProcessObservation::Absent => {
+                store.mark_needs_review(
+                    registration_id,
+                    "Provider source process is no longer present",
+                )?;
+                return Ok(BindingOutcome::NeedsReview);
+            }
+            ProviderProcessObservation::Unknown => {
+                store.mark_needs_review(
+                    registration_id,
+                    "Provider source process could not be verified",
+                )?;
+                return Ok(BindingOutcome::NeedsReview);
+            }
+            ProviderProcessObservation::Live(identity) if identity != evidence.provider_process => {
+                store.mark_needs_review(
+                    registration_id,
+                    "Provider source process is stale or its PID was reused",
+                )?;
+                return Ok(BindingOutcome::NeedsReview);
+            }
+            ProviderProcessObservation::Live(_) => {}
+        }
         if let Some(target) = store.managed_resume_target(registration_id)? {
             let current = store.managed_current_run(target.provider, &target.native_session_id)?;
             let session = store.managed_session(target.provider, &target.native_session_id)?;
@@ -1134,9 +1160,9 @@ fn binding_receipt_candidate(
             "native Session ID evidence is incomplete or conflicting"
         ));
     }
-    if evidence.provider_process != launch.provider_process {
+    if evidence.launch_process != launch.provider_process {
         return Err(anyhow!(
-            "Provider process evidence disagrees with the launch"
+            "Provider source evidence disagrees with the launched pane process"
         ));
     }
     let source_path = evidence
@@ -1180,7 +1206,7 @@ fn binding_receipt_candidate(
             path: source_path,
             format: evidence.source.format,
         },
-        provider_process: launch.provider_process,
+        provider_process: evidence.provider_process,
         issued_at_ms: now_ms,
     })
 }
@@ -1463,7 +1489,7 @@ impl ManagedSessionService {
                 registration.target.working_directory.display()
             ),
             format!(
-                "Provider process: pid {}, started {}",
+                "Launched pane process: pid {}, started {}",
                 launch.provider_process.pid, launch.provider_process.started_at_ms
             ),
             format!(
@@ -2323,10 +2349,6 @@ impl ManagedLaunchStore {
         registration: &ManagedLaunchRegistration,
         receipt: &BindingReceipt,
     ) -> Result<()> {
-        let launch = registration
-            .launch_evidence
-            .as_ref()
-            .ok_or_else(|| anyhow!("Binding requires conclusive launch evidence"))?;
         let resume = self.managed_resume_target(&registration.id)?;
         let resume_authority = resume
             .as_ref()
@@ -2404,8 +2426,8 @@ impl ManagedLaunchStore {
                 opaque_ref,
                 receipt.provider.as_str(),
                 receipt.native_session_id,
-                launch.provider_process.pid,
-                launch.provider_process.started_at_ms,
+                receipt.provider_process.pid,
+                receipt.provider_process.started_at_ms,
                 registration.tmux.socket_name,
                 registration.tmux.session_name,
                 receipt.id,

@@ -25,6 +25,11 @@ pub struct ProviderBindingEvidence {
     pub process_session_id: String,
     pub source: SourceMetadata,
     pub working_directory: PathBuf,
+    /// Exact tmux-pane process that SessionMesh launched. A provider wrapper may
+    /// start a distinct descendant which owns the source record.
+    pub launch_process: state::ProcessIdentity,
+    /// Exact provider process that owns the source record and becomes the
+    /// Managed Current Run identity.
     pub provider_process: state::ProcessIdentity,
 }
 
@@ -62,8 +67,10 @@ pub trait RuntimeControlPort: Sync {
         source_session_id: &str,
         source_path: &Path,
     ) -> state::LiveState;
-    /// Normalize the Provider source record tied to one exact launched process.
-    /// `None` means evidence is missing, stale, ambiguous, or contradictory.
+    /// Normalize the Provider source record tied to one exact launched pane process.
+    /// An adapter may resolve a provider-wrapper descendant, but must retain the
+    /// exact launch process in its returned evidence. `None` means evidence is
+    /// missing, stale, ambiguous, or contradictory.
     fn binding_evidence(
         &self,
         cfg: &Config,

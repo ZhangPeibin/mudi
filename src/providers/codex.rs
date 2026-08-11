@@ -157,10 +157,25 @@ fn resolve_successor_session(
     cfg: &Config,
     process: super::state::ProcessIdentity,
 ) -> Option<String> {
-    native_session_id(&binding_rollout(cfg, process)?)
+    binding_evidence(cfg, process).map(|evidence| evidence.source_session_id)
 }
 
 fn binding_evidence(
+    cfg: &Config,
+    launch_process: super::state::ProcessIdentity,
+) -> Option<super::ProviderBindingEvidence> {
+    let mut candidates = super::state::process_tree_identities(launch_process)?
+        .into_iter()
+        .filter_map(|provider_process| binding_evidence_for_process(cfg, provider_process))
+        .collect::<Vec<_>>();
+    let [evidence] = candidates.as_mut_slice() else {
+        return None;
+    };
+    evidence.launch_process = launch_process;
+    Some(evidence.clone())
+}
+
+fn binding_evidence_for_process(
     cfg: &Config,
     process: super::state::ProcessIdentity,
 ) -> Option<super::ProviderBindingEvidence> {
@@ -175,6 +190,7 @@ fn binding_evidence(
             format: crate::domain::SourceFormat::JsonLines,
         },
         working_directory,
+        launch_process: process,
         provider_process: process,
     })
 }
@@ -201,30 +217,6 @@ fn binding_rollout(cfg: &Config, process: super::state::ProcessIdentity) -> Opti
         return None;
     };
     super::state::process_identity_is_live(process).then(|| rollout.clone())
-}
-
-fn native_session_id(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let mut session_id: Option<String> = None;
-    for line in text.lines() {
-        let value: Value = serde_json::from_str(line.trim()).ok()?;
-        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
-            continue;
-        }
-        let observed = value
-            .get("payload")
-            .and_then(|payload| payload.get("id"))
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())?;
-        if session_id
-            .as_deref()
-            .is_some_and(|current| current != observed)
-        {
-            return None;
-        }
-        session_id = Some(observed.to_string());
-    }
-    session_id
 }
 
 fn binding_source_metadata(path: &Path) -> Option<(String, PathBuf)> {

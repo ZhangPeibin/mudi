@@ -19,6 +19,7 @@ use sessionmesh::read_model::{ManagedLaunchSummary, ManagedTerminalState};
 use sessionmesh::refresh::RefreshService;
 use sessionmesh::session_labels::SessionLabels;
 use sessionmesh::ui::{draw, Ui, UiAction};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,6 +31,18 @@ impl ProcessEvidence for FixedProcessEvidence {
     fn observe(&self, _pid: u32) -> ProviderProcessObservation {
         self.0.map_or(
             ProviderProcessObservation::Unknown,
+            ProviderProcessObservation::Live,
+        )
+    }
+}
+
+#[derive(Clone)]
+struct MappedProcessEvidence(HashMap<u32, ProcessIdentity>);
+
+impl ProcessEvidence for MappedProcessEvidence {
+    fn observe(&self, pid: u32) -> ProviderProcessObservation {
+        self.0.get(&pid).copied().map_or(
+            ProviderProcessObservation::Absent,
             ProviderProcessObservation::Live,
         )
     }
@@ -99,6 +112,109 @@ fn binding_receipt_atomically_establishes_the_managed_session_and_current_run() 
     )];
     store.apply_provenance(&mut sessions).unwrap();
     assert_eq!(sessions[0].provenance, SessionProvenance::Managed);
+}
+
+#[test]
+fn provider_descendant_of_the_launched_pane_can_issue_a_binding_receipt() {
+    let temp = TempDir::new("provider-descendant");
+    let worktree = temp.directory("worktree");
+    let source_path = temp.file("rollout.jsonl", "{}\n");
+    let pane_process = process(42, 41_000);
+    let provider_process = process(43, 41_001);
+    let registration = registration(
+        "launch-provider-descendant",
+        Provider::CodexCli,
+        &worktree,
+        pane_process,
+    );
+    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    store.insert(&registration).unwrap();
+    let binder = EvidenceBinder::new(
+        Box::new(MappedProcessEvidence(HashMap::from([
+            (pane_process.pid, pane_process),
+            (provider_process.pid, provider_process),
+        ]))),
+        Box::new(NoopCleanup),
+    );
+
+    let outcome = binder
+        .bind(
+            &mut store,
+            &registration.id,
+            Some(binding_evidence_with_launch(
+                Provider::CodexCli,
+                "native-session",
+                "native-session",
+                &source_path,
+                &worktree,
+                pane_process,
+                provider_process,
+            )),
+            50_000,
+        )
+        .unwrap();
+
+    let BindingOutcome::Bound(receipt) = outcome else {
+        panic!("a verified provider descendant must bind");
+    };
+    assert_eq!(receipt.provider_process, provider_process);
+    assert_eq!(
+        store
+            .managed_current_run(Provider::CodexCli, "native-session")
+            .unwrap()
+            .unwrap()
+            .provider_process,
+        provider_process
+    );
+}
+
+#[test]
+fn provider_evidence_from_a_different_launch_root_cannot_issue_a_binding_receipt() {
+    let temp = TempDir::new("different-launch-root");
+    let worktree = temp.directory("worktree");
+    let source_path = temp.file("rollout.jsonl", "{}\n");
+    let pane_process = process(42, 41_000);
+    let unrelated_launch_process = process(43, 41_001);
+    let provider_process = process(44, 41_002);
+    let registration = registration(
+        "launch-different-root",
+        Provider::CodexCli,
+        &worktree,
+        pane_process,
+    );
+    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    store.insert(&registration).unwrap();
+    let binder = EvidenceBinder::new(
+        Box::new(MappedProcessEvidence(HashMap::from([
+            (pane_process.pid, pane_process),
+            (unrelated_launch_process.pid, unrelated_launch_process),
+            (provider_process.pid, provider_process),
+        ]))),
+        Box::new(NoopCleanup),
+    );
+
+    let outcome = binder
+        .bind(
+            &mut store,
+            &registration.id,
+            Some(binding_evidence_with_launch(
+                Provider::CodexCli,
+                "native-session",
+                "native-session",
+                &source_path,
+                &worktree,
+                unrelated_launch_process,
+                provider_process,
+            )),
+            50_000,
+        )
+        .unwrap();
+
+    assert_eq!(outcome, BindingOutcome::NeedsReview);
+    assert!(store
+        .managed_session(Provider::CodexCli, "native-session")
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -370,7 +486,71 @@ fn codex_adapter_normalizes_the_rollout_held_by_the_exact_process() {
     assert_eq!(evidence.process_session_id, native_session_id);
     assert_eq!(evidence.source.path, source_path.canonicalize().unwrap());
     assert_eq!(evidence.working_directory, worktree);
+    assert_eq!(evidence.launch_process, process);
     assert_eq!(evidence.provider_process, process);
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_adapter_resolves_the_rollout_holder_below_a_launch_wrapper() {
+    let temp = TempDir::new("codex-wrapper-adapter");
+    let worktree = temp.directory("worktree");
+    let codex_dir = temp.path().join("codex");
+    let rollouts = codex_dir.join("sessions/2026/08/11");
+    fs::create_dir_all(&rollouts).unwrap();
+    let native_session_id = "11111111-1111-1111-1111-111111111111";
+    let source_path = rollouts.join(format!(
+        "rollout-2026-08-11T00-00-00-{native_session_id}.jsonl"
+    ));
+    fs::write(
+        &source_path,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {"id": native_session_id, "cwd": worktree}
+            })
+        ),
+    )
+    .unwrap();
+    let mut wrapper = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            r#"tail -f "$1" >/dev/null 2>&1 & child=$!; trap 'kill "$child" 2>/dev/null; wait "$child"; exit 0' TERM INT; wait "$child""#,
+            "sessionmesh-wrapper",
+        ])
+        .arg(&source_path)
+        .spawn()
+        .unwrap();
+    let pane_process = SystemProcessEvidence
+        .current_identity(wrapper.id())
+        .expect("wrapper process identity should be available");
+    let config = Config {
+        claude_dir: temp.path().join("claude"),
+        codex_dir,
+        data_dir: temp.path().join("data"),
+        extra_dirs: Vec::new(),
+    };
+    let evidence = (0..100).find_map(|_| {
+        let evidence = registry()
+            .runtime_control(Provider::CodexCli)
+            .unwrap()
+            .binding_evidence(&config, pane_process);
+        if evidence.is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        evidence
+    });
+    let _ = std::process::Command::new("kill")
+        .args(["-TERM", &wrapper.id().to_string()])
+        .status();
+    let _ = wrapper.wait();
+    let evidence = evidence.expect("the wrapper child that holds the rollout must normalize");
+
+    assert_eq!(evidence.launch_process, pane_process);
+    assert_ne!(evidence.provider_process, pane_process);
+    assert_eq!(evidence.source.path, source_path.canonicalize().unwrap());
+    assert_eq!(evidence.source_session_id, native_session_id);
 }
 
 #[test]
@@ -1063,6 +1243,26 @@ fn binding_evidence(
     working_directory: &Path,
     provider_process: ProcessIdentity,
 ) -> ProviderBindingEvidence {
+    binding_evidence_with_launch(
+        provider,
+        source_session_id,
+        process_session_id,
+        source_path,
+        working_directory,
+        provider_process,
+        provider_process,
+    )
+}
+
+fn binding_evidence_with_launch(
+    provider: Provider,
+    source_session_id: &str,
+    process_session_id: &str,
+    source_path: &Path,
+    working_directory: &Path,
+    launch_process: ProcessIdentity,
+    provider_process: ProcessIdentity,
+) -> ProviderBindingEvidence {
     ProviderBindingEvidence {
         provider,
         source_session_id: source_session_id.into(),
@@ -1072,6 +1272,7 @@ fn binding_evidence(
             format: SourceFormat::JsonLines,
         },
         working_directory: working_directory.to_path_buf(),
+        launch_process,
         provider_process,
     }
 }
