@@ -22,6 +22,10 @@ future feature in a new version directory and update the version index in
 `feature/README.md`. Feature records define an agreed scope baseline; they do not
 replace GitHub Issue PRDs or architectural decisions under `docs/adr/`.
 
+Pre-PRD requirements discussions live under
+`docs/feature/<release>/<feature-slug>/discussion.md`.
+See `docs/agents/feature-docs.md`.
+
 ### Requirement routing
 
 Classify a requested change before editing requirement documents:

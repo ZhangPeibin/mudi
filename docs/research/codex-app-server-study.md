@@ -417,11 +417,11 @@ OperationTask / SuccessorLauncher
 
 这与现有架构约束一致：
 
-- [`ADR 0001`](adr/0001-provider-adapter-seam.md)：provider 差异应留在 adapter 边界。
-- [`ADR 0002`](adr/0002-explicitly-authorized-control.md)：所有控制必须由用户明确授权。
-- [`ADR 0003`](adr/0003-detached-operation-task-workers.md)：当前 Operation Task 使用 detached
+- [`ADR 0001`](../adr/0001-provider-adapter-seam.md)：provider 差异应留在 adapter 边界。
+- [`ADR 0002`](../adr/0002-explicitly-authorized-control.md)：所有控制必须由用户明确授权。
+- [`ADR 0003`](../adr/0003-detached-operation-task-workers.md)：当前 Operation Task 使用 detached
   worker，不使用 tmux 或终端按键注入。
-- [`ADR 0006`](adr/0006-separate-successor-launch-from-terminal-adapters.md)：successor launch
+- [`ADR 0006`](../adr/0006-separate-successor-launch-from-terminal-adapters.md)：successor launch
   与 terminal adapter 分离，不能因新增传输方式而重新耦合。
 
 ## 最小协议试验

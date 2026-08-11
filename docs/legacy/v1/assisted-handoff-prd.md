@@ -1,12 +1,15 @@
 # SessionMesh Assisted Handoff PRD
 
+> Legacy local record. It preserves prior Handoff detail, but does not replace the formal
+> GitHub Issue PRD process, `CONTEXT.md`, or accepted ADRs.
+
 | Field | Value |
 |---|---|
-| Status | Confirmed design; ready for issue breakdown |
+| Status | Legacy local record |
 | Last updated | 2026-08-04 |
 | Product phase | Post-v1 |
-| Parent direction | `docs/attention-first-ui-prd.md` |
-| Artifact contract | `docs/handoff-artifact.md` |
+| Parent direction | `attention-first-ui-prd.md` |
+| Artifact contract | Section 11 of this legacy record |
 
 ## 1. Purpose
 
@@ -391,12 +394,15 @@ Each Handoff Artifact is fixed UTF-8 Markdown with these required headings in or
 ```
 
 `Objective`, `Current State`, `Remaining`, and `Next Action` must contain non-whitespace
-content. The Artifact must not contain a complete Transcript, secrets, or unrelated tool
-output.
+content. Each section contains only working context needed by a Successor Session. The
+Artifact must not contain a complete Transcript, secrets, or unrelated tool output.
 
-The Worker validates candidate output in memory. It is the sole Artifact writer: it writes
-an owner-only temporary file and atomically renames it to the declared path only after
-validation. Invalid or interrupted output never appears as a completed Artifact.
+Before an Operation Task becomes `Ready`, the Worker validates the candidate in memory as
+valid UTF-8, non-empty, and structurally complete. The authoritative Task Store keeps only
+result metadata and the Artifact path, never the Artifact body. The Worker is the sole
+Artifact writer: it writes an owner-only temporary file and atomically renames it to the
+declared path only after validation. Invalid or interrupted output never appears as a
+completed Artifact.
 
 Artifacts live under SessionMesh's private data directory, use Task IDs rather than user
 content in filenames, and remain outside the source Project. The directory mode is `0700`
@@ -552,4 +558,4 @@ separate interaction outcome.
 - `docs/adr/0007-link-successors-through-launched-process-evidence.md`
 
 The canonical vocabulary remains in `CONTEXT.md`. This PRD owns Handoff product behavior;
-`docs/handoff-artifact.md` owns the exact Artifact format.
+Section 11 of this record preserves the exact historical Artifact format.

@@ -1,16 +1,16 @@
 # SessionMesh Attention-First UI PRD
 
-> Living document. This PRD captures the proposed product direction discussed after v1.
-> New requirement points should be reviewed here and marked with an explicit decision
-> status before they are treated as implementation scope.
+> Legacy local record. It captures the proposed post-v1 product direction at the time of
+> writing. Formal PRDs and delivery tickets now live in GitHub Issues; accepted version
+> scope and architecture decisions live in `feature/` and `docs/adr/`.
 
 | Field | Value |
 |---|---|
-| Status | Draft |
+| Status | Legacy local record |
 | Last updated | 2026-08-09 |
 | Product phase | Post-v1 exploration |
-| Related baseline | `docs/spec.md` |
-| Assisted Handoff | `docs/assisted-handoff-prd.md` |
+| Related baseline | `product-specification.md` |
+| Assisted Handoff | `assisted-handoff-prd.md` |
 | Production render evidence | `tests/fixtures/production-renders/` |
 
 ## 1. Document contract

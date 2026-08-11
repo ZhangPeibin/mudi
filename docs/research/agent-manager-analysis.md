@@ -281,13 +281,13 @@ SessionMesh 当前的权威模型规定：provider JSONL 是观察状态的 sour
 
 相关 SessionMesh 决策：
 
-- [`ADR 0001`](adr/0001-provider-adapter-seam.md)：provider-specific discovery、解析和 live state
+- [`ADR 0001`](../adr/0001-provider-adapter-seam.md)：provider-specific discovery、解析和 live state
   必须收进 `ProviderAdapter`。
-- [`ADR 0002`](adr/0002-explicitly-authorized-control.md)：任何 session control 都需要选定目标和
+- [`ADR 0002`](../adr/0002-explicitly-authorized-control.md)：任何 session control 都需要选定目标和
   显式授权。
-- [`ADR 0003`](adr/0003-detached-operation-task-workers.md)：Operation Task 使用 detached、
+- [`ADR 0003`](../adr/0003-detached-operation-task-workers.md)：Operation Task 使用 detached、
   non-interactive worker，拒绝 tmux 和按键注入依赖。
-- [`ADR 0006`](adr/0006-separate-successor-launch-from-terminal-adapters.md)：Successor Launch Plan
+- [`ADR 0006`](../adr/0006-separate-successor-launch-from-terminal-adapters.md)：Successor Launch Plan
   保存结构化 executable、args、cwd 和 Artifact，而不是拼接 shell 字符串。
 
 ## 建议
