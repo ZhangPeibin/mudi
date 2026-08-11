@@ -34,12 +34,12 @@
       "locked": false,
       "fontSize": 34,
       "fontFamily": 1,
-      "text": "v2.0.1 System Context - Managed Session Core",
-      "rawText": "v2.0.1 System Context - Managed Session Core",
+      "text": "v2.0.0 System Context - Managed Session Core",
+      "rawText": "v2.0.0 System Context - Managed Session Core",
       "textAlign": "left",
       "verticalAlign": "middle",
       "containerId": null,
-      "originalText": "v2.0.1 System Context - Managed Session Core",
+      "originalText": "v2.0.0 System Context - Managed Session Core",
       "autoResize": false,
       "lineHeight": 1.25
     },
@@ -2558,7 +2558,7 @@
     "currentItemFontFamily": 1,
     "currentItemStrokeColor": "#1e293b",
     "currentItemBackgroundColor": "transparent",
-    "name": "v2.0.1 System Context"
+    "name": "v2.0.0 System Context"
   },
   "files": {}
 }

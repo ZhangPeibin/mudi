@@ -34,12 +34,12 @@
       "locked": false,
       "fontSize": 34,
       "fontFamily": 1,
-      "text": "v2.0.1 Logical Component Architecture",
-      "rawText": "v2.0.1 Logical Component Architecture",
+      "text": "v2.0.0 Logical Component Architecture",
+      "rawText": "v2.0.0 Logical Component Architecture",
       "textAlign": "left",
       "verticalAlign": "middle",
       "containerId": null,
-      "originalText": "v2.0.1 Logical Component Architecture",
+      "originalText": "v2.0.0 Logical Component Architecture",
       "autoResize": false,
       "lineHeight": 1.25
     },
@@ -2622,7 +2622,7 @@
     "currentItemFontFamily": 1,
     "currentItemStrokeColor": "#1e293b",
     "currentItemBackgroundColor": "transparent",
-    "name": "v2.0.1 Logical Components"
+    "name": "v2.0.0 Logical Components"
   },
   "files": {}
 }

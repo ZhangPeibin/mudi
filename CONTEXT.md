@@ -123,6 +123,38 @@ Session ID and the live provider process.
 
 _Avoid:_ Managed Session, tmux Session.
 
+## Managed Launch Registration
+
+A durable local record of one explicitly authorized request to start a Provider CLI before
+that request has established a Session or Current Run. It carries the requested target and
+launch evidence until it receives a Binding Receipt or reaches a terminal launch outcome.
+
+_Avoid:_ Managed Run Registration, pending Session, launch attempt.
+
+## Binding Receipt
+
+The conclusive evidence record associating one Managed Launch Registration with one native
+Session, Current Run, and provider process. Issuing it atomically establishes the Managed
+Session and Managed Current Run relationship.
+
+_Avoid:_ tmux binding, guessed association, launch success message.
+
+## Binding Initializer
+
+An opt-in, SessionMesh-owned launch-time request whose only purpose is to induce a Provider
+source record for a new Session before the developer writes their first task. It is neither
+developer task content nor a generic Prompt-control path.
+
+_Avoid:_ First Prompt, Prompt Manager, automatic task.
+
+## Needs Review
+
+A Managed Launch Registration status in which a provider process may exist but the required
+binding evidence is incomplete or contradictory. It establishes neither a Session nor control
+authority and remains available for user inspection.
+
+_Avoid:_ Managed Current Run, Operation Task State, retryable failure.
+
 ## Externally Started Current Run
 
 A Current Run launched outside a SessionMesh-owned control channel. SessionMesh may observe

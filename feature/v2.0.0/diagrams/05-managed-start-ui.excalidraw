@@ -1,0 +1,251 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [
+    {
+      "id": "title", "type": "text", "x": 60, "y": 28, "width": 1700, "height": 50, "angle": 0,
+      "strokeColor": "#1e293b", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0001", "roundness": {"type": 3}, "seed": 505001, "version": 1, "versionNonce": 505001, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 34, "fontFamily": 1, "text": "v2.0.0 Managed Start UI", "rawText": "v2.0.0 Managed Start UI", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "v2.0.0 Managed Start UI", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "subtitle", "type": "text", "x": 60, "y": 78, "width": 1700, "height": 36, "angle": 0,
+      "strokeColor": "#64748b", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0002", "roundness": {"type": 3}, "seed": 505002, "version": 1, "versionNonce": 505002, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 18, "fontFamily": 1, "text": "Terminal A creates a pending Registration; Terminal B opens the native CLI immediately; only a Binding Receipt enters the Project Tree.", "rawText": "Terminal A creates a pending Registration; Terminal B opens the native CLI immediately; only a Binding Receipt enters the Project Tree.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Terminal A creates a pending Registration; Terminal B opens the native CLI immediately; only a Binding Receipt enters the Project Tree.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "terminal-a", "type": "rectangle", "x": 55, "y": 145, "width": 1020, "height": 890, "angle": 0,
+      "strokeColor": "#2563eb", "backgroundColor": "#eff6ff", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0003", "roundness": {"type": 3}, "seed": 505003, "version": 1, "versionNonce": 505003, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "terminal-a-title", "type": "text", "x": 85, "y": 165, "width": 930, "height": 30, "angle": 0,
+      "strokeColor": "#1e293b", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0004", "roundness": {"type": 3}, "seed": 505004, "version": 1, "versionNonce": 505004, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 23, "fontFamily": 1, "text": "Terminal A  |  SessionMesh TUI", "rawText": "Terminal A  |  SessionMesh TUI", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Terminal A  |  SessionMesh TUI", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "terminal-a-caption", "type": "text", "x": 85, "y": 198, "width": 930, "height": 24, "angle": 0,
+      "strokeColor": "#64748b", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0005", "roundness": {"type": 3}, "seed": 505005, "version": 1, "versionNonce": 505005, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 15, "fontFamily": 1, "text": "Control and observation surface. It remains open while the developer works in Terminal B.", "rawText": "Control and observation surface. It remains open while the developer works in Terminal B.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Control and observation surface. It remains open while the developer works in Terminal B.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "top-strip", "type": "rectangle", "x": 80, "y": 240, "width": 970, "height": 320, "angle": 0,
+      "strokeColor": "#94a3b8", "backgroundColor": "#ffffff", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0006", "roundness": {"type": 3}, "seed": 505006, "version": 1, "versionNonce": 505006, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "top-strip-label", "type": "text", "x": 100, "y": 250, "width": 300, "height": 24, "angle": 0,
+      "strokeColor": "#64748b", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0007", "roundness": {"type": 3}, "seed": 505007, "version": 1, "versionNonce": 505007, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 15, "fontFamily": 1, "text": "TOP STATUS STRIP", "rawText": "TOP STATUS STRIP", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "TOP STATUS STRIP", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "managed-start-panel", "type": "rectangle", "x": 100, "y": 285, "width": 555, "height": 250, "angle": 0,
+      "strokeColor": "#7e22ce", "backgroundColor": "#f3e8ff", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0008", "roundness": {"type": 3}, "seed": 505008, "version": 1, "versionNonce": 505008, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "managed-start-title", "type": "text", "x": 120, "y": 302, "width": 500, "height": 30, "angle": 0,
+      "strokeColor": "#581c87", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0009", "roundness": {"type": 3}, "seed": 505009, "version": 1, "versionNonce": 505009, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 22, "fontFamily": 1, "text": "Managed Start", "rawText": "Managed Start", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Managed Start", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "creation-context", "type": "text", "x": 120, "y": 338, "width": 500, "height": 44, "angle": 0,
+      "strokeColor": "#581c87", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0009a", "roundness": {"type": 3}, "seed": 505109, "version": 1, "versionNonce": 505109, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 14, "fontFamily": 1, "text": "Selected Project / Worktree supplies creation context.\nNo selection: open directory picker.", "rawText": "Selected Project / Worktree supplies creation context.\nNo selection: open directory picker.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Selected Project / Worktree supplies creation context.\nNo selection: open directory picker.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "registration-card", "type": "rectangle", "x": 120, "y": 392, "width": 510, "height": 85, "angle": 0,
+      "strokeColor": "#b45309", "backgroundColor": "#fef3c7", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0010", "roundness": {"type": 3}, "seed": 505010, "version": 1, "versionNonce": 505010, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "registration-card-text", "type": "text", "x": 140, "y": 402, "width": 460, "height": 62, "angle": 0,
+      "strokeColor": "#92400e", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0011", "roundness": {"type": 3}, "seed": 505011, "version": 1, "versionNonce": 505011, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 16, "fontFamily": 1, "text": "STARTING  |  Registration R-104 (pending)\nCodex CLI  |  sessionMesh / main  |  Work Continuity\nBinding; Terminal B open. [Cancel Start]", "rawText": "STARTING  |  Registration R-104 (pending)\nCodex CLI  |  sessionMesh / main  |  Work Continuity\nBinding; Terminal B open. [Cancel Start]", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "STARTING  |  Registration R-104 (pending)\nCodex CLI  |  sessionMesh / main  |  Work Continuity\nBinding; Terminal B open. [Cancel Start]", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "needs-review-note", "type": "text", "x": 120, "y": 486, "width": 500, "height": 40, "angle": 0,
+      "strokeColor": "#7e22ce", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0012", "roundness": {"type": 3}, "seed": 505012, "version": 1, "versionNonce": 505012, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 15, "fontFamily": 1, "text": "Alternate state: NEEDS REVIEW\nInspect only: [Open / Retry Terminal] [Copy Diagnostics].", "rawText": "Alternate state: NEEDS REVIEW\nInspect only: [Open / Retry Terminal] [Copy Diagnostics].", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Alternate state: NEEDS REVIEW\nInspect only: [Open / Retry Terminal] [Copy Diagnostics].", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "signals-panel", "type": "rectangle", "x": 675, "y": 285, "width": 350, "height": 250, "angle": 0,
+      "strokeColor": "#2563eb", "backgroundColor": "#dbeafe", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0013", "roundness": {"type": 3}, "seed": 505013, "version": 1, "versionNonce": 505013, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "signals-title", "type": "text", "x": 695, "y": 302, "width": 300, "height": 30, "angle": 0,
+      "strokeColor": "#1e3a8a", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0014", "roundness": {"type": 3}, "seed": 505014, "version": 1, "versionNonce": 505014, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 20, "fontFamily": 1, "text": "Recent Signals / Tasks", "rawText": "Recent Signals / Tasks", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Recent Signals / Tasks", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "signals-text", "type": "text", "x": 695, "y": 352, "width": 300, "height": 114, "angle": 0,
+      "strokeColor": "#1e3a8a", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0015", "roundness": {"type": 3}, "seed": 505015, "version": 1, "versionNonce": 505015, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 15, "fontFamily": 1, "text": "Recent signal\n  Terminal B attached to private tmux\n\nTasks\n  No task is created by a Registration.\n  Pending launch is not an Operation Task.", "rawText": "Recent signal\n  Terminal B attached to private tmux\n\nTasks\n  No task is created by a Registration.\n  Pending launch is not an Operation Task.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Recent signal\n  Terminal B attached to private tmux\n\nTasks\n  No task is created by a Registration.\n  Pending launch is not an Operation Task.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "project-tree", "type": "rectangle", "x": 80, "y": 590, "width": 970, "height": 410, "angle": 0,
+      "strokeColor": "#15803d", "backgroundColor": "#f0fdf4", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0016", "roundness": {"type": 3}, "seed": 505016, "version": 1, "versionNonce": 505016, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "now-title", "type": "text", "x": 105, "y": 612, "width": 600, "height": 30, "angle": 0,
+      "strokeColor": "#14532d", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0017", "roundness": {"type": 3}, "seed": 505017, "version": 1, "versionNonce": 505017, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 22, "fontFamily": 1, "text": "NOW  |  Project Tree", "rawText": "NOW  |  Project Tree", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "NOW  |  Project Tree", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "now-caption", "type": "text", "x": 105, "y": 648, "width": 850, "height": 25, "angle": 0,
+      "strokeColor": "#166534", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0018", "roundness": {"type": 3}, "seed": 505018, "version": 1, "versionNonce": 505018, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 15, "fontFamily": 1, "text": "Only verified Sessions are listed here. Hierarchy is Project -> Worktree -> Session.", "rawText": "Only verified Sessions are listed here. Hierarchy is Project -> Worktree -> Session.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Only verified Sessions are listed here. Hierarchy is Project -> Worktree -> Session.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "tree-card", "type": "rectangle", "x": 110, "y": 695, "width": 910, "height": 270, "angle": 0,
+      "strokeColor": "#86efac", "backgroundColor": "#ffffff", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0019", "roundness": {"type": 3}, "seed": 505019, "version": 1, "versionNonce": 505019, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "tree-text", "type": "text", "x": 140, "y": 718, "width": 820, "height": 205, "angle": 0,
+      "strokeColor": "#14532d", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0020", "roundness": {"type": 3}, "seed": 505020, "version": 1, "versionNonce": 505020, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 17, "fontFamily": 1, "text": "v  Project  sessionMesh\n    v  Worktree  main\n          Work Continuity                         Open | Codex CLI\n          Provider debugging                      Exited | Claude Code\n          Existing external session                Source record only\n\n    Registration R-104 is absent until the Binding Receipt is issued.", "rawText": "v  Project  sessionMesh\n    v  Worktree  main\n          Work Continuity                         Open | Codex CLI\n          Provider debugging                      Exited | Claude Code\n          Existing external session                Source record only\n\n    Registration R-104 is absent until the Binding Receipt is issued.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "v  Project  sessionMesh\n    v  Worktree  main\n          Work Continuity                         Open | Codex CLI\n          Provider debugging                      Exited | Claude Code\n          Existing external session                Source record only\n\n    Registration R-104 is absent until the Binding Receipt is issued.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "provenance-managed-1", "type": "rectangle", "x": 158, "y": 764, "width": 13, "height": 13, "angle": 0,
+      "strokeColor": "#15803d", "backgroundColor": "#15803d", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0020a", "roundness": {"type": 3}, "seed": 505120, "version": 1, "versionNonce": 505120, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "provenance-managed-2", "type": "rectangle", "x": 158, "y": 785, "width": 13, "height": 13, "angle": 0,
+      "strokeColor": "#15803d", "backgroundColor": "#15803d", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0020b", "roundness": {"type": 3}, "seed": 505121, "version": 1, "versionNonce": 505121, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "provenance-external", "type": "diamond", "x": 157, "y": 805, "width": 15, "height": 15, "angle": 0,
+      "strokeColor": "#64748b", "backgroundColor": "#e2e8f0", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0020c", "roundness": {"type": 3}, "seed": 505122, "version": 1, "versionNonce": 505122, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "provenance-legend-square", "type": "rectangle", "x": 615, "y": 916, "width": 13, "height": 13, "angle": 0,
+      "strokeColor": "#15803d", "backgroundColor": "#15803d", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0020d", "roundness": {"type": 3}, "seed": 505123, "version": 1, "versionNonce": 505123, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "provenance-legend-diamond", "type": "diamond", "x": 822, "y": 915, "width": 15, "height": 15, "angle": 0,
+      "strokeColor": "#64748b", "backgroundColor": "#e2e8f0", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0020e", "roundness": {"type": 3}, "seed": 505124, "version": 1, "versionNonce": 505124, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "provenance-legend-text", "type": "text", "x": 637, "y": 910, "width": 370, "height": 30, "angle": 0,
+      "strokeColor": "#166534", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0020f", "roundness": {"type": 3}, "seed": 505125, "version": 1, "versionNonce": 505125, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 14, "fontFamily": 1, "text": "SessionMesh launch channel     external channel", "rawText": "SessionMesh launch channel     external channel", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "SessionMesh launch channel     external channel", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "terminal-b", "type": "rectangle", "x": 1225, "y": 210, "width": 590, "height": 640, "angle": 0,
+      "strokeColor": "#b45309", "backgroundColor": "#fffbeb", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0021", "roundness": {"type": 3}, "seed": 505021, "version": 1, "versionNonce": 505021, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "terminal-b-title", "type": "text", "x": 1255, "y": 232, "width": 510, "height": 30, "angle": 0,
+      "strokeColor": "#78350f", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0022", "roundness": {"type": 3}, "seed": 505022, "version": 1, "versionNonce": 505022, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 23, "fontFamily": 1, "text": "Terminal B  |  Terminal.app", "rawText": "Terminal B  |  Terminal.app", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Terminal B  |  Terminal.app", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "terminal-b-caption", "type": "text", "x": 1255, "y": 268, "width": 510, "height": 44, "angle": 0,
+      "strokeColor": "#92400e", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0023", "roundness": {"type": 3}, "seed": 505023, "version": 1, "versionNonce": 505023, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 15, "fontFamily": 1, "text": "Opened immediately after private tmux and the Provider CLI start.\nThe developer enters the first Prompt here.", "rawText": "Opened immediately after private tmux and the Provider CLI start.\nThe developer enters the first Prompt here.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Opened immediately after private tmux and the Provider CLI start.\nThe developer enters the first Prompt here.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "tmux-box", "type": "rectangle", "x": 1265, "y": 345, "width": 510, "height": 105, "angle": 0,
+      "strokeColor": "#15803d", "backgroundColor": "#dcfce7", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0024", "roundness": {"type": 3}, "seed": 505024, "version": 1, "versionNonce": 505024, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "tmux-text", "type": "text", "x": 1285, "y": 362, "width": 465, "height": 65, "angle": 0,
+      "strokeColor": "#14532d", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0025", "roundness": {"type": 3}, "seed": 505025, "version": 1, "versionNonce": 505025, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 17, "fontFamily": 1, "text": "private tmux\nSessionMesh-owned terminal transport; not Session identity.", "rawText": "private tmux\nSessionMesh-owned terminal transport; not Session identity.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "private tmux\nSessionMesh-owned terminal transport; not Session identity.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "provider-box", "type": "rectangle", "x": 1265, "y": 490, "width": 510, "height": 145, "angle": 0,
+      "strokeColor": "#b45309", "backgroundColor": "#fef3c7", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0026", "roundness": {"type": 3}, "seed": 505026, "version": 1, "versionNonce": 505026, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "provider-text", "type": "text", "x": 1285, "y": 508, "width": 465, "height": 104, "angle": 0,
+      "strokeColor": "#78350f", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0027", "roundness": {"type": 3}, "seed": 505027, "version": 1, "versionNonce": 505027, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 17, "fontFamily": 1, "text": "native Codex CLI or Claude Code\nDeveloper types the first task\nunless binding initialization was selected.\nSessionMesh never receives developer task content.", "rawText": "native Codex CLI or Claude Code\nDeveloper types the first task\nunless binding initialization was selected.\nSessionMesh never receives developer task content.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "native Codex CLI or Claude Code\nDeveloper types the first task\nunless binding initialization was selected.\nSessionMesh never receives developer task content.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "terminal-retry", "type": "rectangle", "x": 1265, "y": 680, "width": 510, "height": 120, "angle": 0,
+      "strokeColor": "#b91c1c", "backgroundColor": "#fee2e2", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "dashed", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0028", "roundness": {"type": 3}, "seed": 505028, "version": 1, "versionNonce": 505028, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "terminal-retry-text", "type": "text", "x": 1285, "y": 699, "width": 465, "height": 80, "angle": 0,
+      "strokeColor": "#991b1b", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0029", "roundness": {"type": 3}, "seed": 505029, "version": 1, "versionNonce": 505029, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 16, "fontFamily": 1, "text": "If opening or attaching Terminal B fails:\nkeep tmux and the Provider alive; do not restart or kill them.\nDeveloper may explicitly retry only the terminal access.", "rawText": "If opening or attaching Terminal B fails:\nkeep tmux and the Provider alive; do not restart or kill them.\nDeveloper may explicitly retry only the terminal access.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "If opening or attaching Terminal B fails:\nkeep tmux and the Provider alive; do not restart or kill them.\nDeveloper may explicitly retry only the terminal access.", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "new-managed-session-button", "type": "rectangle", "x": 530, "y": 170, "width": 245, "height": 48, "angle": 0,
+      "strokeColor": "#2563eb", "backgroundColor": "#ffffff", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0004a", "roundness": {"type": 3}, "seed": 505104, "version": 1, "versionNonce": 505104, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "new-managed-session-button-text", "type": "text", "x": 550, "y": 181, "width": 205, "height": 25, "angle": 0,
+      "strokeColor": "#1e3a8a", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0004b", "roundness": {"type": 3}, "seed": 505105, "version": 1, "versionNonce": 505105, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 15, "fontFamily": 1, "text": "[n]  New", "rawText": "[n]  New", "textAlign": "center", "verticalAlign": "middle", "containerId": null, "originalText": "[n]  New", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "create-button", "type": "rectangle", "x": 795, "y": 170, "width": 246, "height": 48, "angle": 0,
+      "strokeColor": "#2563eb", "backgroundColor": "#2563eb", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0030", "roundness": {"type": 3}, "seed": 505030, "version": 1, "versionNonce": 505030, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "create-button-text", "type": "text", "x": 809, "y": 181, "width": 218, "height": 25, "angle": 0,
+      "strokeColor": "#ffffff", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0031", "roundness": {"type": 3}, "seed": 505031, "version": 1, "versionNonce": 505031, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 15, "fontFamily": 1, "text": "Confirm: Create and open", "rawText": "Confirm: Create and open", "textAlign": "center", "verticalAlign": "middle", "containerId": null, "originalText": "Confirm: Create and open", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "open-terminal-arrow", "type": "arrow", "x": 1050, "y": 194, "width": 165, "height": 85, "angle": 0,
+      "strokeColor": "#2563eb", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0032", "roundness": {"type": 2}, "seed": 505032, "version": 1, "versionNonce": 505032, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "points": [[0,0],[85,0],[165,85]], "lastCommittedPoint": null, "startBinding": null, "endBinding": null, "startArrowhead": null, "endArrowhead": "triangle", "elbowed": false
+    },
+    {
+      "id": "open-terminal-label-bg", "type": "rectangle", "x": 1065, "y": 178, "width": 150, "height": 34, "angle": 0,
+      "strokeColor": "transparent", "backgroundColor": "#ffffff", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0033", "roundness": {"type": 3}, "seed": 505033, "version": 1, "versionNonce": 505033, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "open-terminal-label", "type": "text", "x": 1072, "y": 184, "width": 140, "height": 22, "angle": 0,
+      "strokeColor": "#2563eb", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0034", "roundness": {"type": 3}, "seed": 505034, "version": 1, "versionNonce": 505034, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 14, "fontFamily": 1, "text": "open immediately", "rawText": "open immediately", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "open immediately", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "binding-arrow", "type": "arrow", "x": 1225, "y": 460, "width": 570, "height": 55, "angle": 0,
+      "strokeColor": "#7e22ce", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0035", "roundness": {"type": 2}, "seed": 505035, "version": 1, "versionNonce": 505035, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "points": [[0,0],[-220,0],[-570,55]], "lastCommittedPoint": null, "startBinding": null, "endBinding": null, "startArrowhead": null, "endArrowhead": "triangle", "elbowed": false
+    },
+    {
+      "id": "binding-label-bg", "type": "rectangle", "x": 700, "y": 478, "width": 290, "height": 35, "angle": 0,
+      "strokeColor": "transparent", "backgroundColor": "#ffffff", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0036", "roundness": {"type": 3}, "seed": 505036, "version": 1, "versionNonce": 505036, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "binding-label", "type": "text", "x": 710, "y": 484, "width": 270, "height": 23, "angle": 0,
+      "strokeColor": "#7e22ce", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0037", "roundness": {"type": 3}, "seed": 505037, "version": 1, "versionNonce": 505037, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 14, "fontFamily": 1, "text": "background evidence -> Binding Receipt", "rawText": "background evidence -> Binding Receipt", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "background evidence -> Binding Receipt", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "receipt-arrow", "type": "arrow", "x": 375, "y": 538, "width": 0, "height": 145, "angle": 0,
+      "strokeColor": "#15803d", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 3, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0038", "roundness": {"type": 2}, "seed": 505038, "version": 1, "versionNonce": 505038, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "points": [[0,0],[0,145]], "lastCommittedPoint": null, "startBinding": null, "endBinding": null, "startArrowhead": null, "endArrowhead": "triangle", "elbowed": false
+    },
+    {
+      "id": "receipt-label-bg", "type": "rectangle", "x": 390, "y": 580, "width": 390, "height": 54, "angle": 0,
+      "strokeColor": "transparent", "backgroundColor": "#ffffff", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0039", "roundness": {"type": 3}, "seed": 505039, "version": 1, "versionNonce": 505039, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "receipt-label", "type": "text", "x": 402, "y": 588, "width": 365, "height": 38, "angle": 0,
+      "strokeColor": "#15803d", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0040", "roundness": {"type": 3}, "seed": 505040, "version": 1, "versionNonce": 505040, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 15, "fontFamily": 1, "text": "Binding Receipt issued\nmove Registration atomically into Project Tree", "rawText": "Binding Receipt issued\nmove Registration atomically into Project Tree", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Binding Receipt issued\nmove Registration atomically into Project Tree", "autoResize": false, "lineHeight": 1.25
+    },
+    {
+      "id": "boundary-note", "type": "rectangle", "x": 1130, "y": 900, "width": 685, "height": 100, "angle": 0,
+      "strokeColor": "#b91c1c", "backgroundColor": "#fee2e2", "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0041", "roundness": {"type": 3}, "seed": 505041, "version": 1, "versionNonce": 505041, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false
+    },
+    {
+      "id": "boundary-note-text", "type": "text", "x": 1152, "y": 920, "width": 635, "height": 62, "angle": 0,
+      "strokeColor": "#991b1b", "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null, "index": "a0042", "roundness": {"type": 3}, "seed": 505042, "version": 1, "versionNonce": 505042, "isDeleted": false, "boundElements": [], "updated": 1786060800000, "link": null, "locked": false,
+      "fontSize": 16, "fontFamily": 1, "text": "Boundary: a Registration is persistent launch intent, not a Session and not a Control Operation.\nOnly a conclusive Binding Receipt creates a Managed Session and Managed Current Run.", "rawText": "Boundary: a Registration is persistent launch intent, not a Session and not a Control Operation.\nOnly a conclusive Binding Receipt creates a Managed Session and Managed Current Run.", "textAlign": "left", "verticalAlign": "middle", "containerId": null, "originalText": "Boundary: a Registration is persistent launch intent, not a Session and not a Control Operation.\nOnly a conclusive Binding Receipt creates a Managed Session and Managed Current Run.", "autoResize": false, "lineHeight": 1.25
+    }
+  ],
+  "appState": {
+    "gridSize": null,
+    "gridStep": 5,
+    "gridModeEnabled": false,
+    "viewBackgroundColor": "#ffffff",
+    "currentItemStrokeColor": "#1e293b",
+    "currentItemBackgroundColor": "transparent",
+    "currentItemFontFamily": 1,
+    "name": "v2.0.0 Managed Start UI"
+  },
+  "files": {}
+}

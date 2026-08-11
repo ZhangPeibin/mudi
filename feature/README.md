@@ -14,4 +14,17 @@ These records are scope baselines, not PRDs or architectural decisions:
 
 ## Versions
 
-- [`v2.0.1`](./v2.0.1/README.md) - Managed Session Core
+- [`v2.0.0`](./v2.0.0/README.md) - Managed Session Core
+- [`v2.0.1`](./v2.0.1/README.md) - Work Continuity
+
+## Planned Direction
+
+The following order is an agreed product direction, not an accepted feature scope. A version
+directory and GitHub Issue PRD are created only after its requirements discussion fixes the
+capability boundary.
+
+| Future version | Product capability | Status |
+|---|---|---|
+| `v2.1.0` | Bounded Action Runtime: explicitly authorize one Managed Session to perform one declared, bounded Action | Scope pending |
+| `v2.2.0` | Verified Action Results: establish evidence that an Action reached its declared result instead of trusting completion prose | Scope pending |
+| `v2.3.0` | Approved Flow Scheduler: coordinate multiple Sessions through a developer-approved Flow using verified results | Scope pending |

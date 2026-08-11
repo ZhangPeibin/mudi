@@ -1,8 +1,10 @@
-# 失效 Session 恢复功能
+# 失效 Session 恢复 - 需求讨论
 
-## 状态
-
-新功能构想，尚未进入 PRD、ADR 或实现阶段。
+**Status:** analyzing
+**Release:** v2.0.1
+**Feature:** failed-session-recovery
+**Scope status:** standalone candidate small requirement within Work Continuity; it does
+not expand the accepted Work Continuity boundary until the user confirms that amendment.
 
 ## 核心价值
 
@@ -175,3 +177,12 @@ Provider stdout、stderr 和完整 Transcript 不进入 Task Store；但 Task �
 - 复制完整 Transcript 到 Artifact；
 - 根据最新文件时间猜测 Successor Session；
 - 把恢复功能变成无人授权的后台自动化。
+
+## Session Log
+
+### 2026-08-10
+
+- 将原 `new_feature/失效Session恢复功能.md` 迁移为 v2.0.1 下的候选小需求讨论稿。
+- 保留其独立恢复路径、证据边界、显式授权和 Handoff Artifact 约束；尚未修改
+  `feature/v2.0.1/README.md` 的已接受范围。
+- 确认以 Work Continuity 下的独立小需求继续分析，而非新建 v2.x 版本或直接进入开发。

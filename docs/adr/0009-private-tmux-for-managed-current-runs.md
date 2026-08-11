@@ -1,7 +1,8 @@
 # ADR 0009 - Use private tmux for Managed Current Runs
 
 - **Status:** Accepted (2026-08-07)
-- **Scope:** v2.0.1 Managed Session Core
+- **Scope:** v2.0.0 Managed Session Core
+- **Version note:** Renumbered from v2.0.1 on 2026-08-09; no decision changed.
 - **Partially supersedes:** ADR 0003
 
 Every Managed Current Run will execute inside a private tmux environment created by
@@ -23,5 +24,5 @@ evidence, and completion from declared result evidence rather than terminal text
 
 This decision supersedes ADR 0003 only where that ADR rejects a required tmux dependency.
 It preserves ADR 0003's detached lifetime, authoritative state, restart reconciliation,
-and no-automatic-retry guarantees for existing Operation Tasks; `v2.0.1` does not migrate
+and no-automatic-retry guarantees for existing Operation Tasks; `v2.0.0` does not migrate
 those Tasks or decide the later Action Runtime.
