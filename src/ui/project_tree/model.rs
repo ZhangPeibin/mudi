@@ -14,16 +14,9 @@ pub(super) enum SessionAgeBand {
     Older,
 }
 
-/// Top-level non-Project groups in the Tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum ProjectTreeSection {
-    OlderProjects,
-}
-
 /// Stable identity for every selectable Project Tree node.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum ProjectTreeKey {
-    Section(ProjectTreeSection),
     Project(ProjectIdentity),
     Worktree {
         project: ProjectIdentity,
@@ -40,21 +33,12 @@ pub(super) enum ProjectTreeKey {
 impl ProjectTreeKey {
     /// Historical groups default closed; Projects and Worktrees default open.
     pub(super) fn uses_disclosure_state(&self) -> bool {
-        matches!(
-            self,
-            Self::Disclosure { .. } | Self::Section(ProjectTreeSection::OlderProjects)
-        )
+        matches!(self, Self::Disclosure { .. })
     }
 }
 
 /// All 页面实际可见的一行；纯展示信息之外还保留稳定身份和父子关系。
 pub(super) enum ProjectTreeRow<'a> {
-    Section {
-        key: ProjectTreeKey,
-        section: ProjectTreeSection,
-        item_count: usize,
-        expanded: bool,
-    },
     Project {
         key: ProjectTreeKey,
         parent: Option<ProjectTreeKey>,
@@ -89,8 +73,7 @@ pub(super) enum ProjectTreeRow<'a> {
 impl ProjectTreeRow<'_> {
     pub(super) fn key(&self) -> &ProjectTreeKey {
         match self {
-            Self::Section { key, .. }
-            | Self::Project { key, .. }
+            Self::Project { key, .. }
             | Self::Worktree { key, .. }
             | Self::Disclosure { key, .. }
             | Self::Session { key, .. } => key,
@@ -103,7 +86,6 @@ impl ProjectTreeRow<'_> {
 
     pub(super) fn parent_key(&self) -> Option<&ProjectTreeKey> {
         match self {
-            Self::Section { .. } => None,
             Self::Project { parent, .. } => parent.as_ref(),
             Self::Worktree { parent, .. }
             | Self::Disclosure { parent, .. }
@@ -113,7 +95,6 @@ impl ProjectTreeRow<'_> {
 
     pub(super) fn depth(&self) -> usize {
         match self {
-            Self::Section { .. } => 0,
             Self::Project { depth, .. } | Self::Worktree { depth, .. } => *depth,
             Self::Disclosure { depth, .. } | Self::Session { depth, .. } => *depth,
         }
@@ -125,8 +106,7 @@ impl ProjectTreeRow<'_> {
 
     pub(super) fn is_expanded(&self) -> bool {
         match self {
-            Self::Section { expanded, .. }
-            | Self::Project { expanded, .. }
+            Self::Project { expanded, .. }
             | Self::Worktree { expanded, .. }
             | Self::Disclosure { expanded, .. } => *expanded,
             Self::Session { .. } => false,
@@ -158,29 +138,6 @@ pub(super) fn rows<'a>(
     let inventory = grouped_sessions(sessions, attention, now_ms);
     for project in inventory.current_projects {
         append_project(&mut rows, project, None, 0, collapsed, expanded_disclosures);
-    }
-
-    if !inventory.older_projects.is_empty() {
-        let key = ProjectTreeKey::Section(ProjectTreeSection::OlderProjects);
-        let expanded = expanded_disclosures.contains(&key);
-        rows.push(ProjectTreeRow::Section {
-            key: key.clone(),
-            section: ProjectTreeSection::OlderProjects,
-            item_count: inventory.older_projects.len(),
-            expanded,
-        });
-        if expanded {
-            for project in inventory.older_projects {
-                append_project(
-                    &mut rows,
-                    project,
-                    Some(key.clone()),
-                    1,
-                    collapsed,
-                    expanded_disclosures,
-                );
-            }
-        }
     }
 
     rows
@@ -464,7 +421,6 @@ struct WorktreeGroup<'a> {
 
 struct ProjectInventory<'a> {
     current_projects: Vec<ProjectGroup<'a>>,
-    older_projects: Vec<ProjectGroup<'a>>,
 }
 
 /// 将已解析 Project 的 Session 分组，并按 Project 最新 Session 活动时间倒序排列。
@@ -539,12 +495,9 @@ fn grouped_sessions<'a>(
             .cmp(&left.latest_activity_ms)
             .then_with(|| left.project.label.cmp(&right.project.label))
     });
-    let (current_projects, older_projects) = projects
-        .into_iter()
-        .partition(|project| project.has_open_session || project.latest_activity_ms >= cutoff_ms);
+    projects.retain(|project| project.has_open_session || project.latest_activity_ms >= cutoff_ms);
     ProjectInventory {
-        current_projects,
-        older_projects,
+        current_projects: projects,
     }
 }
 

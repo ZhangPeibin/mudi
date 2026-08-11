@@ -1,4 +1,4 @@
-use super::model::{rows, ProjectTreeKey, ProjectTreeRow, ProjectTreeSection};
+use super::model::{rows, ProjectTreeKey, ProjectTreeRow};
 use super::view::{draw, group_prefix, open_session_line, worktree_line, SessionTreePosition};
 use super::State;
 use crate::app::Snapshot;
@@ -315,50 +315,49 @@ fn projects_are_sorted_by_their_newest_session_activity() {
 }
 
 #[test]
-fn inactive_projects_older_than_seven_days_are_collapsed_together() {
+fn inactive_projects_older_than_seven_days_are_not_in_the_tree() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
     let mut old = open_session_in_worktree("old", "/old", "main");
     old.project = Some(Project {
         identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/old")),
-        label: "old".into(),
+        label: "stale-project".into(),
     });
     old.state = SessionState::Exited;
     old.last_activity_ms = NOW - 8 * DAY_MS;
 
-    let sessions = [old];
-    let collapsed = rows(
-        &sessions,
+    let snapshot = Snapshot {
+        sessions: vec![old],
+        generated_ms: NOW,
+        ready: true,
+        ..Snapshot::default()
+    };
+    let tree = rows(
+        &snapshot.sessions,
         &AttentionSnapshot::default(),
         NOW,
         &HashSet::new(),
         &HashSet::new(),
     );
-    assert!(collapsed.iter().any(|row| matches!(
-        row,
-        ProjectTreeRow::Section {
-            section: ProjectTreeSection::OlderProjects,
-            item_count: 1,
-            expanded: false,
-            ..
-        }
-    )));
-    assert!(!collapsed
-        .iter()
-        .any(|row| matches!(row, ProjectTreeRow::Project { .. })));
+    assert!(tree.is_empty());
 
-    let expanded_key = ProjectTreeKey::Section(ProjectTreeSection::OlderProjects);
-    let expanded = rows(
-        &sessions,
-        &AttentionSnapshot::default(),
-        NOW,
-        &HashSet::new(),
-        &HashSet::from([expanded_key]),
-    );
-    assert!(expanded.iter().any(|row| matches!(
-        row,
-        ProjectTreeRow::Project { project, depth: 1, .. } if project.label == "old"
-    )));
+    let backend = TestBackend::new(80, 14);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let state = State::default();
+    let labels = SessionLabels::default();
+    let theme = ThemeName::SessionMesh.palette();
+    terminal
+        .draw(|frame| draw(frame, frame.area(), &snapshot, &state, &labels, theme))
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("No Open Sessions."));
+    assert!(!rendered.contains("stale-project"));
 }
 
 #[test]
@@ -384,12 +383,5 @@ fn an_open_project_remains_current_even_when_its_last_activity_is_old() {
     assert!(tree.iter().any(|row| matches!(
         row,
         ProjectTreeRow::Project { project, depth: 0, .. } if project.label == "open"
-    )));
-    assert!(!tree.iter().any(|row| matches!(
-        row,
-        ProjectTreeRow::Section {
-            section: ProjectTreeSection::OlderProjects,
-            ..
-        }
     )));
 }

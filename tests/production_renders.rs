@@ -3742,7 +3742,7 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
         "alpha-model",
         SessionState::Exited,
         20_000,
-        NOW - 8 * DAY_MS,
+        NOW - DAY_MS,
         ("/Users/fixture/code/sessionmesh-alpha", "alpha"),
     );
     let beta = fixture_session(
@@ -3762,8 +3762,6 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
     };
     let mut ui = Ui::default();
 
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);

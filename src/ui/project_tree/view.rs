@@ -4,7 +4,7 @@ use super::super::{
     context, current_attention, provenance_mark, provider_mark, retained_selection,
     snapshot_now_ms, text, theme::Theme,
 };
-use super::model::{ProjectTreeRow, ProjectTreeSection, SessionAgeBand};
+use super::model::{ProjectTreeRow, SessionAgeBand};
 use super::State;
 use crate::app::{fmt_relative, Snapshot};
 use crate::attention::{AttentionRank, AttentionSnapshot};
@@ -68,19 +68,6 @@ pub(in crate::ui) fn draw(
     for row in tree_rows {
         let is_selected = selected.as_ref().is_some_and(|key| key == row.key());
         match row {
-            ProjectTreeRow::Section {
-                section,
-                item_count,
-                expanded,
-                ..
-            } => lines.push(section_line(
-                section,
-                item_count,
-                expanded,
-                is_selected,
-                content_width,
-                theme,
-            )),
             ProjectTreeRow::Project {
                 project,
                 session_count,
@@ -310,20 +297,6 @@ fn exited_session_line(
         Span::styled(elapsed, Style::default().fg(theme.muted)),
     ]);
     retained_selection(line, position.selected, content_width, theme)
-}
-
-fn section_line(
-    section: ProjectTreeSection,
-    item_count: usize,
-    expanded: bool,
-    selected: bool,
-    width: usize,
-    theme: Theme,
-) -> Line<'static> {
-    let label = match section {
-        ProjectTreeSection::OlderProjects => "Older Projects",
-    };
-    group_line(label, item_count, 0, expanded, selected, width, theme)
 }
 
 fn project_line(
