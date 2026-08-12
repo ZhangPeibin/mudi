@@ -6,8 +6,9 @@
 //! snapshot from shared state each frame.
 
 use anyhow::Result;
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture};
+use crossterm::event;
 use crossterm::execute;
+use crossterm::style::Print;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -172,11 +173,34 @@ fn run_tui<L: WorkerLauncher, T: TerminalLauncher>(
 }
 
 fn enter_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
-    execute!(writer, EnterAlternateScreen, EnableMouseCapture)
+    execute!(
+        writer,
+        EnterAlternateScreen,
+        // Crossterm's EnableMouseCapture also enables 1003, which reports every
+        // unpressed pointer movement. SessionMesh only needs clicks, wheel events,
+        // and button-motion events for divider dragging.
+        Print(concat!(
+            "\x1b[?1003l",
+            "\x1b[?1000h",
+            "\x1b[?1002h",
+            "\x1b[?1015h",
+            "\x1b[?1006h",
+        ))
+    )
 }
 
 fn leave_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
-    execute!(writer, DisableMouseCapture, LeaveAlternateScreen)
+    execute!(
+        writer,
+        Print(concat!(
+            "\x1b[?1006l",
+            "\x1b[?1015l",
+            "\x1b[?1002l",
+            "\x1b[?1000l",
+            "\x1b[?1003l",
+        )),
+        LeaveAlternateScreen
+    )
 }
 
 fn event_loop<B: ratatui::backend::Backend, L: WorkerLauncher, T: TerminalLauncher>(
@@ -221,12 +245,18 @@ mod tests {
         let enter = String::from_utf8(enter).unwrap();
         assert!(enter.contains("\x1b[?1049h"));
         assert!(enter.contains("\x1b[?1000h"));
+        assert!(enter.contains("\x1b[?1002h"));
+        assert!(!enter.contains("\x1b[?1003h"));
+        assert!(enter.contains("\x1b[?1015h"));
         assert!(enter.contains("\x1b[?1006h"));
 
         let mut leave = Vec::new();
         leave_tui_screen(&mut leave).unwrap();
         let leave = String::from_utf8(leave).unwrap();
         assert!(leave.contains("\x1b[?1006l"));
+        assert!(leave.contains("\x1b[?1015l"));
+        assert!(leave.contains("\x1b[?1003l"));
+        assert!(leave.contains("\x1b[?1002l"));
         assert!(leave.contains("\x1b[?1000l"));
         assert!(leave.contains("\x1b[?1049l"));
     }
