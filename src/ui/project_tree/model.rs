@@ -332,6 +332,7 @@ pub(super) fn tree_counts(snap: &Snapshot) -> (usize, usize) {
         .sessions
         .iter()
         .filter(|session| !is_system_temporary_cwd(session.cwd.as_deref()))
+        .filter(|session| session.state.is_open())
         .filter_map(|session| session.project.as_ref())
         .map(|project| &project.identity)
         .collect::<HashSet<_>>()
@@ -495,7 +496,7 @@ fn grouped_sessions<'a>(
             .cmp(&left.latest_activity_ms)
             .then_with(|| left.project.label.cmp(&right.project.label))
     });
-    projects.retain(|project| project.has_open_session || project.latest_activity_ms >= cutoff_ms);
+    projects.retain(|project| project.has_open_session);
     ProjectInventory {
         current_projects: projects,
     }

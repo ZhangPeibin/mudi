@@ -1107,7 +1107,7 @@ fn assert_managed_refresh(
         .sessions
         .iter()
         .find(|session| session.provider == provider && session.id == native_session_id)
-        .expect("verified Session should appear in the Project Tree inventory");
+        .expect("verified Session should appear in Session inventory");
     let expected = sessionmesh::project::resolve(Some(worktree));
     assert_eq!(session.provenance, SessionProvenance::Managed);
     assert_eq!(
@@ -1132,10 +1132,12 @@ fn assert_managed_refresh(
     );
     ui.clamp_selections(snapshot);
     if session.state == SessionState::Exited {
-        ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), snapshot)
-            .unwrap();
-        ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), snapshot)
-            .unwrap();
+        let rendered = render_ui(ui, snapshot);
+        assert!(
+            rendered.contains("No Open Sessions"),
+            "Exited Managed Session should not create a home-page Project row:\n{rendered}"
+        );
+        return;
     }
     let rendered = render_ui(ui, snapshot);
     let project_label = expected.project.unwrap().label;

@@ -611,7 +611,11 @@ fn exited_session_hide_is_confirmed_persisted_and_removed_from_the_normal_tree()
         .unwrap()
         .clone();
     exited.last_activity_ms = snapshot.generated_ms - 1_000;
-    snapshot.sessions = vec![exited.clone()];
+    let mut open = exited.clone();
+    open.id = "codex-open".into();
+    open.state = SessionState::Busy;
+    open.last_activity_ms = snapshot.generated_ms;
+    snapshot.sessions = vec![open, exited.clone()];
     let mut ui = Ui::load(&profile_path, None).unwrap();
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Right);
@@ -687,8 +691,12 @@ fn hide_confirmation_revalidates_that_the_session_is_still_exited() {
         .unwrap()
         .clone();
     exited.last_activity_ms = source.generated_ms - 1_000;
+    let mut open = exited.clone();
+    open.id = "codex-open".into();
+    open.state = SessionState::Busy;
+    open.last_activity_ms = source.generated_ms;
     let mut snapshot = Snapshot {
-        sessions: vec![exited.clone()],
+        sessions: vec![open, exited.clone()],
         generated_ms: source.generated_ms,
         ready: true,
         ..Snapshot::default()
@@ -699,7 +707,12 @@ fn hide_confirmation_revalidates_that_the_session_is_still_exited() {
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Char('H'));
 
-    snapshot.sessions[0].state = SessionState::Busy;
+    snapshot
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == "codex-exited")
+        .unwrap()
+        .state = SessionState::Busy;
     press(&mut ui, &snapshot, KeyCode::Enter);
 
     assert!(render(&snapshot, &ui, 120, 30)
@@ -3714,8 +3727,13 @@ fn session_tree_keeps_non_git_history_directly_under_its_project() {
         label: "non-git-project".into(),
     });
     session.worktree = None;
+    let mut open = session.clone();
+    open.id = "non-git-open".into();
+    open.latest_model = Some("non-git-open-model".into());
+    open.state = SessionState::Busy;
+    open.last_activity_ms = NOW;
     let snapshot = Snapshot {
-        sessions: vec![session],
+        sessions: vec![open, session],
         generated_ms: NOW,
         ready: true,
         ..Snapshot::default()
@@ -3754,8 +3772,18 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
         NOW - 9 * DAY_MS,
         ("/Users/fixture/code/sessionmesh-beta", "beta"),
     );
+    let mut alpha_open = alpha.clone();
+    alpha_open.id = "alpha-open".into();
+    alpha_open.latest_model = Some("alpha-open-model".into());
+    alpha_open.state = SessionState::Busy;
+    alpha_open.last_activity_ms = NOW;
+    let mut beta_open = beta.clone();
+    beta_open.id = "beta-open".into();
+    beta_open.latest_model = Some("beta-open-model".into());
+    beta_open.state = SessionState::Idle;
+    beta_open.last_activity_ms = NOW;
     let snapshot = Snapshot {
-        sessions: vec![alpha, beta],
+        sessions: vec![alpha_open, alpha, beta_open, beta],
         generated_ms: NOW,
         ready: true,
         ..Snapshot::default()
@@ -3764,22 +3792,25 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
 
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let alpha_expanded = render(&snapshot, &ui, 120, 30);
     assert!(alpha_expanded.text.contains("✳ alpha"));
     assert!(!alpha_expanded.text.contains("⬡ beta"));
 
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Up);
+    press(&mut ui, &snapshot, KeyCode::Up);
+    press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let both_expanded = render(&snapshot, &ui, 120, 30);
     assert!(both_expanded.text.contains("✳ alpha"));
     assert!(both_expanded.text.contains("⬡ beta"));
 
-    press(&mut ui, &snapshot, KeyCode::Up);
-    press(&mut ui, &snapshot, KeyCode::Up);
-    press(&mut ui, &snapshot, KeyCode::Up);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let only_beta_expanded = render(&snapshot, &ui, 120, 30);
     assert!(!only_beta_expanded.text.contains("✳ alpha"));
@@ -4882,8 +4913,12 @@ fn malformed_label_store_disables_curation_until_rescan_reloads_it() {
         .unwrap()
         .clone();
     exited.last_activity_ms = source.generated_ms - 1_000;
+    let mut open = exited.clone();
+    open.id = "codex-open".into();
+    open.state = SessionState::Busy;
+    open.last_activity_ms = source.generated_ms;
     let snapshot = Snapshot {
-        sessions: vec![exited],
+        sessions: vec![open, exited],
         generated_ms: source.generated_ms,
         ready: true,
         ..Snapshot::default()

@@ -1,4 +1,4 @@
-use super::model::{rows, ProjectTreeKey, ProjectTreeRow};
+use super::model::{rows, tree_counts, ProjectTreeKey, ProjectTreeRow};
 use super::view::{draw, group_prefix, open_session_line, worktree_line, SessionTreePosition};
 use super::State;
 use crate::app::Snapshot;
@@ -315,19 +315,24 @@ fn projects_are_sorted_by_their_newest_session_activity() {
 }
 
 #[test]
-fn inactive_projects_older_than_seven_days_are_not_in_the_tree() {
+fn project_with_only_recent_and_older_sessions_is_not_in_the_tree() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
-    let mut old = open_session_in_worktree("old", "/old", "main");
-    old.project = Some(Project {
-        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/old")),
-        label: "stale-project".into(),
-    });
-    old.state = SessionState::Exited;
-    old.last_activity_ms = NOW - 8 * DAY_MS;
+    let project = Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/history")),
+        label: "history-only-project".into(),
+    };
+    let mut recent = open_session_in_worktree("recent", "/history", "main");
+    recent.project = Some(project.clone());
+    recent.state = SessionState::Exited;
+    recent.last_activity_ms = NOW - DAY_MS;
+    let mut older = open_session_in_worktree("older", "/history", "main");
+    older.project = Some(project);
+    older.state = SessionState::Exited;
+    older.last_activity_ms = NOW - 8 * DAY_MS;
 
     let snapshot = Snapshot {
-        sessions: vec![old],
+        sessions: vec![recent, older],
         generated_ms: NOW,
         ready: true,
         ..Snapshot::default()
@@ -340,6 +345,7 @@ fn inactive_projects_older_than_seven_days_are_not_in_the_tree() {
         &HashSet::new(),
     );
     assert!(tree.is_empty());
+    assert_eq!(tree_counts(&snapshot), (0, 0));
 
     let backend = TestBackend::new(80, 14);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -357,7 +363,29 @@ fn inactive_projects_older_than_seven_days_are_not_in_the_tree() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(rendered.contains("No Open Sessions."));
-    assert!(!rendered.contains("stale-project"));
+    assert!(!rendered.contains("history-only-project"));
+}
+
+#[test]
+fn project_count_includes_only_projects_with_open_sessions() {
+    let mut open = open_session_in_worktree("open", "/open", "main");
+    open.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/open")),
+        label: "open-project".into(),
+    });
+    let mut recent = open_session_in_worktree("recent", "/recent", "main");
+    recent.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/recent")),
+        label: "recent-only-project".into(),
+    });
+    recent.state = SessionState::Exited;
+    let snapshot = Snapshot {
+        sessions: vec![open, recent],
+        generated_ms: 1_000,
+        ready: true,
+        ..Snapshot::default()
+    };
+    assert_eq!(tree_counts(&snapshot), (1, 1));
 }
 
 #[test]

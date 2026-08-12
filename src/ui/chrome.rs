@@ -1,6 +1,6 @@
 //! 全局页头、页脚和上下文状态提示。
 
-use super::{selected_style, Ui};
+use super::{project_tree, selected_style, Ui};
 use crate::app::{fmt_tokens, Snapshot, Tab};
 use crate::read_model::RefreshHealth;
 use crate::tasks::OperationTask;
@@ -9,7 +9,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
-use std::collections::HashSet;
 use std::time::Instant;
 
 /// 绘制产品名、页签、全局 Usage 和 Project 数量组成的页头。
@@ -55,13 +54,7 @@ pub(super) fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                 totals.1.saturating_add(session.usage.output),
             )
         });
-    let project_count = snap
-        .sessions
-        .iter()
-        .filter_map(|session| session.project.as_ref())
-        .map(|project| &project.identity)
-        .collect::<HashSet<_>>()
-        .len();
+    let project_count = project_tree::counts(snap).0;
     let mut right = vec![
         Span::styled(" In ", Style::default().fg(theme.muted)),
         Span::styled(
