@@ -46,3 +46,76 @@ fn failed_index_open_publishes_a_degraded_snapshot_instead_of_a_healthy_empty_on
     assert!(snapshot.sessions.is_empty());
     assert!(matches!(snapshot.health, RefreshHealth::Degraded { .. }));
 }
+
+#[cfg(unix)]
+#[test]
+fn project_resolver_failure_degrades_snapshot_without_hiding_the_session() {
+    use std::os::unix::fs::symlink;
+
+    let temp = TempDir::new();
+    let claude_dir = temp.0.join("claude");
+    let transcript_dir = claude_dir.join("projects/project");
+    std::fs::create_dir_all(&transcript_dir).unwrap();
+
+    let first_link = temp.0.join("cwd-loop-a");
+    let second_link = temp.0.join("cwd-loop-b");
+    symlink(&second_link, &first_link).unwrap();
+    symlink(&first_link, &second_link).unwrap();
+    std::fs::write(
+        transcript_dir.join("broken-project.jsonl"),
+        format!(
+            "{{\"type\":\"assistant\",\"timestamp\":\"2026-08-11T00:00:00Z\",\"cwd\":\"{}\",\"message\":{{\"id\":\"message\",\"model\":\"claude-opus-4-8\",\"usage\":{{\"input_tokens\":1,\"output_tokens\":1}}}}}}\n",
+            first_link.display()
+        ),
+    )
+    .unwrap();
+
+    let config = Config {
+        claude_dir,
+        codex_dir: temp.0.join("codex"),
+        data_dir: temp.0.join("data"),
+        extra_dirs: vec![],
+    };
+
+    let snapshot = RefreshService::new(config).refresh();
+
+    assert_eq!(snapshot.sessions.len(), 1);
+    assert!(snapshot.sessions[0].project.is_none());
+    let RefreshHealth::Degraded { diagnostics } = snapshot.health else {
+        panic!("Project resolution failure must degrade the snapshot");
+    };
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.component == "Project Resolver" && diagnostic.message.contains("cwd-loop-a")
+    }));
+}
+
+#[test]
+fn refresh_snapshot_omits_provider_conversation_content() {
+    let temp = TempDir::new();
+    let claude_dir = temp.0.join("claude");
+    let transcript_dir = claude_dir.join("projects/project");
+    let working_directory = temp.0.join("project");
+    std::fs::create_dir_all(&transcript_dir).unwrap();
+    std::fs::create_dir_all(&working_directory).unwrap();
+    let private_content = "PRIVATE_PROVIDER_CONVERSATION_SENTINEL";
+    std::fs::write(
+        transcript_dir.join("content-safe.jsonl"),
+        format!(
+            "{{\"type\":\"assistant\",\"timestamp\":\"2026-08-11T00:00:00Z\",\"cwd\":\"{}\",\"message\":{{\"id\":\"message\",\"model\":\"claude-opus-4-8\",\"content\":\"{}\",\"usage\":{{\"input_tokens\":1,\"output_tokens\":1}}}}}}\n",
+            working_directory.display(),
+            private_content
+        ),
+    )
+    .unwrap();
+    let config = Config {
+        claude_dir,
+        codex_dir: temp.0.join("codex"),
+        data_dir: temp.0.join("data"),
+        extra_dirs: vec![],
+    };
+
+    let snapshot = RefreshService::new(config).refresh();
+
+    assert_eq!(snapshot.sessions.len(), 1);
+    assert!(!format!("{snapshot:#?}").contains(private_content));
+}
