@@ -17,7 +17,7 @@ const SKILL_FILE: &str = "SKILL.md";
 const MANAGED_MARKER: &str = "<!-- sessionmesh-managed-skill: sessionmesh-handoff -->";
 const VERSION_MARKER_PREFIX: &str = "<!-- sessionmesh-managed-version: ";
 const CURRENT_VERSION: u32 = 1;
-const CANONICAL_SKILL: &str = include_str!("../skills/sessionmesh-handoff/SKILL.md");
+const CANONICAL_SKILL: &str = include_str!("../../skills/sessionmesh-handoff/SKILL.md");
 
 /// Provider-standard roots that receive the same SessionMesh-managed Skill.
 #[derive(Debug, Clone, PartialEq, Eq)]

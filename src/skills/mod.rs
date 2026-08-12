@@ -1,8 +1,10 @@
 //! Generic boundary for SessionMesh-managed Skills.
 
+pub mod handoff;
+
 use crate::domain::Provider;
-use crate::handoff_skill::ManagedHandoffSkills;
 use anyhow::Result;
+use handoff::ManagedHandoffSkills;
 use std::path::PathBuf;
 
 /// A declared, versioned Skill that SessionMesh may manage locally.

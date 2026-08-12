@@ -3857,7 +3857,12 @@ fn detached_worker_completes_after_the_launching_service_is_dropped() {
         if observed.state.is_terminal() {
             break observed;
         }
-        assert!(Instant::now() < deadline, "detached Worker did not finish");
+        assert!(
+            Instant::now() < deadline,
+            "detached Worker did not finish: state={:?}, failure={:?}",
+            observed.state,
+            observed.failure_code
+        );
         std::thread::sleep(Duration::from_millis(20));
     };
 
