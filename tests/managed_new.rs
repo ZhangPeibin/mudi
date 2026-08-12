@@ -504,7 +504,7 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         ..Snapshot::default()
     };
     let mut ui = Ui::default();
-    let action = ui
+    let open_form = ui
         .handle_key(
             KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
             &snapshot,
@@ -512,7 +512,23 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         .unwrap();
     let (rescan_tx, mut rescan_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    assert!(!controller.handle(action, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    assert_eq!(open_form, UiAction::None);
+    assert!(!controller.handle(
+        open_form,
+        &snapshot,
+        &mut ui,
+        &mut NoopClipboard,
+        &rescan_tx,
+    ));
+    let initial = render_ui(&ui, &snapshot);
+    assert!(initial.contains("New Session"));
+    assert!(initial.contains("Choose Directory"));
+
+    let choose = ui
+        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
+        .unwrap();
+    assert_eq!(choose, UiAction::ChooseManagedNewDirectory);
+    assert!(!controller.handle(choose, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
 
     assert!(rescan_rx.try_recv().is_err());
     let rejected = render_ui(&ui, &snapshot);

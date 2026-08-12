@@ -149,7 +149,22 @@ impl State {
         let (project_identity, selected_worktree) = match self.effective_selection(snap)? {
             ProjectTreeKey::Project(project) => (project, None),
             ProjectTreeKey::Worktree { project, root } => (project, Some(root)),
-            _ => return None,
+            ProjectTreeKey::Disclosure {
+                project: Some(project),
+                worktree_root,
+                ..
+            } => (project, worktree_root),
+            ProjectTreeKey::Session(identity) => {
+                let session = find_session(snap, &identity)?;
+                (
+                    session.project.as_ref()?.identity.clone(),
+                    session
+                        .worktree
+                        .as_ref()
+                        .map(|worktree| worktree.root.clone()),
+                )
+            }
+            ProjectTreeKey::Disclosure { project: None, .. } => return None,
         };
         let project = snap
             .sessions

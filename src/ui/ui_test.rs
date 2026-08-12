@@ -753,7 +753,26 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
 }
 
 #[test]
-fn new_without_project_tree_context_requests_a_directory() {
+fn selected_session_new_inherits_its_worktree_context() {
+    let snapshot = managed_new_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap(),
+        UiAction::None
+    );
+    let form = ui.new_session.as_ref().unwrap();
+    assert!(!form.directory_context);
+    assert_eq!(
+        form.targets[form.target_index].working_directory,
+        PathBuf::from("/Users/x/code/sessionmesh")
+    );
+}
+
+#[test]
+fn new_without_project_tree_context_opens_the_form_before_the_directory_picker() {
     let snapshot = Snapshot {
         ready: true,
         ..Snapshot::default()
@@ -763,8 +782,31 @@ fn new_without_project_tree_context_requests_a_directory() {
 
     assert_eq!(
         ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap(),
+        UiAction::None
+    );
+    let form = ui.new_session.as_ref().unwrap();
+    assert!(form.directory_context);
+    assert!(form.targets.is_empty());
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
         UiAction::ChooseManagedNewDirectory
     );
+}
+
+#[test]
+fn repeated_new_shortcuts_never_request_the_directory_picker() {
+    let snapshot = Snapshot {
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    let key = || KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+
+    for _ in 0..3 {
+        assert_eq!(ui.handle_key(key(), &snapshot).unwrap(), UiAction::None);
+    }
+    assert!(ui.new_session.is_some());
 }
 
 #[test]

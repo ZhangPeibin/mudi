@@ -1100,7 +1100,9 @@ impl Ui {
                             false,
                         ));
                     } else {
-                        return Ok(UiAction::ChooseManagedNewDirectory);
+                        let mut form = NewSessionForm::new(Vec::new(), 0, true);
+                        form.field = NewSessionField::Target;
+                        self.new_session = Some(form);
                     }
                 }
             }
