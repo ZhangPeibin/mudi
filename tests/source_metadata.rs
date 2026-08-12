@@ -9,7 +9,8 @@ use sessionmesh::clipboard::Clipboard;
 use sessionmesh::collector::build_sessions;
 use sessionmesh::config::Config;
 use sessionmesh::domain::{
-    ContextState, Provider, Session, SessionState, SourceFormat, SourceMetadata, Usage, Worktree,
+    ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceFormat,
+    SourceMetadata, Usage, Worktree,
 };
 use sessionmesh::index::{Fingerprint, Index};
 use sessionmesh::models::ModelCatalog;
@@ -45,7 +46,10 @@ fn session_with_metadata(
             path: source_path.into(),
             format: SourceFormat::JsonLines,
         },
-        project: None,
+        project: Some(Project {
+            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/sessionmesh")),
+            label: "sessionmesh".into(),
+        }),
         worktree: worktree_path.map(|root| Worktree {
             root: root.into(),
             branch: Some("feature/source-metadata".into()),
@@ -53,7 +57,7 @@ fn session_with_metadata(
         }),
         cwd: cwd.map(str::to_string),
         latest_model: None,
-        state: SessionState::Exited,
+        state: SessionState::Idle,
         context: ContextState::default(),
         usage: Usage::default(),
         per_model: vec![],
@@ -66,15 +70,8 @@ fn session_with_metadata(
 
 fn open_detail(snapshot: &Snapshot) -> Ui {
     let mut ui = Ui::default();
-    for code in [
-        KeyCode::Char('2'),
-        KeyCode::Enter,
-        KeyCode::Down,
-        KeyCode::Enter,
-    ] {
-        ui.handle_key(KeyEvent::new(code, KeyModifiers::NONE), snapshot)
-            .unwrap();
-    }
+    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), snapshot)
+        .unwrap();
     ui
 }
 
@@ -204,8 +201,10 @@ fn detail_selects_real_fields_and_copies_the_complete_selected_value_directly() 
     };
     let mut ui = open_detail(&snapshot);
 
-    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
-        .unwrap();
+    for _ in 0..2 {
+        ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+    }
     assert!(rendered_style_at(&ui, &snapshot, source_path)
         .add_modifier
         .contains(Modifier::BOLD));
@@ -239,8 +238,10 @@ fn clipboard_success_and_failure_are_reported_without_propagating_errors() {
         ..Snapshot::default()
     };
     let mut ui = open_detail(&snapshot);
-    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
-        .unwrap();
+    for _ in 0..2 {
+        ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+    }
     let mut clipboard = RecordingClipboard {
         writes: vec![],
         error: None,
@@ -298,8 +299,10 @@ fn detail_and_direct_copy_expose_source_metadata_without_source_log_contents() {
     };
     let mut ui = open_detail(&snapshot);
     let detail = render(&ui, &snapshot, 120, 30);
-    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
-        .unwrap();
+    for _ in 0..2 {
+        ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
+            .unwrap();
+    }
     let action = ui
         .handle_key(
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),

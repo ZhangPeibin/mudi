@@ -1,44 +1,8 @@
-//! UI-facing application state: tabs, the shared snapshot, and
-//! small formatting helpers. Rendering lives in `ui/`.
+//! UI-facing application state: the shared snapshot and small formatting helpers.
+//! Rendering lives in `ui/`.
 
-use crate::domain::{Provider, Session};
+use crate::domain::Session;
 use chrono::{Local, TimeZone};
-
-/// The three top-level tabs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    All,
-    Claude,
-    Codex,
-}
-
-impl Tab {
-    pub const ALL: [Tab; 3] = [Tab::All, Tab::Claude, Tab::Codex];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Tab::All => "All",
-            Tab::Claude => "Claude Code",
-            Tab::Codex => "Codex CLI",
-        }
-    }
-
-    pub fn provider(self) -> Option<Provider> {
-        match self {
-            Tab::All => None,
-            Tab::Claude => Some(Provider::ClaudeCode),
-            Tab::Codex => Some(Provider::CodexCli),
-        }
-    }
-
-    pub fn index(self) -> usize {
-        match self {
-            Tab::All => 0,
-            Tab::Claude => 1,
-            Tab::Codex => 2,
-        }
-    }
-}
 
 /// Compatibility name for the structured read model consumed by the UI.
 pub use crate::read_model::RefreshSnapshot as Snapshot;

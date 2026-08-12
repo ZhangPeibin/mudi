@@ -4,7 +4,7 @@
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use sessionmesh::alerts;
-use sessionmesh::app::{Snapshot, Tab};
+use sessionmesh::app::Snapshot;
 use sessionmesh::collector;
 use sessionmesh::config::Config;
 use sessionmesh::index::Index;
@@ -28,21 +28,16 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    for tab in Tab::ALL {
-        let mut ui = Ui::default();
-        ui.tab = tab;
-        print_frame(&snap, &ui, tab)?;
-    }
-    Ok(())
+    print_frame(&snap, &Ui::default())
 }
 
-fn print_frame(snap: &Snapshot, ui: &Ui, tab: Tab) -> anyhow::Result<()> {
+fn print_frame(snap: &Snapshot, ui: &Ui) -> anyhow::Result<()> {
     let (w, h) = (110u16, 24u16);
     let mut terminal = Terminal::new(TestBackend::new(w, h))?;
     terminal.draw(|f| draw(f, snap, ui))?;
     let buf = terminal.backend().buffer().clone();
 
-    println!("\n┌── tab: {} {}", tab.title(), "─".repeat(40));
+    println!("\n┌── SessionMesh {}", "─".repeat(40));
     for y in 0..h {
         let mut line = String::new();
         for x in 0..w {

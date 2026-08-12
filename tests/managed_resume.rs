@@ -878,10 +878,10 @@ fn only_verified_exited_managed_sessions_offer_an_explicit_resume_confirmation()
         native_session_id: "native-session-49".into(),
     };
     let eligible = RefreshSnapshot {
-        sessions: vec![display_session(
-            SessionState::Exited,
-            SessionProvenance::Managed,
-        )],
+        sessions: vec![
+            display_session(SessionState::Exited, SessionProvenance::Managed),
+            open_companion_session(),
+        ],
         resumable_managed_sessions: vec![resumable.clone()],
         ready: true,
         ..RefreshSnapshot::default()
@@ -935,7 +935,7 @@ fn only_verified_exited_managed_sessions_offer_an_explicit_resume_confirmation()
     ];
     for (session, resumable_managed_sessions) in ineligible {
         let snapshot = RefreshSnapshot {
-            sessions: vec![session],
+            sessions: vec![session, open_companion_session()],
             resumable_managed_sessions,
             ready: true,
             ..RefreshSnapshot::default()
@@ -1211,12 +1211,23 @@ fn display_session(state: SessionState, provenance: SessionProvenance) -> Sessio
     }
 }
 
+fn open_companion_session() -> Session {
+    let mut session = display_session(SessionState::Idle, SessionProvenance::Observed);
+    session.id = "open-companion".into();
+    session
+}
+
 fn key(character: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE)
 }
 
 fn open_session_detail(ui: &mut Ui, snapshot: &RefreshSnapshot) {
-    ui.handle_key(key('2'), snapshot).unwrap();
+    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), snapshot)
+        .unwrap();
+    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), snapshot)
+        .unwrap();
+    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), snapshot)
+        .unwrap();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), snapshot)
         .unwrap();
 }

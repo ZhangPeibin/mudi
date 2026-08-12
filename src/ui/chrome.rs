@@ -1,7 +1,7 @@
 //! 全局页头、页脚和上下文状态提示。
 
-use super::{project_tree, selected_style, Ui};
-use crate::app::{fmt_tokens, Snapshot, Tab};
+use super::{project_tree, Ui};
+use crate::app::{fmt_tokens, Snapshot};
 use crate::read_model::RefreshHealth;
 use crate::tasks::OperationTask;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -11,12 +11,12 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use std::time::Instant;
 
-/// 绘制产品名、页签、全局 Usage 和 Project 数量组成的页头。
+/// 绘制产品名、版本、全局 Usage 和 Project 数量组成的页头。
 pub(super) fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     let wide = area.width >= 100;
     let compact_projects = area.width < 88;
-    let mut left = vec![
+    let left = vec![
         Span::styled(
             " SessionMesh ",
             Style::default()
@@ -28,22 +28,7 @@ pub(super) fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
             format!("v{} ", env!("CARGO_PKG_VERSION")),
             Style::default().fg(theme.muted),
         ),
-        Span::styled("| ", Style::default().fg(theme.border)),
     ];
-    for (index, tab) in Tab::ALL.iter().copied().enumerate() {
-        if index > 0 {
-            left.push(Span::raw(" "));
-        }
-        left.push(Span::styled(
-            (tab.index() + 1).to_string(),
-            if tab == ui.tab {
-                selected_style(theme)
-            } else {
-                Style::default().fg(theme.foreground)
-            },
-        ));
-    }
-    left.push(Span::raw(" "));
 
     let (input, output) = snap
         .sessions
@@ -131,16 +116,16 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     } else if ui.handoff_confirmation.is_some() {
         "Left/Right Provider | Enter Authorize | Esc Cancel"
     } else if task_detail.is_some_and(OperationTask::is_being_deleted) {
-        "Esc Back | j/k Scroll | 1/2/3 | ? Guide | q Quit"
+        "Esc Back | j/k Scroll | ? Guide | q Quit"
     } else if task_detail.is_some_and(OperationTask::offers_retry) {
-        "d Delete | r Retry | Esc | j/k | 1/2/3 | ? | q Quit"
+        "d Delete | r Retry | Esc | j/k | ? | q Quit"
     } else if task_detail.is_some_and(|task| task.state == crate::tasks::OperationTaskState::Ready)
     {
         "d Delete | o Open Terminal | c Copy Command | Esc"
     } else if task_detail.is_some_and(|task| !task.state.is_terminal()) {
-        "x Cancel | Esc Back | j/k Scroll | 1/2/3 | ? Guide | q Quit"
+        "x Cancel | Esc Back | j/k Scroll | ? Guide | q Quit"
     } else if task_detail.is_some() {
-        "d Delete | Esc | j/k | 1/2/3 | ? | q Quit"
+        "d Delete | Esc | j/k | ? | q Quit"
     } else if compact && status_notice.is_some() {
         ""
     } else if ui.detail.is_some() && compact && can_edit_session && can_handoff {
@@ -150,27 +135,19 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     } else if ui.detail.is_some() && compact {
         "Esc Back | j/k Fields | c Copy | ? Guide | q Quit"
     } else if ui.detail.is_some() && can_edit_session && can_handoff {
-        "Esc | j/k Fields | c Copy | e Edit session | h Handoff | 1/2/3 | ? | q Quit"
+        "Esc | j/k Fields | c Copy | e Edit session | h Handoff | ? | q Quit"
     } else if ui.detail.is_some() && can_edit_session {
-        "Esc | j/k Fields | c Copy | e Edit session | 1/2/3 | ? Guide | q Quit"
+        "Esc | j/k Fields | c Copy | e Edit session | ? Guide | q Quit"
     } else if ui.detail.is_some() {
-        "Esc | j/k Fields | c Copy | 1/2/3 | ? Guide | q Quit"
-    } else if compact && ui.tab == Tab::All && can_edit_session {
-        "j/k | Left/Right | Enter | e Edit | ? | q Quit"
-    } else if compact && ui.tab == Tab::All {
-        "j/k | Left/Right | Enter | ? Guide | q Quit"
+        "Esc | j/k Fields | c Copy | ? Guide | q Quit"
     } else if compact && can_edit_session {
-        "j/k | Enter Inspect | e Edit | ? Guide | q Quit"
+        "j/k | Left/Right | Enter | e Edit | ? | q Quit"
     } else if compact {
-        "j/k | Enter Inspect/Expand | ? Guide | q Quit"
-    } else if ui.tab == Tab::All && can_edit_session {
-        "j/k | Left/Right | Enter | e Edit session | 1/2/3 | r | ? | q Quit"
-    } else if ui.tab == Tab::All {
-        "j/k | Left/Right | Enter | 1/2/3 | r | ? Guide | q Quit"
+        "j/k | Left/Right | Enter | ? Guide | q Quit"
     } else if can_edit_session {
-        "j/k | Enter Inspect | e Edit session | 1/2/3 | ? Guide | q Quit"
+        "j/k | Left/Right | Enter | e Edit session | r | ? | q Quit"
     } else {
-        "j/k | Enter Inspect/Expand | 1/2/3 | ? Guide | q Quit"
+        "j/k | Left/Right | Enter | r | ? Guide | q Quit"
     };
     // 临时操作结果优先于持久错误，持久错误又优先于普通扫描状态。
     let status = if let Some(status_notice) = status_notice.as_ref() {
@@ -180,12 +157,12 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     } else {
         refresh_status(snap)
     };
-    let shows_price_note = ui.tab != Tab::All || ui.detail.is_some();
+    let shows_price_note = ui.detail.is_some();
     let right = if status_notice.is_some() {
         status
     } else if compact && shows_price_note {
         "Estimated using API rates".to_string()
-    } else if ui.tab == Tab::All && ui.detail.is_none() {
+    } else if ui.detail.is_none() {
         status
     } else {
         format!("{status}   ·   Estimated using API rates")

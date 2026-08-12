@@ -1,4 +1,4 @@
-┌ SessionMesh | v0.1.0 | 1 2 3 ────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ SessionMesh | v0.1.0 ────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
                           │WT /Use...  Risk detected││                         │
                           │✳ Ctx +Critical 160.0k...││                         │

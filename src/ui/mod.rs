@@ -1,8 +1,8 @@
 //! SessionMesh 终端界面的渲染与交互状态。
 //!
-//! 本模块使用 Ratatui 构建紧凑的三页式界面。渲染过程只读取业务快照
+//! 本模块使用 Ratatui 构建紧凑的总览界面。渲染过程只读取业务快照
 //! [`Snapshot`] 和界面状态 [`Ui`]：前者提供会话、任务和信号等事实，后者保存
-//! 当前页签、选中项、弹窗与滚动位置。提供方特有字段由适配器负责归一化，
+//! 选中项、弹窗与滚动位置。提供方特有字段由适配器负责归一化，
 //! UI 自己只持久化 Profile 偏好与用户显式设置的会话元数据。
 
 mod attention_summary;
@@ -20,7 +20,6 @@ mod overview;
 mod path_display;
 mod project_tree;
 mod provenance_mark;
-mod provider;
 mod provider_mark;
 mod selected_session;
 mod session_browser;
@@ -30,10 +29,10 @@ mod tasks;
 mod text;
 mod theme;
 
-use crate::app::{Snapshot, Tab};
+use crate::app::Snapshot;
 use crate::attention::{AttentionEngine, AttentionSnapshot};
 use crate::clipboard::Clipboard;
-use crate::domain::{Project, ProjectIdentity, Provider, Session, SessionIdentity, SessionState};
+use crate::domain::{Provider, Session, SessionIdentity, SessionState};
 use crate::managed_sessions::{
     ManagedLaunchAction, ManagedLaunchTarget, ManagedNewRequest, ManagedResumeRequest,
 };
@@ -48,7 +47,6 @@ use ratatui::Frame;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::Cell as StateCell;
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -364,78 +362,11 @@ impl GuideCategory {
     }
 }
 
-/// 提供方页面中一个 Project 分组的稳定键。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ProviderProjectKey {
-    provider: Provider,
-    project: Option<ProjectIdentity>,
-}
-
-/// 可展开分组的身份；用于跨重绘保留展开状态。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ProviderDisclosureKey {
-    MoreRecent(ProviderProjectKey),
-    Older(ProviderProjectKey),
-    UnavailableCwd(Provider),
-}
-
-/// 可展开行的展示类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProviderDisclosureKind {
-    MoreRecent,
-    Older,
-    UnavailableCwd,
-}
-
-impl ProviderDisclosureKind {
-    /// 返回展开行的界面标签。
-    fn label(self) -> &'static str {
-        match self {
-            Self::MoreRecent => "MORE SESSIONS",
-            Self::Older => "OLDER SESSIONS",
-            Self::UnavailableCwd => "MISSING CWD",
-        }
-    }
-}
-
-/// 提供方页面当前选中行可执行的目标。
-#[derive(Clone)]
-enum ProviderTarget<'a> {
-    Session(&'a Session),
-    Disclosure(ProviderDisclosureKey),
-}
-
-/// 提供方页面扁平化后的渲染行。
-enum ProviderPageRow<'a> {
-    Project(Option<&'a Project>),
-    Session(&'a Session),
-    Disclosure {
-        key: ProviderDisclosureKey,
-        kind: ProviderDisclosureKind,
-        count: usize,
-        expanded: bool,
-    },
-}
-
-impl<'a> ProviderPageRow<'a> {
-    /// 将纯展示行过滤掉，只保留可进入详情或可展开的目标。
-    fn into_target(self) -> Option<ProviderTarget<'a>> {
-        match self {
-            ProviderPageRow::Project(_) => None,
-            ProviderPageRow::Session(session) => Some(ProviderTarget::Session(session)),
-            ProviderPageRow::Disclosure { key, .. } => Some(ProviderTarget::Disclosure(key)),
-        }
-    }
-}
-
 /// 由事件循环独占的交互状态。
 ///
 /// 这里不保存业务事实；每次绘制和按键处理都会结合最新 [`Snapshot`] 解析
 /// 当前身份，避免列表重排后把选择落到错误的会话或任务上。
 pub struct Ui {
-    /// 当前顶层页签与 Provider 页面选中位置。
-    pub tab: Tab,
-    pub selected: usize,
     /// All-page Project Tree owns its stable selection and disclosure state.
     project_tree: project_tree::State,
     /// Overview workspace split preference and transient drag state.
@@ -448,7 +379,6 @@ pub struct Ui {
     detail: Option<DetailView>,
     hidden_tree_open: bool,
     hidden_tree: hidden_tree::State,
-    expanded_provider_disclosures: HashSet<ProviderDisclosureKey>,
     guide_open: bool,
     guide_category: GuideCategory,
     guide_pane: GuidePane,
@@ -565,8 +495,6 @@ impl Default for Ui {
     /// 构造首次启动时的默认界面状态。
     fn default() -> Self {
         Ui {
-            tab: Tab::All,
-            selected: 0,
             project_tree: project_tree::State::default(),
             workspace_split: split_pane::State::default(),
             all_region: AllRegion::Now,
@@ -575,7 +503,6 @@ impl Default for Ui {
             detail: None,
             hidden_tree_open: false,
             hidden_tree: hidden_tree::State::default(),
-            expanded_provider_disclosures: HashSet::new(),
             guide_open: false,
             guide_category: GuideCategory::Overview,
             guide_pane: GuidePane::Categories,
@@ -638,11 +565,6 @@ impl Ui {
             theme,
             ..Self::default()
         })
-    }
-
-    /// 返回当前顶层页签。
-    pub fn active_tab(&self) -> Tab {
-        self.tab
     }
 
     /// 返回当前主题的稳定名称。
@@ -777,7 +699,6 @@ impl Ui {
     fn overview_split_is_interactive(&self, terminal_area: ratatui::layout::Rect) -> bool {
         terminal_area.width >= MIN_TERMINAL_WIDTH
             && terminal_area.height >= MIN_TERMINAL_HEIGHT
-            && self.tab == Tab::All
             && self.detail.is_none()
             && !modals::blocks_background_interaction(self)
     }
@@ -1092,7 +1013,7 @@ impl Ui {
         // 下面按上下文分派普通页面和详情的导航动作。
         match key.code {
             crossterm::event::KeyCode::Char('n') => {
-                if self.tab == Tab::All && self.detail.is_none() {
+                if self.detail.is_none() {
                     if let Some(selection) = self.project_tree.new_target_selection(snap) {
                         self.new_session = Some(NewSessionForm::new(
                             selection.targets,
@@ -1117,9 +1038,6 @@ impl Ui {
                 self.labels.reload();
                 return Ok(UiAction::Rescan);
             }
-            crossterm::event::KeyCode::Char('1') => self.set_tab(Tab::All),
-            crossterm::event::KeyCode::Char('2') => self.set_tab(Tab::Claude),
-            crossterm::event::KeyCode::Char('3') => self.set_tab(Tab::Codex),
             crossterm::event::KeyCode::Char('?') => {
                 self.guide_category = self.guide_category_for_context();
                 self.guide_pane = GuidePane::Categories;
@@ -1135,9 +1053,7 @@ impl Ui {
                 self.show_notice("Curation unavailable while Label Store is degraded");
             }
             crossterm::event::KeyCode::Char('H')
-                if self.tab == Tab::All
-                    && self.detail.is_none()
-                    && self.all_region == AllRegion::Now =>
+                if self.detail.is_none() && self.all_region == AllRegion::Now =>
             {
                 if let Some(session) = self.project_tree.selected_session(snap) {
                     if session.state.is_open() {
@@ -1266,14 +1182,14 @@ impl Ui {
                     task_id: self.detail_task(snap).expect("checked above").id.clone(),
                 });
             }
-            crossterm::event::KeyCode::Tab if self.detail.is_none() && self.tab == Tab::All => {
+            crossterm::event::KeyCode::Tab if self.detail.is_none() => {
                 self.all_region = match self.all_region {
                     AllRegion::Now => AllRegion::RecentSignals,
                     AllRegion::RecentSignals => AllRegion::Tasks,
                     AllRegion::Tasks => AllRegion::Now,
                 };
             }
-            crossterm::event::KeyCode::BackTab if self.detail.is_none() && self.tab == Tab::All => {
+            crossterm::event::KeyCode::BackTab if self.detail.is_none() => {
                 self.all_region = match self.all_region {
                     AllRegion::Now => AllRegion::Tasks,
                     AllRegion::RecentSignals => AllRegion::Now,
@@ -1297,86 +1213,55 @@ impl Ui {
                 }
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail.is_none()
-                    && self.tab == Tab::All
-                    && self.all_region == AllRegion::RecentSignals =>
+                if self.detail.is_none() && self.all_region == AllRegion::RecentSignals =>
             {
                 if self.signal_selected + 1 < snap.recent_signals.len() {
                     self.signal_selected += 1;
                 }
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail.is_none()
-                    && self.tab == Tab::All
-                    && self.all_region == AllRegion::RecentSignals =>
+                if self.detail.is_none() && self.all_region == AllRegion::RecentSignals =>
             {
                 self.signal_selected = self.signal_selected.saturating_sub(1);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail.is_none()
-                    && self.tab == Tab::All
-                    && self.all_region == AllRegion::Tasks =>
+                if self.detail.is_none() && self.all_region == AllRegion::Tasks =>
             {
                 if self.task_selected + 1 < snap.tasks.len() {
                     self.task_selected += 1;
                 }
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail.is_none()
-                    && self.tab == Tab::All
-                    && self.all_region == AllRegion::Tasks =>
+                if self.detail.is_none() && self.all_region == AllRegion::Tasks =>
             {
                 self.task_selected = self.task_selected.saturating_sub(1);
             }
             crossterm::event::KeyCode::Right
-                if self.detail.is_none()
-                    && self.tab == Tab::All
-                    && self.all_region == AllRegion::Now =>
+                if self.detail.is_none() && self.all_region == AllRegion::Now =>
             {
                 self.project_tree
                     .move_horizontal(snap, project_tree::HorizontalDirection::Right);
             }
             crossterm::event::KeyCode::Left
-                if self.detail.is_none()
-                    && self.tab == Tab::All
-                    && self.all_region == AllRegion::Now =>
+                if self.detail.is_none() && self.all_region == AllRegion::Now =>
             {
                 self.project_tree
                     .move_horizontal(snap, project_tree::HorizontalDirection::Left);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail.is_none()
-                    && self.tab == Tab::All
-                    && self.all_region == AllRegion::Now =>
+                if self.detail.is_none() && self.all_region == AllRegion::Now =>
             {
                 self.project_tree
                     .move_vertical(snap, project_tree::VerticalDirection::Down);
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail.is_none()
-                    && self.tab == Tab::All
-                    && self.all_region == AllRegion::Now =>
+                if self.detail.is_none() && self.all_region == AllRegion::Now =>
             {
                 self.project_tree
                     .move_vertical(snap, project_tree::VerticalDirection::Up);
             }
-            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail.is_none() =>
-            {
-                let visible_len = self.selectable_len(snap);
-                if self.selected + 1 < visible_len {
-                    self.selected += 1;
-                }
-            }
-            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail.is_none() =>
-            {
-                self.selected = self.selected.saturating_sub(1);
-            }
             crossterm::event::KeyCode::Enter
-                if self.detail.is_none()
-                    && self.tab == Tab::All
-                    && self.all_region == AllRegion::Tasks =>
+                if self.detail.is_none() && self.all_region == AllRegion::Tasks =>
             {
                 if let Some(action) = self.open_selected_task(snap) {
                     return Ok(action);
@@ -1566,29 +1451,9 @@ impl Ui {
         self.guide_max_scroll.set(UNMEASURED_GUIDE_MAX_SCROLL);
     }
 
-    /// 切换顶层页签，并清除只属于旧页面的临时导航状态。
-    fn set_tab(&mut self, tab: Tab) {
-        self.tab = tab;
-        self.selected = 0;
-        self.project_tree.reset_selection();
-        self.all_region = AllRegion::Now;
-        self.signal_selected = 0;
-        self.task_selected = 0;
-        self.detail = None;
-        self.hidden_tree_open = false;
-        self.new_session = None;
-        self.handoff_confirmation = None;
-        self.managed_resume_confirmation = None;
-        self.task_cancellation_confirmation = None;
-        self.task_deletion_confirmation = None;
-        self.task_retry_confirmation = None;
-        self.hide_confirmation = None;
-        self.inventory_delete_confirmation = None;
-    }
-
-    /// 根据当前页面和焦点选择最贴近上下文的 Guide 默认主题。
+    /// 根据当前焦点选择最贴近上下文的 Guide 默认主题。
     fn guide_category_for_context(&self) -> GuideCategory {
-        if self.detail.is_some() || self.tab != Tab::All {
+        if self.detail.is_some() {
             GuideCategory::Sessions
         } else if self.all_region == AllRegion::RecentSignals {
             GuideCategory::Signals
@@ -1624,14 +1489,7 @@ impl Ui {
             return;
         }
         let identity = detail.session;
-        if self.tab.provider().is_none() {
-            self.project_tree.select_session(identity);
-        } else if let Some(index) = self.provider_targets(snap).iter().position(|target| {
-            matches!(target, ProviderTarget::Session(session)
-                    if session.provider == identity.provider && session.id == identity.native_id)
-        }) {
-            self.selected = index;
-        }
+        self.project_tree.select_session(identity);
         self.detail = None;
     }
 
@@ -1651,40 +1509,11 @@ impl Ui {
     pub fn visible(&self, snap: &Snapshot) -> Vec<Session> {
         let normal_snapshot = self.normal_snapshot(snap);
         let snap = &normal_snapshot;
-        match self.tab.provider() {
-            Some(_) => self
-                .provider_targets(snap)
-                .into_iter()
-                .filter_map(|target| match target {
-                    ProviderTarget::Session(session) => Some(session.clone()),
-                    ProviderTarget::Disclosure(_) => None,
-                })
-                .collect(),
-            None => project_tree::open_sessions(snap)
-                .into_iter()
-                .cloned()
-                .collect(),
-        }
-    }
-
-    /// 返回当前页可选择行的数量。
-    pub fn selectable_len(&self, snap: &Snapshot) -> usize {
-        let normal_snapshot = self.normal_snapshot(snap);
-        let snap = &normal_snapshot;
-        if self.tab.provider().is_some() {
-            self.provider_targets(snap).len()
-        } else {
-            self.project_tree.len(snap)
-        }
-    }
-
-    /// 把普通列表选中位置限制在给定长度内。
-    pub fn clamp_selection(&mut self, len: usize) {
-        if len == 0 {
-            self.selected = 0;
-        } else if self.selected >= len {
-            self.selected = len - 1;
-        }
+        self.project_tree
+            .open_sessions(snap)
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     /// 根据最新快照校正所有区域的独立选中位置。
@@ -1695,11 +1524,7 @@ impl Ui {
         }
         let normal_snapshot = self.normal_snapshot(snap);
         let snap = &normal_snapshot;
-        if self.tab == Tab::All {
-            self.project_tree.reconcile(snap);
-        } else {
-            self.clamp_selection(self.selectable_len(snap));
-        }
+        self.project_tree.reconcile(snap);
         if snap.recent_signals.is_empty() {
             self.signal_selected = 0;
         } else if self.signal_selected >= snap.recent_signals.len() {
@@ -1776,7 +1601,7 @@ impl Ui {
         key: crossterm::event::KeyEvent,
         snap: &Snapshot,
     ) -> Option<UiAction> {
-        if self.tab != Tab::All || self.detail.is_some() || snap.managed_launches.is_empty() {
+        if self.detail.is_some() || snap.managed_launches.is_empty() {
             return None;
         }
         if matches!(key.code, crossterm::event::KeyCode::Char('[' | ']')) {
@@ -1880,21 +1705,15 @@ impl Ui {
         if self.detail.is_some() {
             return self.detail_session(snap);
         }
-        if self.tab == Tab::All {
-            if self.all_region != AllRegion::Now {
-                return None;
-            }
-            return self.editor_session(snap);
+        if self.all_region != AllRegion::Now {
+            return None;
         }
-        match self.provider_targets(snap).into_iter().nth(self.selected) {
-            Some(ProviderTarget::Session(session)) => Some(session),
-            _ => None,
-        }
+        self.editor_session(snap)
     }
 
     /// Resolve the All-page editor target from Tree selection even while a status panel has focus.
     fn editor_session<'a>(&self, snap: &'a Snapshot) -> Option<&'a Session> {
-        if self.tab != Tab::All || self.detail.is_some() {
+        if self.detail.is_some() {
             return None;
         }
         self.project_tree.selected_session(snap)
@@ -1992,27 +1811,6 @@ impl Ui {
         }
     }
 
-    /// 返回提供方页面中可交互的 Session 与展开行。
-    fn provider_targets<'a>(&self, snap: &'a Snapshot) -> Vec<ProviderTarget<'a>> {
-        self.provider_page_rows(snap)
-            .into_iter()
-            .filter_map(ProviderPageRow::into_target)
-            .collect()
-    }
-
-    /// 为当前提供方建立已应用展开状态的扁平行列表。
-    fn provider_page_rows<'a>(&self, snap: &'a Snapshot) -> Vec<ProviderPageRow<'a>> {
-        let Some(provider) = self.tab.provider() else {
-            return Vec::new();
-        };
-        provider::rows(
-            &snap.sessions,
-            provider,
-            snap.generated_ms,
-            &self.expanded_provider_disclosures,
-        )
-    }
-
     /// 打开选中的 Task；未读终态任务同时请求显式记录 Acknowledgement。
     fn open_selected_task(&mut self, snap: &Snapshot) -> Option<UiAction> {
         let task = snap.tasks.get(self.task_selected)?;
@@ -2032,30 +1830,8 @@ impl Ui {
             })
     }
 
-    /// 激活当前列表项：进入 Session/Signal 详情或切换提供方分组展开状态。
+    /// 激活当前列表项：进入 Session 或 Signal 详情。
     fn activate_selection(&mut self, snap: &Snapshot) {
-        if self.tab.provider().is_some() {
-            match self.provider_targets(snap).into_iter().nth(self.selected) {
-                Some(ProviderTarget::Session(session)) => {
-                    self.detail = Some(DetailView {
-                        session: SessionIdentity {
-                            provider: session.provider,
-                            native_id: session.id.clone(),
-                        },
-                        task_id: None,
-                        scroll: StateCell::new(0),
-                        selected_field: 0,
-                        origin_signal: None,
-                    });
-                }
-                Some(ProviderTarget::Disclosure(disclosure)) => {
-                    self.toggle_provider_disclosure(disclosure);
-                }
-                None => {}
-            }
-            return;
-        }
-
         if self.all_region == AllRegion::Now {
             if let Some(session) = self.project_tree.activate(snap) {
                 self.detail = Some(DetailView {
@@ -2110,7 +1886,6 @@ impl Ui {
                                     .is_some_and(|worktree| worktree.root == *worktree_root)
                             })
                     {
-                        self.tab = Tab::All;
                         self.all_region = AllRegion::Now;
                         self.project_tree
                             .select_session(SessionIdentity::from(session));
@@ -2124,13 +1899,6 @@ impl Ui {
                     }
                 }
             }
-        }
-    }
-
-    /// 切换一个提供方分组的展开状态。
-    fn toggle_provider_disclosure(&mut self, disclosure: ProviderDisclosureKey) {
-        if !self.expanded_provider_disclosures.remove(&disclosure) {
-            self.expanded_provider_disclosures.insert(disclosure);
         }
     }
 }
@@ -2171,10 +1939,7 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     } else if let Some(task) = ui.detail_task(snap) {
         tasks::draw_detail(f, screen.content, task, snap, ui);
     } else {
-        match ui.tab {
-            Tab::All => overview::draw(f, screen.content, snap, ui),
-            _ => provider::draw(f, screen.content, snap, ui),
-        }
+        overview::draw(f, screen.content, snap, ui);
     }
 
     chrome::draw_footer(f, screen.footer, snap, ui);

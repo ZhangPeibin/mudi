@@ -1,4 +1,4 @@
-┌ SessionMesh | v0.1.0 | 1 2 3 ─────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
+┌ SessionMesh | v0.1.0 ─────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
                                         ┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
                                         │WT /Users/fixture/co...  Risk detected││                                      │
             ┌ Session Detail ──────────────────────────────────────────────────────────────────────────────┐           │
@@ -27,4 +27,4 @@
  Worktree   └ Up/Down Select | c Copy | h Handoff | Esc Close ──────────────────────────────── fields 1/17 ┘
  Run usage   in 1.2k | out 230                         │
 ───────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────
-Esc | j/k Fields | c Copy | e Edit session | h Handoff | 1/2/3 | ?watching · 0 sessions · 0 parsed / 0 skipped   ·   Est
+Esc | j/k Fields | c Copy | e Edit session | h Handoff | ? | q Quiwatching · 0 sessions · 0 parsed / 0 skipped   ·   Est

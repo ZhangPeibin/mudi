@@ -61,7 +61,6 @@ fn key(character: char) -> KeyEvent {
 }
 
 fn open_detail(ui: &mut Ui, snapshot: &RefreshSnapshot) {
-    ui.handle_key(key('2'), snapshot).unwrap();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), snapshot)
         .unwrap();
 }

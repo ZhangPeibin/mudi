@@ -57,10 +57,6 @@ impl State {
         self.selection = self.effective_selection(snap);
     }
 
-    pub(in crate::ui) fn reset_selection(&mut self) {
-        self.selection = None;
-    }
-
     pub(in crate::ui) fn move_vertical(&mut self, snap: &Snapshot, direction: VerticalDirection) {
         let rows = self.rows(snap);
         let Some(selection) = self.effective_selection(snap) else {
@@ -140,6 +136,16 @@ impl State {
             return None;
         };
         Some(identity)
+    }
+
+    pub(in crate::ui) fn open_sessions<'a>(&self, snap: &'a Snapshot) -> Vec<&'a Session> {
+        self.rows(snap)
+            .into_iter()
+            .filter_map(|row| match row {
+                ProjectTreeRow::Session { session, .. } => Some(session),
+                _ => None,
+            })
+            .collect()
     }
 
     pub(in crate::ui) fn new_target_selection(
@@ -223,10 +229,6 @@ impl State {
 
     pub(in crate::ui) fn select_session(&mut self, identity: SessionIdentity) {
         self.selection = Some(ProjectTreeKey::Session(identity));
-    }
-
-    pub(in crate::ui) fn len(&self, snap: &Snapshot) -> usize {
-        self.rows(snap).len()
     }
 
     fn expand(&mut self, key: &ProjectTreeKey) {

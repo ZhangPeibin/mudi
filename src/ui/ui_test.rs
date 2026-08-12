@@ -866,14 +866,10 @@ fn selected_worktree_new_requires_title_and_does_not_remember_provider() {
     assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("Choose Provider"));
 }
 
-/// 对指定顶层页签及可选详情状态执行一次无崩溃渲染。
-fn render_tab(tab: Tab, detail: bool) {
+/// 对总览及可选详情状态执行一次无崩溃渲染。
+fn render_overview(detail: bool) {
     let snap = demo_snapshot();
-    let mut ui = Ui {
-        tab,
-        selected: 0,
-        ..Ui::default()
-    };
+    let mut ui = Ui::default();
     if detail {
         ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snap)
             .unwrap();
@@ -882,6 +878,17 @@ fn render_tab(tab: Tab, detail: bool) {
     let mut terminal = Terminal::new(backend).unwrap();
     // 无论当前状态如何，布局计算和绘制过程都不能崩溃。
     terminal.draw(|f| draw(f, &snap, &ui)).unwrap();
+}
+
+fn open_first_session_detail(ui: &mut Ui, snapshot: &Snapshot) {
+    let session = snapshot.sessions.first().expect("test Session");
+    ui.detail = Some(DetailView {
+        session: SessionIdentity::from(session),
+        task_id: None,
+        scroll: StateCell::new(0),
+        selected_field: 0,
+        origin_signal: None,
+    });
 }
 
 #[test]
@@ -903,110 +910,11 @@ fn t_key_does_not_change_the_active_theme_or_show_a_notice() {
 }
 
 #[test]
-fn each_theme_supplies_the_selected_page_structural_role() {
-    for (name, selected_background) in [
-        ("sessionmesh", Color::Rgb(32, 35, 38)),
-        ("catppuccin", Color::Rgb(35, 36, 52)),
-        ("dracula", Color::Rgb(34, 38, 62)),
-        ("gruvbox", Color::Rgb(47, 36, 29)),
-        ("light", Color::Rgb(230, 233, 235)),
-        ("high-contrast", Color::Rgb(20, 20, 20)),
-    ] {
-        let profile_path = unused_profile_path(name);
-        std::fs::write(
-            &profile_path,
-            format!(r#"{{"help_seen":true,"theme":"{name}"}}"#),
-        )
-        .unwrap();
-        let ui = Ui::load(&profile_path, None).unwrap();
-        let terminal = render_terminal(&ui);
-        assert_eq!(
-            rendered_style_at(&terminal, "1 2 3").bg,
-            Some(selected_background)
-        );
-        let _ = std::fs::remove_file(profile_path);
-    }
-}
-
-#[test]
-fn sessionmesh_uses_semantic_busy_and_critical_context_roles() {
-    let mut snapshot = demo_snapshot();
-    snapshot.sessions[0].context.tokens = 180_000;
-    let now = Local::now().timestamp_millis();
-    snapshot.sessions[0].last_activity_ms = now;
-    let mut selected = snapshot.sessions[0].clone();
-    selected.id = "selected-session".into();
-    selected.project = Some(test_project("selected-project"));
-    selected.context.tokens = 50_000;
-    selected.last_activity_ms = now - 1_000;
-    snapshot.sessions.push(selected);
-    let ui = Ui {
-        tab: Tab::Claude,
-        selected: 1,
-        ..Ui::default()
-    };
-
-    let terminal = render_terminal_with_snapshot(&ui, &snapshot);
-
-    assert_eq!(
-        rendered_style_at(&terminal, "Busy").fg,
-        Some(Color::Rgb(120, 205, 120))
-    );
-    assert_eq!(
-        rendered_style_at(&terminal, "180.0k (90%)").fg,
-        Some(Color::Rgb(255, 95, 109))
-    );
-}
-
-#[test]
-fn sessionmesh_uses_semantic_idle_exited_and_warning_roles() {
-    let mut snapshot = demo_snapshot();
-    let now = Local::now().timestamp_millis();
-    snapshot.sessions[0].last_activity_ms = now;
-    snapshot.sessions[0].context.tokens = 50_000;
-
-    let mut idle = snapshot.sessions[0].clone();
-    idle.id = "idle-session".into();
-    idle.project = Some(test_project("idle-project"));
-    idle.state = SessionState::Idle;
-    idle.context.tokens = 150_000;
-    idle.last_activity_ms = now - 1_000;
-
-    let mut exited = snapshot.sessions[0].clone();
-    exited.id = "exited-session".into();
-    exited.project = Some(test_project("exited-project"));
-    exited.state = SessionState::Exited;
-    exited.context.tokens = 50_000;
-    exited.last_activity_ms = now - 2_000;
-    snapshot.sessions.extend([idle, exited]);
-
-    let ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-    let terminal = render_terminal_with_snapshot(&ui, &snapshot);
-
-    assert_eq!(
-        rendered_style_at(&terminal, "Idle").fg,
-        Some(Color::Rgb(105, 184, 220))
-    );
-    assert_eq!(
-        rendered_style_at(&terminal, "150.0k (75%)").fg,
-        Some(Color::Rgb(238, 190, 70))
-    );
-    assert_eq!(
-        rendered_style_at(&terminal, "· —").fg,
-        Some(Color::Rgb(112, 116, 120))
-    );
-}
-
-#[test]
 fn light_theme_supplies_background_border_accent_and_muted_roles() {
     let profile_path = unused_profile_path("light-roles");
     std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"light"}"#).unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let ui = Ui::load(&profile_path, None).unwrap();
     let snapshot = Snapshot::default();
-    ui.tab = Tab::Claude;
 
     let terminal = render_terminal_with_snapshot(&ui, &snapshot);
     let top_left = &terminal.backend().buffer()[(0, 0)];
@@ -1018,7 +926,7 @@ fn light_theme_supplies_background_border_accent_and_muted_roles() {
         Some(Color::Rgb(25, 91, 130))
     );
     assert_eq!(
-        rendered_style_at(&terminal, "Indexing… sessions will appear shortly.").fg,
+        rendered_style_at(&terminal, &format!("v{}", env!("CARGO_PKG_VERSION")),).fg,
         Some(Color::Rgb(96, 101, 106))
     );
     let _ = std::fs::remove_file(profile_path);
@@ -1209,10 +1117,7 @@ fn now_preserves_lifecycle_colors_when_attention_overrides_rank() {
     idle.cwd = Some("/Users/x/code/idle-warning".into());
     idle.state = SessionState::Idle;
     snapshot.sessions.push(idle);
-    let ui = Ui {
-        selected: usize::MAX,
-        ..Ui::default()
-    };
+    let ui = Ui::default();
 
     let terminal = render_terminal_at(&ui, &snapshot, 120, 30);
     let busy = rendered_style_at(&terminal, "●");
@@ -1730,7 +1635,6 @@ fn worktree_signal_locates_the_recommended_now_session_not_its_first_member() {
         .unwrap();
     let located = render_terminal_at(&ui, &snapshot, 120, 30);
 
-    assert_eq!(ui.active_tab(), Tab::All);
     let cursor = now_cursor_style_at(&located, "ommended").unwrap();
     assert_eq!(cursor.fg, Some(Color::Rgb(230, 180, 80)));
     assert_eq!(now_cursor_style_at(&located, "ry-first"), None);
@@ -1772,7 +1676,6 @@ fn cleared_worktree_signal_stays_selected_when_the_worktree_is_no_longer_open() 
     let unchanged = render_terminal_at(&ui, &snapshot, 120, 30);
     let page = rendered_rows_at(&ui, &snapshot, 120, 30);
 
-    assert_eq!(ui.active_tab(), Tab::All);
     assert_eq!(
         rendered_style_at(&unchanged, "Risk cleared").bg,
         selected_background
@@ -2042,8 +1945,8 @@ fn changing_theme_does_not_change_rendered_product_semantics() {
     )
     .unwrap();
     std::fs::write(&light_path, br#"{"help_seen":true,"theme":"light"}"#).unwrap();
-    let mut sessionmesh = Ui::load(&sessionmesh_path, None).unwrap();
-    let mut light = Ui::load(&light_path, None).unwrap();
+    let sessionmesh = Ui::load(&sessionmesh_path, None).unwrap();
+    let light = Ui::load(&light_path, None).unwrap();
     let mut snapshot = demo_snapshot();
     snapshot.sessions[0].last_activity_ms = Local::now().timestamp_millis();
     snapshot.alerts = AlertCounts {
@@ -2056,68 +1959,8 @@ fn changing_theme_does_not_change_rendered_product_semantics() {
         rendered_with_snapshot(&light, &snapshot)
     );
 
-    sessionmesh.tab = Tab::Claude;
-    light.tab = Tab::Claude;
-    assert_eq!(
-        rendered_with_snapshot(&sessionmesh, &snapshot),
-        rendered_with_snapshot(&light, &snapshot)
-    );
-
     let _ = std::fs::remove_file(sessionmesh_path);
     let _ = std::fs::remove_file(light_path);
-}
-
-#[test]
-fn provider_inventory_and_detail_use_theme_structural_roles() {
-    let mut snapshot = demo_snapshot();
-    let now = Local::now().timestamp_millis();
-    snapshot.sessions[0].last_activity_ms = now;
-    let mut secondary = snapshot.sessions[0].clone();
-    secondary.id = "secondary-session".into();
-    secondary.project = Some(test_project("second"));
-    secondary.latest_model = Some("model-two".into());
-    secondary.state = SessionState::Exited;
-    secondary.last_activity_ms = now - 1_000;
-    snapshot.sessions.push(secondary);
-    let profile_path = unused_profile_path("light-provider-roles");
-    std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"light"}"#).unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
-    ui.tab = Tab::Claude;
-
-    let inventory = render_terminal_with_snapshot(&ui, &snapshot);
-    assert_eq!(
-        rendered_style_at(&inventory, "State").fg,
-        Some(Color::Rgb(25, 91, 130))
-    );
-    assert_eq!(
-        rendered_style_at(&inventory, "second").fg,
-        Some(Color::Rgb(25, 91, 130))
-    );
-    assert_eq!(
-        rendered_style_at(&inventory, "model-two").fg,
-        Some(Color::Rgb(96, 101, 106))
-    );
-    assert_eq!(
-        inventory.backend().buffer()[(0, 3)].style().fg,
-        Some(Color::Rgb(126, 130, 133))
-    );
-
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    let detail = render_terminal_with_snapshot(&ui, &snapshot);
-    assert_eq!(
-        rendered_style_at(&detail, "Attention Conditions").fg,
-        Some(Color::Rgb(25, 91, 130))
-    );
-    assert_eq!(
-        rendered_style_at(&detail, "Provider").fg,
-        Some(Color::Rgb(96, 101, 106))
-    );
-    assert_eq!(
-        rendered_style_at(&detail, "demo-session").fg,
-        Some(Color::Rgb(28, 31, 34))
-    );
-    let _ = std::fs::remove_file(profile_path);
 }
 
 #[test]
@@ -2147,8 +1990,7 @@ fn guide_uses_the_active_theme_roles() {
 fn footer_uses_theme_roles_and_exposes_the_global_guide() {
     let profile_path = unused_profile_path("light-footer");
     std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"light"}"#).unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
-    ui.tab = Tab::Claude;
+    let ui = Ui::load(&profile_path, None).unwrap();
     let snapshot = Snapshot::default();
     let backend = TestBackend::new(120, 30);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -2285,79 +2127,24 @@ fn guide_can_be_reopened_and_closed_without_changing_the_active_page() {
 }
 
 #[test]
-fn guide_prevents_page_navigation_from_changing_the_underlying_page() {
-    let mut ui = Ui::load(unused_profile_path("numeric-pages"), None).unwrap();
-    let snapshot = Snapshot::default();
-
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    assert_eq!(ui.active_tab(), Tab::All);
-
-    ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    assert_eq!(ui.active_tab(), Tab::Claude);
-}
-
-#[test]
-fn tab_and_shift_tab_are_no_ops_on_a_single_region_page() {
+fn header_has_no_numeric_page_navigation_and_number_keys_do_not_change_overview() {
+    let snapshot = demo_snapshot();
     let mut ui = Ui::default();
-    let snapshot = Snapshot::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    let page_before_focus_keys = rendered(&ui);
+    let before = rendered_with_snapshot(&ui, &snapshot);
 
-    ui.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &snapshot)
+    assert!(!before.lines().next().unwrap_or_default().contains("1 2 3"));
+    for key in ['1', '2', '3'] {
+        ui.handle_key(
+            KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+            &snapshot,
+        )
         .unwrap();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
-        &snapshot,
-    )
-    .unwrap();
-
-    assert_eq!(rendered(&ui), page_before_focus_keys);
-}
-
-#[test]
-fn persistent_navigation_is_numeric_and_highlights_the_active_page() {
-    let snapshot = Snapshot::default();
-    let mut ui = Ui::default();
-    let selected_background = Some(ThemeName::SessionMesh.palette().selected_background);
-    let terminal = render_terminal(&ui);
-    let navigation_cells = &terminal.backend().buffer().content()[..80];
-    let navigation: String = navigation_cells.iter().map(|cell| cell.symbol()).collect();
-
-    assert_eq!(navigation.matches("1 2 3").count(), 1);
-    for page_name in ["All", "Claude Code", "Codex CLI"] {
-        assert!(!navigation.contains(page_name));
+        assert_eq!(rendered_with_snapshot(&ui, &snapshot), before);
     }
-    assert_eq!(
-        rendered_style_at(&terminal, "1 2 3").bg,
-        selected_background
-    );
-    assert_ne!(rendered_style_at(&terminal, "2 3").bg, selected_background);
-
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    let terminal = render_terminal(&ui);
-    assert_eq!(rendered_style_at(&terminal, "2 3").bg, selected_background);
 }
 
 #[test]
-fn guide_navigation_explains_page_mapping_and_essential_controls() {
+fn guide_navigation_explains_essential_controls_without_page_mapping() {
     let mut ui = Ui::load(unused_profile_path("guide-content"), None).unwrap();
     ui.handle_key(
         KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
@@ -2380,7 +2167,6 @@ fn guide_navigation_explains_page_mapping_and_essential_controls() {
     }
 
     for expected in [
-        "1 / 2 / 3",
         "Tab / Shift+Tab",
         "Up/Down or j/k",
         "Enter",
@@ -2396,20 +2182,15 @@ fn guide_navigation_explains_page_mapping_and_essential_controls() {
             "Navigation Guide should contain {expected:?}"
         );
     }
+    assert!(!guide.contains("Open a page"));
     assert!(!guide.contains("t Theme"));
 }
 
 #[test]
-fn provider_session_detail_remains_keyboard_accessible() {
+fn overview_session_detail_remains_keyboard_accessible() {
     let mut snapshot = demo_snapshot();
     snapshot.sessions[0].last_activity_ms = Local::now().timestamp_millis();
     let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
     assert!(rendered_with_snapshot(&ui, &snapshot).contains("Session Detail"));
@@ -2417,307 +2198,6 @@ fn provider_session_detail_remains_keyboard_accessible() {
     ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
         .unwrap();
     assert!(!rendered_with_snapshot(&ui, &snapshot).contains("Session Detail"));
-}
-
-#[test]
-fn provider_page_groups_its_sessions_by_project_in_newest_project_order() {
-    let now = Local::now().timestamp_millis();
-    let mut snapshot = demo_snapshot();
-    snapshot.generated_ms = now;
-    snapshot.sessions[0].state = SessionState::Exited;
-    snapshot.sessions[0].id = "newest-project-recent".into();
-    snapshot.sessions[0].project = Some(test_project("newest-project"));
-    snapshot.sessions[0].latest_model = Some("new-project-model".into());
-    snapshot.sessions[0].last_activity_ms = now - 1_000;
-
-    let mut older_in_same_project = snapshot.sessions[0].clone();
-    older_in_same_project.id = "newest-project-second".into();
-    older_in_same_project.latest_model = Some("same-project-model".into());
-    older_in_same_project.last_activity_ms = now - 3_000;
-
-    let mut older_project = snapshot.sessions[0].clone();
-    older_project.id = "older-project-session".into();
-    older_project.project = Some(test_project("older-project"));
-    older_project.latest_model = Some("older-model".into());
-    older_project.last_activity_ms = now - 2_000;
-
-    let mut other_provider = snapshot.sessions[0].clone();
-    other_provider.provider = Provider::CodexCli;
-    other_provider.id = "codex-must-not-render".into();
-    other_provider.project = Some(test_project("codex-project"));
-    other_provider.latest_model = Some("codex-must-not-render".into());
-
-    snapshot
-        .sessions
-        .extend([older_in_same_project, older_project, other_provider]);
-    let ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-
-    let page = rendered_rows_at(&ui, &snapshot, 120, 30);
-    let newest_header = page.find("PROJECT  newest-project").unwrap();
-    let older_header = page.find("PROJECT  older-project").unwrap();
-
-    assert!(newest_header < older_header);
-    assert_eq!(page.matches("PROJECT  newest-project").count(), 1);
-    assert!(page.contains("new-project-model"));
-    assert!(page.contains("same-project-model"));
-    assert!(page.contains("older-model"));
-    assert!(!page.contains("codex-must-not-render"));
-}
-
-#[test]
-fn provider_project_folds_recent_sessions_after_five_and_enter_expands() {
-    let now = Local::now().timestamp_millis();
-    let mut snapshot = demo_snapshot();
-    snapshot.generated_ms = now;
-    snapshot.sessions = (0..7)
-        .map(|position| {
-            let mut session = snapshot.sessions[0].clone();
-            session.id = format!("recent-{position}");
-            session.latest_model = Some(format!("recent-model-{position}"));
-            session.last_activity_ms = now - position * 1_000;
-            session
-        })
-        .collect();
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        selected: 5,
-        ..Ui::default()
-    };
-
-    let collapsed = rendered_rows_at(&ui, &snapshot, 120, 30);
-    for visible in 0..5 {
-        assert!(collapsed.contains(&format!("recent-model-{visible}")));
-    }
-    assert!(!collapsed.contains("recent-model-5"));
-    assert!(!collapsed.contains("recent-model-6"));
-    assert!(collapsed.contains("+ MORE SESSIONS (2)"));
-
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    let expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
-
-    assert!(expanded.contains("recent-model-5"));
-    assert!(expanded.contains("recent-model-6"));
-    assert!(expanded.contains("- MORE SESSIONS (2)"));
-}
-
-#[test]
-fn provider_page_collapses_unavailable_cwds_and_hides_only_system_temp_sessions() {
-    let now = Local::now().timestamp_millis();
-    let mut snapshot = demo_snapshot();
-    snapshot.generated_ms = now;
-    snapshot.sessions[0].last_activity_ms = now;
-
-    let mut real_private = snapshot.sessions[0].clone();
-    real_private.id = "real-private".into();
-    real_private.project = Some(test_project("real-private"));
-    real_private.cwd = Some("/private/repos/real-project".into());
-    real_private.latest_model = Some("real-private-model".into());
-    real_private.state = SessionState::Exited;
-    real_private.last_activity_ms = now - 1_000;
-
-    let mut missing = snapshot.sessions[0].clone();
-    missing.id = "missing-cwd".into();
-    missing.project = None;
-    missing.worktree = None;
-    missing.cwd = Some("/deleted/worktree".into());
-    missing.latest_model = Some("missing-cwd-model".into());
-    missing.state = SessionState::Exited;
-    missing.last_activity_ms = now - 2_000;
-
-    let mut no_cwd = missing.clone();
-    no_cwd.id = "no-cwd".into();
-    no_cwd.cwd = None;
-    no_cwd.latest_model = Some("no-cwd-model".into());
-    no_cwd.last_activity_ms = now - 3_000;
-
-    let mut system_temp = snapshot.sessions[0].clone();
-    system_temp.id = "system-temp".into();
-    system_temp.project = Some(test_project("system-temp"));
-    system_temp.cwd = Some("/private/var/folders/zz/agent-workspace".into());
-    system_temp.latest_model = Some("system-temp-model".into());
-    system_temp.last_activity_ms = now - 4_000;
-
-    snapshot
-        .sessions
-        .extend([real_private, missing, no_cwd, system_temp]);
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        selected: 2,
-        ..Ui::default()
-    };
-
-    let collapsed = rendered_rows_at(&ui, &snapshot, 120, 30);
-    assert!(collapsed.contains("real-private-model"));
-    assert!(collapsed.contains("+ MISSING CWD (2)"));
-    assert!(!collapsed.contains("missing-cwd-model"));
-    assert!(!collapsed.contains("no-cwd-model"));
-    assert!(!collapsed.contains("system-temp-model"));
-
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    let expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
-
-    assert!(expanded.contains("- MISSING CWD (2)"));
-    assert!(expanded.contains("missing-cwd-model"));
-    assert!(expanded.contains("no-cwd-model"));
-    assert!(!expanded.contains("system-temp-model"));
-}
-
-#[test]
-fn provider_projects_partition_sessions_at_the_rolling_seven_day_cutoff() {
-    const DAY_MS: i64 = 86_400_000;
-    let now = 1_800_000_000_000;
-    let cutoff = now - 7 * DAY_MS;
-    let mut snapshot = demo_snapshot();
-    snapshot.generated_ms = now;
-    snapshot.sessions[0].state = SessionState::Exited;
-    snapshot.sessions[0].id = "cutoff-session".into();
-    snapshot.sessions[0].project = Some(test_project("mixed-project"));
-    snapshot.sessions[0].latest_model = Some("cutoff-visible".into());
-    snapshot.sessions[0].last_activity_ms = cutoff;
-
-    let mut older = snapshot.sessions[0].clone();
-    older.id = "older-hidden".into();
-    older.latest_model = Some("older-hidden".into());
-    older.last_activity_ms = cutoff - 1;
-
-    let mut older_only = snapshot.sessions[0].clone();
-    older_only.id = "older-only-hidden".into();
-    older_only.project = Some(test_project("older-only-project"));
-    older_only.latest_model = Some("older-only-hidden".into());
-    older_only.last_activity_ms = cutoff - DAY_MS;
-
-    snapshot.sessions.extend([older, older_only]);
-    let ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-
-    let page = rendered_rows_at(&ui, &snapshot, 120, 30);
-
-    assert!(page.contains("PROJECT  mixed-project"));
-    assert!(page.contains("cutoff-visible"));
-    assert!(!page.contains("older-hidden"));
-    assert!(page.contains("PROJECT  older-only-project"));
-    assert!(!page.contains("older-only-hidden"));
-    assert_eq!(page.matches("OLDER SESSIONS (1)").count(), 2);
-}
-
-#[test]
-fn provider_project_older_disclosures_expand_independently() {
-    const DAY_MS: i64 = 86_400_000;
-    let now = 1_800_000_000_000;
-    let mut snapshot = demo_snapshot();
-    snapshot.generated_ms = now;
-    snapshot.sessions[0].state = SessionState::Exited;
-    snapshot.sessions[0].id = "alpha-older".into();
-    snapshot.sessions[0].project = Some(test_project("alpha"));
-    snapshot.sessions[0].latest_model = Some("alpha-older-model".into());
-    snapshot.sessions[0].last_activity_ms = now - 8 * DAY_MS;
-
-    let mut beta = snapshot.sessions[0].clone();
-    beta.id = "beta-older".into();
-    beta.project = Some(test_project("beta"));
-    beta.latest_model = Some("beta-older-model".into());
-    beta.last_activity_ms = now - 9 * DAY_MS;
-    snapshot.sessions.push(beta);
-
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
-
-    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    let alpha_expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
-    assert!(alpha_expanded.contains("alpha-older-model"));
-    assert!(!alpha_expanded.contains("beta-older-model"));
-
-    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    let both_expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
-    assert!(both_expanded.contains("alpha-older-model"));
-    assert!(both_expanded.contains("beta-older-model"));
-
-    ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    let only_beta_expanded = rendered_rows_at(&ui, &snapshot, 120, 30);
-    assert!(!only_beta_expanded.contains("alpha-older-model"));
-    assert!(only_beta_expanded.contains("beta-older-model"));
-}
-
-#[test]
-fn expanding_older_sessions_preserves_an_exact_partition_and_lifetime_usage() {
-    const DAY_MS: i64 = 86_400_000;
-    let now = 1_800_000_000_000;
-    let mut snapshot = demo_snapshot();
-    snapshot.generated_ms = now;
-    snapshot.sessions[0].id = "recent-session".into();
-    snapshot.sessions[0].project = Some(test_project("partition-project"));
-    snapshot.sessions[0].latest_model = Some("recent-model".into());
-    snapshot.sessions[0].last_activity_ms = now - DAY_MS;
-    snapshot.sessions[0].usage = Usage {
-        input: 11,
-        output: 12,
-        cache_read: 13,
-        cache_write: 14,
-    };
-
-    let mut older_a = snapshot.sessions[0].clone();
-    older_a.id = "older-a".into();
-    older_a.latest_model = Some("older-a-model".into());
-    older_a.last_activity_ms = now - 8 * DAY_MS;
-    older_a.usage = Usage {
-        input: 21,
-        output: 22,
-        cache_read: 23,
-        cache_write: 24,
-    };
-
-    let mut older_b = snapshot.sessions[0].clone();
-    older_b.id = "older-b".into();
-    older_b.latest_model = Some("older-b-model".into());
-    older_b.last_activity_ms = now - 9 * DAY_MS;
-    older_b.usage = Usage {
-        input: 31,
-        output: 32,
-        cache_read: 33,
-        cache_write: 34,
-    };
-    snapshot.sessions.extend([older_a, older_b]);
-
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
-    let collapsed = rendered_rows_at(&ui, &snapshot, 160, 30);
-    assert_eq!(collapsed.matches("recent-model").count(), 1);
-    assert!(collapsed.contains("I 11  O 12  CR 13  CW 14"));
-    assert_eq!(collapsed.matches("OLDER SESSIONS (2)").count(), 1);
-    assert!(!collapsed.contains("older-a-model"));
-    assert!(!collapsed.contains("older-b-model"));
-
-    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    let expanded = rendered_rows_at(&ui, &snapshot, 160, 30);
-
-    for session in ["recent-model", "older-a-model", "older-b-model"] {
-        assert_eq!(expanded.matches(session).count(), 1);
-    }
-    for usage in [
-        "I 11  O 12  CR 13  CW 14",
-        "I 21  O 22  CR 23  CW 24",
-        "I 31  O 32  CR 33  CW 34",
-    ] {
-        assert_eq!(expanded.matches(usage).count(), 1);
-    }
 }
 
 #[test]
@@ -2752,219 +2232,10 @@ fn global_keys_return_actions_for_the_event_loop() {
 }
 
 #[test]
-fn provider_pages_have_no_time_filter_and_ignore_the_old_filter_key() {
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-    let snapshot = Snapshot::default();
-    let before = rendered_with_snapshot(&ui, &snapshot);
-
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-
-    let after = rendered_with_snapshot(&ui, &snapshot);
-    assert_eq!(after, before);
-    for removed in [
-        "Time",
-        "Active Today",
-        "Last 7 Days",
-        "Last 30 Days",
-        "All Sessions",
-    ] {
-        assert!(!after.contains(removed));
-    }
-}
-
-#[test]
-fn provider_session_row_preserves_complete_session_facts_and_lifetime_usage() {
-    let now = Local::now().timestamp_millis();
-    let mut snapshot = demo_snapshot();
-    snapshot.generated_ms = now;
-    snapshot.sessions[0].last_activity_ms = now;
-    snapshot.sessions[0].compactions = vec![
-        Compaction {
-            at_ms: now - 2_000,
-            trigger: Some("auto".into()),
-            pre_tokens: Some(180_000),
-        },
-        Compaction {
-            at_ms: now - 1_000,
-            trigger: Some("manual".into()),
-            pre_tokens: Some(170_000),
-        },
-    ];
-    let ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-
-    let page = rendered_rows_at(&ui, &snapshot, 160, 30);
-
-    for fact in [
-        "PROJECT  sessionmesh",
-        "-session",
-        "Busy",
-        "claude-opus-4-8",
-        "150.0k (75%)",
-        "I 1.0k  O 500  CR 200  CW 100",
-        "$0.42",
-        "0s",
-        "⤳2",
-    ] {
-        assert!(page.contains(fact), "Provider row should contain {fact:?}");
-    }
-}
-
-#[test]
-fn compact_provider_session_row_keeps_every_fact_visible() {
-    let now = Local::now().timestamp_millis();
-    let mut snapshot = demo_snapshot();
-    snapshot.generated_ms = now;
-    snapshot.sessions[0].last_activity_ms = now;
-    snapshot.sessions[0].compactions = vec![Compaction {
-        at_ms: now - 1_000,
-        trigger: Some("auto".into()),
-        pre_tokens: Some(180_000),
-    }];
-    let ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-
-    let page = rendered_rows_at(&ui, &snapshot, 80, 24);
-
-    for fact in [
-        "PROJECT  sessionmesh",
-        "-session",
-        "Busy",
-        "claude-opus-4-8",
-        "150.0k (75%)",
-        "I 1.0k  O 500  CR 200  CW 100",
-        "$0.42",
-        "0s",
-        "⤳1",
-    ] {
-        assert!(
-            page.contains(fact),
-            "compact Provider row should contain {fact:?}"
-        );
-    }
-}
-
-#[test]
-fn old_open_session_remains_now_and_restores_its_provider_disclosure_after_detail() {
-    const DAY_MS: i64 = 86_400_000;
-    let now = Local::now().timestamp_millis();
-    let mut snapshot = demo_snapshot();
-    snapshot.generated_ms = now;
-    snapshot.sessions[0].id = "old-open-session".into();
-    snapshot.sessions[0].project = Some(test_project("old-open-project"));
-    snapshot.sessions[0].latest_model = Some("old-open-model".into());
-    snapshot.sessions[0].state = SessionState::Busy;
-    snapshot.sessions[0].last_activity_ms = now - 8 * DAY_MS;
-    let mut ui = Ui::default();
-    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
-
-    assert!(rendered_rows_at(&ui, &snapshot, 80, 24).contains("✳ -session"));
-
-    ui.handle_key(key(KeyCode::Char('2')), &snapshot).unwrap();
-    let collapsed = rendered_rows_at(&ui, &snapshot, 80, 24);
-    assert!(collapsed.contains("OLDER SESSIONS (1)"));
-    assert!(!collapsed.contains("old-open-model"));
-
-    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
-    assert!(rendered_rows_at(&ui, &snapshot, 80, 24).contains("old-open-model"));
-    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    assert!(rendered_with_snapshot(&ui, &snapshot).contains("old-open-session"));
-
-    ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
-    let restored = rendered_rows_at(&ui, &snapshot, 80, 24);
-    assert!(restored.contains("- OLDER SESSIONS (1)  Collapse"));
-    assert!(restored.contains("old-open-model"));
-    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    assert!(rendered_with_snapshot(&ui, &snapshot).contains("old-open-session"));
-}
-
-#[test]
-fn moving_selection_changes_which_session_opens_in_detail() {
-    let mut snapshot = demo_snapshot();
-    let now = Local::now().timestamp_millis();
-    snapshot.sessions[0].last_activity_ms = now;
-    let mut second = snapshot.sessions[0].clone();
-    second.id = "chosen-second-session".into();
-    second.project = Some(test_project("second-project"));
-    second.last_activity_ms = now - 1_000;
-    snapshot.sessions.push(second);
-    let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-
-    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-
-    assert!(rendered_with_snapshot(&ui, &snapshot).contains("chosen-second-session"));
-}
-
-#[test]
-fn detail_keeps_provider_and_native_session_identity_when_rows_reorder() {
-    let mut snapshot = demo_snapshot();
-    let now = Local::now().timestamp_millis();
-    snapshot.sessions[0].last_activity_ms = now;
-    let mut chosen = snapshot.sessions[0].clone();
-    chosen.id = "stable-detail-target".into();
-    chosen.project = Some(test_project("chosen-project"));
-    chosen.state = SessionState::Exited;
-    chosen.last_activity_ms = now - 1_000;
-    snapshot.sessions.push(chosen);
-    let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-
-    snapshot.sessions[0].state = SessionState::Exited;
-    snapshot.sessions[1].state = SessionState::Busy;
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-
-    let detail = rendered_with_snapshot(&ui, &snapshot);
-    assert!(detail.contains("stable-detail-target"));
-    assert!(!detail.contains("demo-session"));
-
-    ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    let reopened = rendered_with_snapshot(&ui, &snapshot);
-    assert!(reopened.contains("stable-detail-target"));
-    assert!(!reopened.contains("demo-session"));
-}
-
-#[test]
 fn session_detail_is_a_centered_modal_above_a_dimmed_origin_page() {
     let mut snapshot = demo_snapshot();
     snapshot.sessions[0].last_activity_ms = Local::now().timestamp_millis();
     let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
 
@@ -3005,62 +2276,16 @@ fn session_detail_is_a_centered_modal_above_a_dimmed_origin_page() {
 }
 
 #[test]
-fn escape_returns_to_the_originating_page_with_its_selection_restored() {
-    let mut snapshot = demo_snapshot();
-    let now = Local::now().timestamp_millis();
-    snapshot.sessions[0].last_activity_ms = now;
-    let mut origin = snapshot.sessions[0].clone();
-    origin.id = "origin-session".into();
-    origin.project = Some(test_project("origin-project"));
-    origin.last_activity_ms = now - 1_000;
-    let mut third = snapshot.sessions[0].clone();
-    third.id = "third-session".into();
-    third.project = Some(test_project("third-project"));
-    third.last_activity_ms = now - 2_000;
-    snapshot.sessions.extend([origin, third]);
-    let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-
-    let detail = rendered_with_snapshot(&ui, &snapshot);
-    assert!(detail.contains("origin-session"));
-    assert!(!detail.contains("third-session"));
-}
-
-#[test]
-fn number_keys_leave_detail_for_the_requested_top_level_page() {
+fn number_keys_are_no_ops_in_session_detail() {
     let mut snapshot = demo_snapshot();
     snapshot.sessions[0].last_activity_ms = Local::now().timestamp_millis();
 
-    for (key, expected_page) in [('1', Tab::All), ('2', Tab::Claude), ('3', Tab::Codex)] {
+    for key in ['1', '2', '3'] {
         let mut ui = Ui::default();
-        ui.handle_key(
-            KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-            &snapshot,
-        )
-        .unwrap();
         ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
             .unwrap();
-        assert!(rendered_with_snapshot(&ui, &snapshot).contains("Session Detail"));
+        let before = rendered_with_snapshot(&ui, &snapshot);
+        assert!(before.contains("Session Detail"));
 
         ui.handle_key(
             KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
@@ -3068,8 +2293,7 @@ fn number_keys_leave_detail_for_the_requested_top_level_page() {
         )
         .unwrap();
 
-        assert_eq!(ui.active_tab(), expected_page);
-        assert!(!rendered_with_snapshot(&ui, &snapshot).contains("Session Detail"));
+        assert_eq!(rendered_with_snapshot(&ui, &snapshot), before);
     }
 }
 
@@ -3092,11 +2316,6 @@ fn field_navigation_auto_scrolls_without_changing_the_origin_session() {
         })
         .collect();
     let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
     assert!(!rendered_with_snapshot(&ui, &snapshot).contains("scroll-target-trigger"));
@@ -3126,10 +2345,7 @@ fn field_navigation_auto_scrolls_without_changing_the_origin_session() {
 #[test]
 fn enter_is_a_no_op_and_h_still_opens_explicit_handoff_authorization() {
     let snapshot = demo_snapshot();
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
+    let mut ui = Ui::default();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
     let before = rendered_rows_at(&ui, &snapshot, 120, 30);
@@ -3162,11 +2378,6 @@ fn detail_keeps_required_session_evidence_without_reading_source_content() {
         pre_tokens: Some(146_000),
     }];
     let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
     let backend = TestBackend::new(120, 100);
@@ -3220,10 +2431,7 @@ fn detail_keeps_required_session_evidence_without_reading_source_content() {
 fn full_detail_keeps_provider_when_the_latest_model_is_unavailable() {
     let mut snapshot = demo_snapshot();
     snapshot.sessions[0].latest_model = None;
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
+    let mut ui = Ui::default();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
 
@@ -3252,10 +2460,7 @@ fn session_detail_current_context_progress_uses_threshold_colors_and_full_overfl
             tokens,
             window: Some(1_000),
         };
-        let mut ui = Ui {
-            tab: Tab::Claude,
-            ..Ui::default()
-        };
+        let mut ui = Ui::default();
         ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
             .unwrap();
 
@@ -3288,10 +2493,7 @@ fn session_detail_context_preserves_unknown_tokens_and_degrades_on_narrow_surfac
         tokens: 123_456,
         window: None,
     };
-    let mut unknown_ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
+    let mut unknown_ui = Ui::default();
     unknown_ui
         .handle_key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -3319,16 +2521,8 @@ fn session_detail_context_preserves_unknown_tokens_and_degrades_on_narrow_surfac
         tokens: 900,
         window: Some(1_000),
     };
-    let mut exited_ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-    exited_ui
-        .handle_key(
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            &exited_snapshot,
-        )
-        .unwrap();
+    let mut exited_ui = Ui::default();
+    open_first_session_detail(&mut exited_ui, &exited_snapshot);
     let exited_terminal = render_terminal_at(&exited_ui, &exited_snapshot, 160, 40);
 
     assert_eq!(
@@ -3336,10 +2530,7 @@ fn session_detail_context_preserves_unknown_tokens_and_degrades_on_narrow_surfac
         Some(theme.muted)
     );
 
-    let mut narrow_ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
+    let mut narrow_ui = Ui::default();
     narrow_ui
         .handle_key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -3387,12 +2578,8 @@ fn open_session_detail_labels_current_run_and_transcript_lifetime_usage() {
         }],
         cost: Some(0.07),
     });
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
+    let mut ui = Ui::default();
+    open_first_session_detail(&mut ui, &snapshot);
 
     let detail = rendered_rows_at(&ui, &snapshot, 160, 80);
 
@@ -3415,12 +2602,8 @@ fn open_session_detail_labels_current_run_and_transcript_lifetime_usage() {
 #[test]
 fn open_session_without_a_run_boundary_renders_current_run_usage_as_na() {
     let snapshot = demo_snapshot();
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
+    let mut ui = Ui::default();
+    open_first_session_detail(&mut ui, &snapshot);
 
     let detail = rendered_rows_at(&ui, &snapshot, 160, 40);
 
@@ -3441,17 +2624,13 @@ fn exited_session_detail_shows_lifetime_usage_without_current_or_last_run_usage(
         per_model: vec![],
         cost: None,
     });
-    let mut ui = Ui {
-        tab: Tab::Claude,
-        ..Ui::default()
-    };
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
+    let mut ui = Ui::default();
+    open_first_session_detail(&mut ui, &snapshot);
 
     let detail = rendered_rows_at(&ui, &snapshot, 120, 80);
 
     assert!(detail.contains("Transcript Lifetime Usage"));
-    assert!(!detail.contains("Current Run Usage"));
+    assert!(!detail.contains("Current Run per-model Usage"));
     assert!(!detail.contains("Last Run Usage"));
 }
 
@@ -3466,15 +2645,10 @@ fn non_git_detail_marks_git_only_fields_unavailable() {
     snapshot.sessions[0].worktree = None;
     snapshot.sessions[0].cwd = Some("/Users/x/Documents/research-notes".into());
     let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
 
-    let detail = rendered_with_snapshot(&ui, &snapshot);
+    let detail = rendered_rows_at(&ui, &snapshot, 120, 80);
 
     assert!(detail.contains("research-notes"));
     assert!(detail.contains("N/A (non-Git Project)"));
@@ -3488,13 +2662,7 @@ fn unresolved_detail_preserves_cwd_and_marks_identity_unavailable() {
     snapshot.sessions[0].worktree = None;
     snapshot.sessions[0].cwd = Some("/missing/session-cwd".into());
     let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
+    open_first_session_detail(&mut ui, &snapshot);
 
     let detail = rendered_with_snapshot(&ui, &snapshot);
 
@@ -3508,11 +2676,6 @@ fn detached_worktree_detail_marks_only_the_branch_unavailable() {
     snapshot.sessions[0].last_activity_ms = Local::now().timestamp_millis();
     snapshot.sessions[0].worktree.as_mut().unwrap().branch = None;
     let mut ui = Ui::default();
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
     ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
         .unwrap();
 
@@ -3523,12 +2686,7 @@ fn detached_worktree_detail_marks_only_the_branch_unavailable() {
 }
 
 #[test]
-fn renders_all_tab() {
-    render_tab(Tab::All, false);
-}
-
-#[test]
-fn renders_provider_tab_and_detail() {
-    render_tab(Tab::Claude, false);
-    render_tab(Tab::Claude, true);
+fn renders_overview_and_detail() {
+    render_overview(false);
+    render_overview(true);
 }

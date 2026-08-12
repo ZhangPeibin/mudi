@@ -498,7 +498,6 @@ fn focus_fixture_task(now_ms: i64) -> OperationTask {
 }
 
 fn assert_overview_focus(rendered: &ProductionRender, focused_index: usize) {
-    let focused_style = rendered.style_at("1 2 3");
     let titles = [
         rendered.style_at("PROJECT"),
         rendered.style_at("RECENT SIGNALS"),
@@ -515,20 +514,7 @@ fn assert_overview_focus(rendered: &ProductionRender, focused_index: usize) {
             "region title count split the focus treatment"
         );
     }
-    assert_eq!(
-        titles
-            .iter()
-            .filter(|style| {
-                style.fg == focused_style.fg
-                    && style.bg == focused_style.bg
-                    && style.add_modifier.contains(Modifier::BOLD)
-            })
-            .count(),
-        1,
-        "exactly one Overview title should carry the focused presentation"
-    );
-    assert_eq!(titles[focused_index].fg, focused_style.fg);
-    assert_eq!(titles[focused_index].bg, focused_style.bg);
+    let focused_style = titles[focused_index];
     assert!(titles[focused_index].add_modifier.contains(Modifier::BOLD));
     assert!(contrast_ratio(titles[focused_index]) >= 4.5);
     for (index, title) in titles.iter().enumerate() {
@@ -992,7 +978,6 @@ fn hidden_tree_u_restores_the_selected_session_to_its_origin_inventory() {
         .hide_sessions(&[SessionIdentity::from(&hidden)])
         .unwrap();
     let mut ui = Ui::load(&profile_path, None).unwrap();
-    press(&mut ui, &snapshot, KeyCode::Char('3'));
     press(&mut ui, &snapshot, KeyCode::Char('h'));
     press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -1002,7 +987,6 @@ fn hidden_tree_u_restores_the_selected_session_to_its_origin_inventory() {
 
     let restored = render(&snapshot, &ui, 120, 30).text;
     assert!(!restored.contains("HIDDEN SESSIONS"));
-    assert!(restored.contains("x-exited"));
     assert!(restored.contains("1 Session restored"));
     assert_eq!(
         SessionLabels::load(&label_path).disposition(hidden.provider, &hidden.id),
@@ -1235,7 +1219,7 @@ fn hidden_exited_visibility_is_consistent_and_only_validated_open_overrides_it()
     SessionLabels::load(directory.join("session-labels.json"))
         .hide_sessions(&[SessionIdentity::from(&session)])
         .unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let ui = Ui::load(&profile_path, None).unwrap();
 
     let all_hidden = render(&snapshot, &ui, 120, 30).text;
     assert!(!all_hidden.contains("x-exited"));
@@ -1243,7 +1227,6 @@ fn hidden_exited_visibility_is_consistent_and_only_validated_open_overrides_it()
     assert!(all_hidden.contains("Out 0"));
     assert!(all_hidden.contains("0 Projects"));
     assert!(all_hidden.contains("RECENT SIGNALS 0"));
-    press(&mut ui, &snapshot, KeyCode::Char('3'));
     assert!(!render(&snapshot, &ui, 120, 30).text.contains("x-exited"));
 
     snapshot.sessions[0].last_activity_ms = source.generated_ms + 60_000;
@@ -1252,7 +1235,6 @@ fn hidden_exited_visibility_is_consistent_and_only_validated_open_overrides_it()
     snapshot.sessions[0].state = SessionState::Busy;
     let open = render(&snapshot, &ui, 120, 30).text;
     assert!(open.contains("x-exited"));
-    press(&mut ui, &snapshot, KeyCode::Char('1'));
     let open_all = render(&snapshot, &ui, 120, 30).text;
     assert!(open_all.contains("x-exited"));
     assert!(open_all.contains("Busy -> Exited"));
@@ -1359,135 +1341,6 @@ fn linear(channel: u8) -> f64 {
     } else {
         ((value + 0.055) / 1.055).powf(2.4)
     }
-}
-
-#[test]
-fn exited_session_handoff_requires_explicit_confirmation() {
-    let mut snapshot = production_snapshot();
-    let mut exited = snapshot
-        .sessions
-        .iter()
-        .find(|session| session.provider == Provider::ClaudeCode && !session.state.is_open())
-        .unwrap()
-        .clone();
-    exited.last_activity_ms = snapshot.generated_ms - 1_000;
-    let native_id = exited.id.clone();
-    snapshot.sessions = vec![exited];
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-    press(&mut ui, &snapshot, KeyCode::Enter);
-
-    assert!(render(&snapshot, &ui, 120, 30).text.contains("h Handoff"));
-    let open_action = ui
-        .handle_key(
-            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
-            &snapshot,
-        )
-        .unwrap();
-    let confirmation = render(&snapshot, &ui, 120, 30).text;
-
-    assert_eq!(open_action, UiAction::None);
-    for required in [
-        "Authorize Handoff",
-        "Claude Code",
-        native_id.as_str(),
-        "read-only",
-        "continues after SessionMesh closes",
-        "Enter Authorize",
-        "Esc Cancel",
-    ] {
-        assert!(
-            confirmation.contains(required),
-            "missing confirmation text {required:?}\n{confirmation}"
-        );
-    }
-
-    let cancelled = ui
-        .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    assert_eq!(cancelled, UiAction::None);
-    assert!(!render(&snapshot, &ui, 120, 30)
-        .text
-        .contains("Authorize one Handoff Operation?"));
-    ui.handle_key(
-        KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
-        &snapshot,
-    )
-    .unwrap();
-    let confirmed = ui
-        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    assert_eq!(
-        confirmed,
-        UiAction::AuthorizeHandoff {
-            source_provider: Provider::ClaudeCode,
-            source_session_id: native_id,
-            successor_provider: Provider::ClaudeCode,
-            end_current_run: false,
-        }
-    );
-}
-
-#[test]
-fn handoff_authorization_defaults_to_the_source_provider_and_offers_both_successors() {
-    let mut snapshot = production_snapshot();
-    let mut exited = snapshot
-        .sessions
-        .iter()
-        .find(|session| session.provider == Provider::ClaudeCode && !session.state.is_open())
-        .unwrap()
-        .clone();
-    exited.last_activity_ms = snapshot.generated_ms - 1_000;
-    snapshot.sessions = vec![exited];
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Char('h'));
-
-    let defaulted = render(&snapshot, &ui, 120, 30).text;
-    assert!(defaulted.contains("Successor  [Claude Code]  Codex CLI"));
-
-    press(&mut ui, &snapshot, KeyCode::Right);
-    let selected = render(&snapshot, &ui, 120, 30).text;
-    assert!(selected.contains("Successor  Claude Code  [Codex CLI]"));
-
-    press(&mut ui, &snapshot, KeyCode::Left);
-    assert!(render(&snapshot, &ui, 120, 30)
-        .text
-        .contains("Successor  [Claude Code]  Codex CLI"));
-}
-
-#[test]
-fn handoff_authorization_emits_the_selected_successor_provider() {
-    let mut snapshot = production_snapshot();
-    let mut exited = snapshot
-        .sessions
-        .iter()
-        .find(|session| session.provider == Provider::ClaudeCode && !session.state.is_open())
-        .unwrap()
-        .clone();
-    exited.last_activity_ms = snapshot.generated_ms - 1_000;
-    let native_id = exited.id.clone();
-    snapshot.sessions = vec![exited];
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Char('h'));
-    press(&mut ui, &snapshot, KeyCode::Right);
-
-    let confirmed = ui
-        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-
-    assert_eq!(
-        confirmed,
-        UiAction::AuthorizeHandoff {
-            source_provider: Provider::ClaudeCode,
-            source_session_id: native_id,
-            successor_provider: Provider::CodexCli,
-            end_current_run: false,
-        }
-    );
 }
 
 #[test]
@@ -2466,18 +2319,13 @@ fn terminal_below_the_hard_minimum_renders_only_the_too_small_state() {
 }
 
 #[test]
-fn global_header_combines_navigation_with_indexed_usage_and_project_totals() {
+fn global_header_combines_identity_with_indexed_usage_and_project_totals() {
     let snapshot = production_snapshot();
 
     let wide = render(&snapshot, &Ui::default(), 120, 30);
     let wide_header = wide.text.lines().next().unwrap();
-    assert!(wide_header.contains(&format!(
-        "SessionMesh | v{} | 1 2 3",
-        env!("CARGO_PKG_VERSION")
-    )));
-    assert!(!wide_header.contains("1 All"));
-    assert!(!wide_header.contains("2 Claude"));
-    assert!(!wide_header.contains("3 Codex"));
+    assert!(wide_header.contains(&format!("SessionMesh | v{}", env!("CARGO_PKG_VERSION"))));
+    assert!(!wide_header.contains("1 2 3"));
     assert!(wide_header.contains("In 86.4k  Out 16.4k | 1 Project"));
     let tasks_row = wide
         .text
@@ -2499,10 +2347,7 @@ fn global_header_combines_navigation_with_indexed_usage_and_project_totals() {
 
     let compact = render(&snapshot, &Ui::default(), 80, 24);
     let compact_header = compact.text.lines().next().unwrap();
-    assert!(compact_header.contains(&format!(
-        "SessionMesh | v{} | 1 2 3",
-        env!("CARGO_PKG_VERSION")
-    )));
+    assert!(compact_header.contains(&format!("SessionMesh | v{}", env!("CARGO_PKG_VERSION"))));
     assert!(compact_header.contains("In 86.4k Out 16.4k | P 1"));
     assert!(compact
         .text
@@ -3079,85 +2924,6 @@ fn mouse_activity_outside_the_visible_workspace_does_not_resize_it() {
         .skip(9)
         .take(19)
         .all(|line| line.chars().nth(55) == Some('│')));
-}
-
-#[test]
-fn non_primary_other_tab_and_detail_mouse_events_do_not_resize_the_overview() {
-    let snapshot = production_snapshot();
-    let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
-    let send_mouse = |ui: &mut Ui, kind| {
-        ui.handle_event(
-            Event::Mouse(MouseEvent {
-                kind,
-                column: 55,
-                row: 12,
-                modifiers: KeyModifiers::NONE,
-            }),
-            terminal_area,
-            &snapshot,
-        )
-        .unwrap();
-        ui.handle_event(
-            Event::Mouse(MouseEvent {
-                kind: match kind {
-                    MouseEventKind::Down(button) => MouseEventKind::Drag(button),
-                    _ => kind,
-                },
-                column: 70,
-                row: 12,
-                modifiers: KeyModifiers::NONE,
-            }),
-            terminal_area,
-            &snapshot,
-        )
-        .unwrap();
-    };
-    let assert_default_split = |ui: &Ui| {
-        let rendered = render(&snapshot, ui, 120, 30);
-        assert!(rendered
-            .text
-            .lines()
-            .skip(9)
-            .take(19)
-            .all(|line| line.chars().nth(55) == Some('│')));
-    };
-
-    let mut ui = Ui::default();
-    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Right));
-    assert_default_split(&ui);
-
-    ui.handle_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
-        terminal_area,
-        &snapshot,
-    )
-    .unwrap();
-    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left));
-    ui.handle_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)),
-        terminal_area,
-        &snapshot,
-    )
-    .unwrap();
-    assert_default_split(&ui);
-
-    ui.handle_event(
-        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        terminal_area,
-        &snapshot,
-    )
-    .unwrap();
-    assert!(render(&snapshot, &ui, 120, 30)
-        .text
-        .contains("Session Detail"));
-    send_mouse(&mut ui, MouseEventKind::Down(MouseButton::Left));
-    ui.handle_event(
-        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        terminal_area,
-        &snapshot,
-    )
-    .unwrap();
-    assert_default_split(&ui);
 }
 
 #[test]
@@ -4270,173 +4036,6 @@ fn wide_now_keeps_duplicate_aliases_distinguishable() {
 }
 
 #[test]
-fn full_claude_provider_page_matches_the_reviewed_production_fixture() {
-    let snapshot = production_snapshot();
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-    let rendered = render(&snapshot, &ui, 120, 30);
-
-    assert_eq!((rendered.width, rendered.height), (120, 30));
-    assert_eq!(
-        rendered
-            .text
-            .matches("I 12.3k  O 2.3k  CR 34.6k  CW 456")
-            .count(),
-        3,
-        "every visible Claude Session should keep complete lifetime Usage"
-    );
-    assert_fixture(
-        &rendered,
-        include_str!("fixtures/production-renders/claude_120x30.txt"),
-    );
-}
-
-#[test]
-fn provider_inventory_names_the_column_title_and_renders_the_saved_alias() {
-    let snapshot = production_snapshot();
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Auth fix".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-
-    let rendered = render(&snapshot, &ui, 120, 30);
-    let header = rendered
-        .text
-        .lines()
-        .find(|line| line.contains("State") && line.contains("Title"))
-        .expect("Provider inventory should label its Session-name column Title");
-    assert!(rendered.text.contains("Auth fix"));
-    assert!(!header.contains("Session"));
-}
-
-#[test]
-fn provider_inventory_disambiguates_duplicate_aliases_with_short_session_ids() {
-    let snapshot = production_snapshot();
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Pair".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
-
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Pair".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-
-    let rendered = render(&snapshot, &ui, 120, 30);
-    assert!(rendered.text.contains("Pair · critical"));
-    assert!(rendered.text.contains("Pair · -warning"));
-}
-
-#[test]
-fn compact_expanded_claude_provider_page_matches_the_reviewed_production_fixture() {
-    let snapshot = production_snapshot();
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-    for _ in 0..3 {
-        press(&mut ui, &snapshot, KeyCode::Down);
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    let rendered = render(&snapshot, &ui, 80, 24);
-
-    assert_eq!((rendered.width, rendered.height), (80, 24));
-    assert!(rendered.text.contains("- OLDER SESSIONS (1)  Collapse"));
-    assert!(rendered.text.contains("de-older"));
-    assert!(!rendered.text.contains("qfixture"));
-    assert!(rendered.text.contains("Estimated using API rates"));
-    assert_fixture(
-        &rendered,
-        include_str!("fixtures/production-renders/claude_older_expanded_80x24.txt"),
-    );
-}
-
-#[test]
-fn compact_codex_provider_page_matches_the_reviewed_production_fixture() {
-    let snapshot = production_snapshot();
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('3'));
-    let rendered = render(&snapshot, &ui, 80, 24);
-
-    assert_eq!((rendered.width, rendered.height), (80, 24));
-    for title in ["x-shared", "dex-idle", "x-exited"] {
-        assert!(rendered.text.contains(title));
-    }
-    for claude_title in ["critical", "-warning", "-healthy"] {
-        assert!(!rendered.text.contains(claude_title));
-    }
-    assert_fixture(
-        &rendered,
-        include_str!("fixtures/production-renders/codex_80x24.txt"),
-    );
-}
-
-#[test]
-fn compact_provider_inventory_renders_titles_in_a_stable_column() {
-    let snapshot = production_snapshot();
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Auth fix".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-
-    let rendered = render(&snapshot, &ui, 80, 24);
-    let header = rendered
-        .text
-        .lines()
-        .find(|line| line.contains("State"))
-        .expect("compact Provider header should render");
-    assert!(header.contains("Title"));
-    assert!(!header.contains("Session"));
-    assert!(rendered.text.contains("Auth fix"));
-}
-
-#[test]
-fn unicode_alias_does_not_move_adjacent_compact_provider_columns() {
-    let snapshot = production_snapshot();
-    let mut baseline_ui = Ui::default();
-    press(&mut baseline_ui, &snapshot, KeyCode::Char('2'));
-    let baseline = render(&snapshot, &baseline_ui, 80, 24);
-    let baseline_row = baseline
-        .text
-        .lines()
-        .find(|line| line.contains("180.0k"))
-        .expect("critical compact Provider row should render");
-    let baseline_context_column = baseline_row[..baseline_row.find("180.0k").unwrap()]
-        .chars()
-        .count();
-
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "修复认证流程".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-    let rendered = render(&snapshot, &ui, 80, 24);
-    let aliased_row = rendered
-        .text
-        .lines()
-        .find(|line| line.contains("180.0k"))
-        .expect("aliased compact Provider row should render");
-    let aliased_context_column = aliased_row[..aliased_row.find("180.0k").unwrap()]
-        .chars()
-        .count();
-
-    assert_eq!(aliased_context_column, baseline_context_column);
-}
-
-#[test]
 fn compact_open_detail_matches_the_reviewed_production_fixture() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
@@ -4539,31 +4138,6 @@ fn compact_detail_field_navigation_reveals_complete_compaction_history() {
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/detail_open_scrolled_80x24.txt"),
-    );
-}
-
-#[test]
-fn compact_exited_detail_matches_the_reviewed_production_fixture() {
-    let snapshot = production_snapshot();
-    let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
-    for _ in 0..3 {
-        press(&mut ui, &snapshot, KeyCode::Down);
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Enter);
-    let rendered = render(&snapshot, &ui, 80, 24);
-
-    assert_eq!((rendered.width, rendered.height), (80, 24));
-    assert!(rendered.text.contains("claude-older"));
-    assert!(rendered.text.contains("State           Exited"));
-    assert!(rendered.text.contains("Current Context"));
-    assert!(!rendered.text.contains("Current Run Usage"));
-    assert!(!rendered.text.contains("Last Run Usage"));
-    assert_fixture(
-        &rendered,
-        include_str!("fixtures/production-renders/detail_exited_80x24.txt"),
     );
 }
 
@@ -5125,7 +4699,7 @@ fn guide_uses_the_agreed_centered_golden_area_at_compact_and_wide_sizes() {
 }
 
 #[test]
-fn overview_guide_explains_scope_pages_and_current_versus_recent_state() {
+fn overview_guide_explains_scope_and_current_versus_recent_state() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('?'));
@@ -5135,9 +4709,6 @@ fn overview_guide_explains_scope_pages_and_current_versus_recent_state() {
         "SessionMesh is local to this Mac.",
         "Passive observation is the default.",
         "Control Operations require explicit authorization.",
-        "1  All",
-        "2  Claude Code",
-        "3  Codex CLI",
         "NOW shows current conditions.",
         "Recent Signals show transitions.",
     ] {
@@ -5157,7 +4728,6 @@ fn navigation_guide_lists_global_and_contextual_controls_without_theme_cycling()
     let rendered = render(&snapshot, &ui, 120, 30);
 
     for required in [
-        "1 / 2 / 3  Open a page",
         "n  New Session",
         "Tab / Shift+Tab  Change region or Guide pane",
         "Up/Down or j/k  Move or scroll",
@@ -5179,6 +4749,7 @@ fn navigation_guide_lists_global_and_contextual_controls_without_theme_cycling()
             "Navigation Guide should contain {required:?}"
         );
     }
+    assert!(!rendered.text.contains("Open a page"));
     assert!(!rendered.text.contains("t Theme"));
 }
 
@@ -5404,15 +4975,8 @@ fn changing_guide_category_resets_content_scroll() {
 }
 
 #[test]
-fn guide_opens_on_sessions_from_provider_inventory_and_session_detail() {
+fn guide_opens_on_sessions_from_session_detail() {
     let snapshot = production_snapshot();
-    let mut provider_ui = Ui::default();
-    press(&mut provider_ui, &snapshot, KeyCode::Char('2'));
-    press(&mut provider_ui, &snapshot, KeyCode::Char('?'));
-    assert!(render(&snapshot, &provider_ui, 80, 24)
-        .text
-        .contains("> Sessions"));
-
     let mut detail_ui = Ui::default();
     press(&mut detail_ui, &snapshot, KeyCode::Enter);
     press(&mut detail_ui, &snapshot, KeyCode::Char('?'));
@@ -5425,7 +4989,7 @@ fn guide_opens_on_sessions_from_provider_inventory_and_session_detail() {
 fn sessions_guide_explains_providers_lifecycle_and_current_context() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Char('?'));
     let rendered = render(&snapshot, &ui, 120, 30);
 
@@ -5450,7 +5014,7 @@ fn sessions_guide_explains_providers_lifecycle_and_current_context() {
 fn sessions_guide_explains_titles_aliases_fallbacks_and_editing() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('2'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Char('?'));
     let rendered = render(&snapshot, &ui, 120, 30);
 
@@ -5647,9 +5211,6 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
             "Theme {expected_theme} let Warning override Idle"
         );
         let focused_project = rendered.style_at("PROJECT");
-        let selected_page = rendered.style_at("1 2 3");
-        assert_eq!(focused_project.fg, selected_page.fg);
-        assert_eq!(focused_project.bg, selected_page.bg);
         assert!(focused_project.add_modifier.contains(Modifier::BOLD));
         assert_eq!(
             selected_cursor.fg,

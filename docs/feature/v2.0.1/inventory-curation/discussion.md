@@ -39,7 +39,7 @@ was hidden by mistake.
   inventory.
 - Durable visibility choices that survive SessionMesh restart and disposable-index rebuild.
 - A recoverable way to inspect and restore hidden inventory.
-- Consistent visibility semantics across the Project Tree and Provider inventories.
+- Consistent visibility semantics across the normal Overview inventory.
 
 ### Out of Scope
 
@@ -105,11 +105,10 @@ was hidden by mistake.
   permanent deletion from SessionMesh inventory. On a Project row these actions apply in
   bulk to every currently hidden Session in that Project and disclose the affected count.
   Worktree rows remain structural and expose neither action.
-- Esc closes the Hidden Tree and restores the exact originating page and selection.
-- Hidden Exited Sessions are absent from every normal inventory: the All-page Project Tree,
-  Claude Code Provider page, and Codex CLI Provider page. The same Open override applies on
-  all three pages. Hidden Tree is the only inventory that shows hidden Exited Sessions.
-- Normal-page Project, Session, and Usage totals are calculated from the same visible
+- Esc closes the Hidden Tree and restores the exact originating Overview selection.
+- Hidden Exited Sessions are absent from the normal Overview Project Tree. The same Open
+  override applies there. Hidden Tree is the only inventory that shows hidden Exited Sessions.
+- Overview Project, Session, and Usage totals are calculated from the same visible
   inventory and exclude hidden Exited Sessions. Hidden Tree reports its own Project and
   Session counts. Hiding changes presentation scope only; source logs and indexed facts
   remain intact.
@@ -178,11 +177,10 @@ was hidden by mistake.
 - Hidden Tree uses `u` for Remove from Hide and `d` for confirmation-gated permanent
   SessionMesh deletion. Project selection applies either operation to its current hidden
   Sessions as a disclosed bulk action; Worktree remains structural.
-- Esc from Hidden Tree restores the originating page and selection.
-- Hide applies consistently to All, Claude Code, and Codex CLI normal inventories. Hidden
-  Exited Sessions appear only in Hidden Tree; a validated Open override surfaces them in
-  each applicable normal inventory.
-- Normal Project, Session, and Usage totals exclude hidden Exited Sessions so displayed
+- Esc from Hidden Tree restores the originating Overview selection.
+- Hide applies consistently to the normal Overview inventory. Hidden Exited Sessions appear
+  only in Hidden Tree; a validated Open override surfaces them in Overview.
+- Overview Project, Session, and Usage totals exclude hidden Exited Sessions so displayed
   summaries match the visible inventory. Hidden Tree has separate counts.
 - Recent Signals follow visible inventory for hidden Exited Sessions. Open lifecycle and
   Shared Worktree Risk safety behavior continue to surface normally.
@@ -265,10 +263,9 @@ None at the current product boundary.
   structural, and Esc restores the origin.
 - Confirmed that only a validated Open lifecycle state temporarily overrides Hide. Metadata
   activity and rescans do not; a distinct native Session identity is visible as new work.
-- Confirmed that Hide consistently removes Exited Sessions from All, Claude Code, and Codex
-  CLI normal inventories. Hidden Tree is their management surface; Open override behavior is
-  consistent across pages.
-- Confirmed that normal-page Project, Session, and Usage totals use visible inventory only;
+- Confirmed that Hide removes Exited Sessions from the normal Overview inventory. Hidden Tree
+  is their management surface; Open override behavior remains unchanged.
+- Confirmed that Overview Project, Session, and Usage totals use visible inventory only;
   Hidden Tree reports separate counts while underlying evidence is unchanged.
 - Confirmed that Recent Signals for hidden Exited Sessions are filtered with the inventory,
   while Open override and Shared Worktree Risk remain visible safety behavior.
