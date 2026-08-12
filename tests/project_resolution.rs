@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use sessionmesh::collector::build_sessions;
+use sessionmesh::collector::{build_sessions, build_sessions_with_resolver, ProjectResolverCache};
 use sessionmesh::config::Config;
 use sessionmesh::domain::{ContextState, ProjectIdentity, Provider, Usage};
 use sessionmesh::index::{Fingerprint, Index};
@@ -359,4 +359,54 @@ fn snapshot_carries_resolved_identity_and_disambiguates_distinct_projects() {
         first_a.worktree.as_ref().unwrap().branch.as_deref(),
         Some("main")
     );
+}
+
+#[test]
+fn project_resolution_is_cached_until_the_cwd_leaves_source_evidence() {
+    let temp = TempDir::new();
+    let working_directory = temp.path().join("cached-project");
+    fs::create_dir_all(&working_directory).unwrap();
+    let source_path = temp.path().join("cached-session.jsonl");
+    let mut index = Index::open_in_memory().unwrap();
+    index
+        .upsert(
+            &parsed_session("cached-session", &working_directory),
+            &source_path,
+            Fingerprint {
+                mtime_ns: 1,
+                size: 1,
+            },
+        )
+        .unwrap();
+    let cfg = Config {
+        claude_dir: temp.path().join("claude"),
+        codex_dir: temp.path().join("codex"),
+        data_dir: temp.path().join("data"),
+        extra_dirs: vec![],
+    };
+    let models = ModelCatalog::load(None);
+    let mut resolver = ProjectResolverCache::default();
+
+    let first = build_sessions_with_resolver(&cfg, &index, &models, &mut resolver).unwrap();
+    assert!(matches!(
+        first.sessions[0].project.as_ref().unwrap().identity,
+        ProjectIdentity::CanonicalCwd(_)
+    ));
+
+    repository_with_commit(&working_directory);
+    let still_cached = build_sessions_with_resolver(&cfg, &index, &models, &mut resolver).unwrap();
+    assert!(matches!(
+        still_cached.sessions[0].project.as_ref().unwrap().identity,
+        ProjectIdentity::CanonicalCwd(_)
+    ));
+
+    let empty_index = Index::open_in_memory().unwrap();
+    let absent = build_sessions_with_resolver(&cfg, &empty_index, &models, &mut resolver).unwrap();
+    assert!(absent.sessions.is_empty());
+
+    let reappeared = build_sessions_with_resolver(&cfg, &index, &models, &mut resolver).unwrap();
+    assert!(matches!(
+        reappeared.sessions[0].project.as_ref().unwrap().identity,
+        ProjectIdentity::GitCommonDir(_)
+    ));
 }

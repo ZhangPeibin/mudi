@@ -186,38 +186,40 @@ fn has_git_marker(cwd: &Path) -> Result<bool> {
 /// Resolve `cwd` without reading repository contents. Unresolvable paths return
 /// unavailable identity rather than guessing.
 pub fn resolve(cwd: Option<&Path>) -> ProjectResolution {
-    let Some(cwd) = cwd.and_then(|path| std::fs::canonicalize(path).ok()) else {
-        return ProjectResolution::default();
-    };
-    let Some(common_dir) = git_path(&cwd, "--git-common-dir") else {
-        return ProjectResolution {
-            project: Some(Project {
-                label: path_label(&cwd),
-                identity: ProjectIdentity::CanonicalCwd(cwd),
-            }),
-            worktree: None,
-        };
-    };
-    let Some(root) = git_path(&cwd, "--show-toplevel") else {
-        return ProjectResolution::default();
-    };
-
-    let identity = ProjectIdentity::GitCommonDir(common_dir);
-    let label = path_label(identity.display_path());
-
-    ProjectResolution {
-        project: Some(Project { identity, label }),
-        worktree: Some(Worktree {
-            writable: is_writable(&root),
-            branch: git_stdout(&cwd, &["symbolic-ref", "--short", "HEAD"]),
-            root,
-        }),
-    }
+    resolve_checked(cwd).unwrap_or_default()
 }
 
-fn git_path(cwd: &Path, query: &str) -> Option<PathBuf> {
-    let output = git_stdout(cwd, &["rev-parse", "--path-format=absolute", query])?;
-    std::fs::canonicalize(output).ok()
+/// Resolve an observed Session cwd while preserving failures for refresh diagnostics.
+/// A directory that no longer exists is normal historical evidence and remains unresolved.
+pub fn resolve_checked(cwd: Option<&Path>) -> Result<ProjectResolution> {
+    let Some(cwd) = cwd else {
+        return Ok(ProjectResolution::default());
+    };
+    let cwd = match std::fs::canonicalize(cwd) {
+        Ok(cwd) => cwd,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ProjectResolution::default());
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Session working directory cannot be canonicalized: {}",
+                    cwd.display()
+                )
+            });
+        }
+    };
+    let context = resolve_selected_directory(&cwd).with_context(|| {
+        format!(
+            "Session Project or Worktree identity cannot be resolved: {}",
+            cwd.display()
+        )
+    })?;
+
+    Ok(ProjectResolution {
+        project: Some(context.project),
+        worktree: context.worktree,
+    })
 }
 
 fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {

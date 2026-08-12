@@ -123,7 +123,17 @@ impl RefreshService {
                         &self.models,
                         &mut self.project_resolver,
                     ) {
-                        Ok(built) => sessions = built,
+                        Ok(built) => {
+                            sessions = built.sessions;
+                            diagnostics.extend(built.project_diagnostics.into_iter().map(
+                                |diagnostic| {
+                                    RefreshDiagnostic::new(
+                                        "Project Resolver",
+                                        format!("{}: {}", diagnostic.cwd, diagnostic.message),
+                                    )
+                                },
+                            ));
+                        }
                         Err(error) => diagnostics
                             .push(RefreshDiagnostic::new("Index read", error.to_string())),
                     }
@@ -136,7 +146,15 @@ impl RefreshService {
                         &self.models,
                         &mut self.project_resolver,
                     ) {
-                        sessions = built;
+                        sessions = built.sessions;
+                        diagnostics.extend(built.project_diagnostics.into_iter().map(
+                            |diagnostic| {
+                                RefreshDiagnostic::new(
+                                    "Project Resolver",
+                                    format!("{}: {}", diagnostic.cwd, diagnostic.message),
+                                )
+                            },
+                        ));
                     }
                 }
             },

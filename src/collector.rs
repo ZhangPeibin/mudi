@@ -73,7 +73,9 @@ fn index_one_checked(
 /// Build the normalized session list from the index, attaching live state and cost.
 pub fn build_sessions(cfg: &Config, index: &Index, models: &ModelCatalog) -> Vec<Session> {
     let mut resolver = ProjectResolverCache::default();
-    build_sessions_with_resolver(cfg, index, models, &mut resolver).unwrap_or_default()
+    build_sessions_with_resolver(cfg, index, models, &mut resolver)
+        .map(|built| built.sessions)
+        .unwrap_or_default()
 }
 
 /// Long-lived cache for Project/Worktree resolution. Refresh owns this cache so an
@@ -84,14 +86,16 @@ pub struct ProjectResolverCache {
 }
 
 impl ProjectResolverCache {
-    pub fn resolve(&mut self, cwd: Option<&str>) -> project::ProjectResolution {
+    pub fn resolve(&mut self, cwd: Option<&str>) -> Result<project::ProjectResolution> {
         let Some(cwd) = cwd else {
-            return project::ProjectResolution::default();
+            return Ok(project::ProjectResolution::default());
         };
-        self.resolutions
-            .entry(cwd.to_string())
-            .or_insert_with(|| project::resolve(Some(Path::new(cwd))))
-            .clone()
+        if let Some(resolved) = self.resolutions.get(cwd) {
+            return Ok(resolved.clone());
+        }
+        let resolved = project::resolve_checked(Some(Path::new(cwd)))?;
+        self.resolutions.insert(cwd.to_string(), resolved.clone());
+        Ok(resolved)
     }
 
     /// Drop a cached result when the source evidence for that cwd has changed deliberately.
@@ -101,9 +105,28 @@ impl ProjectResolverCache {
 
     fn retain_source_cwds<'a>(&mut self, cwds: impl Iterator<Item = &'a str>) {
         let current = cwds.collect::<HashSet<_>>();
-        self.resolutions
-            .retain(|cwd, _| current.contains(cwd.as_str()));
+        let stale = self
+            .resolutions
+            .keys()
+            .filter(|cwd| !current.contains(cwd.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        for cwd in stale {
+            self.invalidate(&cwd);
+        }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectResolutionDiagnostic {
+    pub cwd: String,
+    pub message: String,
+}
+
+#[derive(Debug, Default)]
+pub struct SessionBuild {
+    pub sessions: Vec<Session>,
+    pub project_diagnostics: Vec<ProjectResolutionDiagnostic>,
 }
 
 /// Build sessions without hiding disposable-index failures. The caller owns the resolver
@@ -113,7 +136,7 @@ pub fn build_sessions_with_resolver(
     index: &Index,
     models: &ModelCatalog,
     resolver: &mut ProjectResolverCache,
-) -> Result<Vec<Session>> {
+) -> Result<SessionBuild> {
     let stored = index.load_all()?;
     resolver.retain_source_cwds(
         stored
@@ -122,16 +145,29 @@ pub fn build_sessions_with_resolver(
     );
     let detector = StateDetector::gather(&cfg.claude_sessions_dir());
 
+    let mut project_diagnostics = Vec::new();
     let mut sessions: Vec<Session> = stored
         .into_iter()
         .map(|stored| {
-            let resolved = resolver.resolve(stored.parsed.cwd.as_deref());
+            let resolved = match resolver.resolve(stored.parsed.cwd.as_deref()) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    project_diagnostics.push(ProjectResolutionDiagnostic {
+                        cwd: stored.parsed.cwd.clone().unwrap_or_default(),
+                        message: error.to_string(),
+                    });
+                    project::ProjectResolution::default()
+                }
+            };
             to_session(stored, &detector, models, resolved)
         })
         .collect();
 
     disambiguate_projects(&mut sessions);
-    Ok(sessions)
+    Ok(SessionBuild {
+        sessions,
+        project_diagnostics,
+    })
 }
 
 fn to_session(
