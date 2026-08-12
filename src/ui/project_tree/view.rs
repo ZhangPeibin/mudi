@@ -168,12 +168,12 @@ pub(super) fn open_session_line(
         AttentionRank::Idle | AttentionRank::HealthyBusy => Style::default().fg(theme.muted),
     };
     let lifecycle_marker = match session.state {
-        SessionState::Busy => "●",
-        SessionState::Idle => "○",
+        SessionState::Busy => "•",
+        SessionState::Idle => "◦",
         SessionState::Exited => unreachable!("NOW contains only Open Sessions"),
     };
     let provider = provider_mark::icon(session.provider);
-    let provenance = provenance_mark::icon(session.provenance);
+    let provenance_suffix = provenance_mark::suffix(session.provenance);
     let context_value = session
         .context
         .percent()
@@ -196,8 +196,7 @@ pub(super) fn open_session_line(
         prefix.as_str(),
         provider,
         SESSION_COLUMN_GAP,
-        SESSION_COLUMN_GAP,
-        provenance,
+        provenance_suffix,
         SESSION_COLUMN_GAP,
         attention_marker,
         SESSION_COLUMN_GAP,
@@ -209,7 +208,11 @@ pub(super) fn open_session_line(
     .into_iter()
     .map(UnicodeWidthStr::width)
     .sum::<usize>();
-    let title = text::fit(title, content_width.saturating_sub(fixed_width), true);
+    let title_width = content_width.saturating_sub(fixed_width);
+    let title = text::fit(title, title_width, true);
+    let title = title.trim_end().to_string();
+    let title_padding =
+        " ".repeat(title_width.saturating_sub(UnicodeWidthStr::width(title.as_str())));
     let cursor_style = if position.selected {
         Style::default()
             .fg(theme.accent)
@@ -235,11 +238,11 @@ pub(super) fn open_session_line(
         ),
         Span::raw(SESSION_COLUMN_GAP),
         Span::styled(title, Style::default().fg(theme.foreground)),
-        Span::raw(SESSION_COLUMN_GAP),
         Span::styled(
-            provenance,
-            provenance_mark::style(session.provenance, theme, Style::default()),
+            provenance_suffix,
+            provenance_mark::style(theme, Style::default()),
         ),
+        Span::raw(title_padding),
         Span::raw(SESSION_COLUMN_GAP),
         Span::styled(attention_marker, attention_style),
         Span::raw(SESSION_COLUMN_GAP),
@@ -265,14 +268,18 @@ fn exited_session_line(
         if position.selected { ">" } else { " " }
     );
     let provider = provider_mark::icon(session.provider);
-    let provenance = provenance_mark::icon(session.provenance);
+    let provenance_suffix = provenance_mark::suffix(session.provenance);
     let elapsed = fmt_relative(session.last_activity_ms, now_ms);
     let fixed_width = UnicodeWidthStr::width(prefix.as_str())
         + UnicodeWidthStr::width(provider)
-        + UnicodeWidthStr::width(provenance)
-        + 3
+        + UnicodeWidthStr::width(provenance_suffix)
+        + 2
         + UnicodeWidthStr::width(elapsed.as_str());
-    let title = text::fit(title, content_width.saturating_sub(fixed_width), true);
+    let title_width = content_width.saturating_sub(fixed_width);
+    let title = text::fit(title, title_width, true);
+    let title = title.trim_end().to_string();
+    let title_padding =
+        " ".repeat(title_width.saturating_sub(UnicodeWidthStr::width(title.as_str())));
     let cursor_style = if position.selected {
         Style::default()
             .fg(theme.accent)
@@ -288,11 +295,11 @@ fn exited_session_line(
         ),
         Span::raw(" "),
         Span::styled(title, Style::default().fg(theme.exited)),
-        Span::raw(" "),
         Span::styled(
-            provenance,
-            provenance_mark::style(session.provenance, theme, Style::default()),
+            provenance_suffix,
+            provenance_mark::style(theme, Style::default()),
         ),
+        Span::raw(title_padding),
         Span::raw(" "),
         Span::styled(elapsed, Style::default().fg(theme.muted)),
     ]);

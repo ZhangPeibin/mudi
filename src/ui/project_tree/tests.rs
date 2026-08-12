@@ -1,4 +1,6 @@
-use super::model::{rows, tree_counts, ProjectTreeKey, ProjectTreeRow};
+use super::model::{
+    rows, rows_with_order, tree_counts, ProjectOrder, ProjectTreeKey, ProjectTreeRow,
+};
 use super::view::{draw, group_prefix, open_session_line, worktree_line, SessionTreePosition};
 use super::State;
 use crate::app::Snapshot;
@@ -136,7 +138,7 @@ fn multiple_worktrees_keep_short_branch_groups() {
 }
 
 #[test]
-fn tree_rows_use_disclosure_triangles_and_provider_icons() {
+fn tree_rows_use_disclosure_triangles_provider_icons_and_lifecycle_dots() {
     assert_eq!(group_prefix(0, false, true), " ▾ ");
     assert_eq!(group_prefix(0, false, false), " ▸ ");
 
@@ -159,12 +161,12 @@ fn tree_rows_use_disclosure_triangles_and_provider_icons() {
     let line = line.to_string();
 
     assert!(line.contains("✳"));
-    assert!(line.contains("●"));
+    assert!(line.contains("•"));
     assert!(!line.contains("Claude"));
 }
 
 #[test]
-fn managed_and_observed_rows_use_shape_distinct_non_text_provenance_marks() {
+fn only_observed_rows_show_an_external_suffix_after_the_title() {
     let observed = unresolved_open_session(Provider::ClaudeCode, "observed");
     let mut managed = observed.clone();
     managed.id = "managed".into();
@@ -194,26 +196,31 @@ fn managed_and_observed_rows_use_shape_distinct_non_text_provenance_marks() {
         theme,
     );
 
-    let observed_mark = observed_line
+    let observed_title = observed_line
         .spans
         .iter()
-        .find(|span| span.content == "⌁")
-        .expect("Observed row should use the open trace");
-    let managed_mark = managed_line
+        .position(|span| span.content.starts_with("observed"))
+        .unwrap();
+    let managed_title = managed_line
         .spans
         .iter()
-        .find(|span| span.content == "▦")
-        .expect("Managed row should use the closed weave");
-    assert_ne!(observed_mark.content, managed_mark.content);
+        .position(|span| span.content.starts_with("managed"))
+        .unwrap();
+    let observed_suffix = &observed_line.spans[observed_title + 1];
+    let managed_suffix = &managed_line.spans[managed_title + 1];
+
+    assert_eq!(observed_suffix.content, " ↗");
+    assert_eq!(managed_suffix.content, "  ");
+    assert!(!managed_line.to_string().contains('↗'));
     assert_eq!(
-        unicode_width::UnicodeWidthStr::width(observed_mark.content.as_ref()),
-        1
+        unicode_width::UnicodeWidthStr::width(observed_suffix.content.as_ref()),
+        2
     );
     assert_eq!(
-        unicode_width::UnicodeWidthStr::width(managed_mark.content.as_ref()),
-        1
+        unicode_width::UnicodeWidthStr::width(managed_suffix.content.as_ref()),
+        2
     );
-    assert_ne!(observed_mark.style.fg, managed_mark.style.fg);
+    assert_eq!(observed_suffix.style.fg, Some(theme.muted));
 }
 
 #[test]
@@ -254,7 +261,7 @@ fn open_session_operational_evidence_uses_stable_columns() {
             .count()
     };
 
-    for marker in ['!', '●', '%'] {
+    for marker in ['!', '•', '%'] {
         assert_eq!(column(&warning, marker), column(&critical, marker));
     }
     assert!(warning.contains("75%"));
@@ -280,38 +287,162 @@ fn unresolved_sessions_are_excluded_from_the_project_tree() {
     assert!(tree.is_empty());
 }
 
-#[test]
-fn projects_are_sorted_by_their_newest_session_activity() {
-    let mut older = open_session_in_worktree("older", "/older", "main");
-    older.project = Some(Project {
-        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/older")),
-        label: "older".into(),
-    });
-    older.last_activity_ms = 100;
-    let mut newer = open_session_in_worktree("newer", "/newer", "main");
-    newer.project = Some(Project {
-        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/newer")),
-        label: "newer".into(),
-    });
-    newer.last_activity_ms = 200;
+fn project_labels(state: &State, snapshot: &Snapshot) -> Vec<String> {
+    state
+        .rows(snapshot)
+        .into_iter()
+        .filter_map(|row| match row {
+            ProjectTreeRow::Project { project, .. } => Some(project.label.clone()),
+            _ => None,
+        })
+        .collect()
+}
 
-    let sessions = [older, newer];
-    let tree = rows(
-        &sessions,
+#[test]
+fn projects_keep_their_startup_activity_order_when_activity_changes() {
+    let mut alpha = open_session_in_worktree("alpha", "/alpha", "main");
+    alpha.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/alpha")),
+        label: "alpha".into(),
+    });
+    alpha.last_activity_ms = 100;
+    let mut zulu = open_session_in_worktree("zulu", "/zulu", "main");
+    zulu.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/zulu")),
+        label: "zulu".into(),
+    });
+    zulu.last_activity_ms = 200;
+
+    let mut snapshot = Snapshot {
+        sessions: vec![alpha, zulu],
+        generated_ms: 300,
+        ..Snapshot::default()
+    };
+    let state = State::default();
+
+    assert_eq!(project_labels(&state, &snapshot), ["zulu", "alpha"]);
+    snapshot.sessions[0].last_activity_ms = 300;
+    snapshot.sessions[1].last_activity_ms = 50;
+    assert_eq!(project_labels(&state, &snapshot), ["zulu", "alpha"]);
+}
+
+#[test]
+fn newly_discovered_project_is_first_and_keeps_its_rank_after_reappearing() {
+    let mut alpha = open_session_in_worktree("alpha", "/alpha", "main");
+    alpha.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/alpha")),
+        label: "alpha".into(),
+    });
+    alpha.last_activity_ms = 100;
+    let mut zulu = open_session_in_worktree("zulu", "/zulu", "main");
+    zulu.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/zulu")),
+        label: "zulu".into(),
+    });
+    zulu.last_activity_ms = 200;
+    let mut beta = open_session_in_worktree("beta", "/beta", "main");
+    beta.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/beta")),
+        label: "beta".into(),
+    });
+    beta.last_activity_ms = 50;
+
+    let mut snapshot = Snapshot {
+        sessions: vec![alpha, zulu],
+        generated_ms: 300,
+        ..Snapshot::default()
+    };
+    let state = State::default();
+    assert_eq!(project_labels(&state, &snapshot), ["zulu", "alpha"]);
+
+    snapshot.sessions.push(beta.clone());
+    assert_eq!(project_labels(&state, &snapshot), ["beta", "zulu", "alpha"]);
+
+    snapshot.sessions.retain(|session| session.id != beta.id);
+    assert_eq!(project_labels(&state, &snapshot), ["zulu", "alpha"]);
+
+    snapshot.sessions.push(beta);
+    assert_eq!(project_labels(&state, &snapshot), ["beta", "zulu", "alpha"]);
+}
+
+#[test]
+fn projects_with_matching_labels_use_canonical_path_order() {
+    let mut zulu = open_session_in_worktree("zulu", "/projects/zulu", "main");
+    zulu.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/projects/zulu")),
+        label: "project".into(),
+    });
+    let mut alpha = open_session_in_worktree("alpha", "/projects/alpha", "main");
+    alpha.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/projects/alpha")),
+        label: "project".into(),
+    });
+
+    let paths = rows(
+        &[zulu, alpha],
         &AttentionSnapshot::default(),
         300,
         &HashSet::new(),
         &HashSet::new(),
-    );
-    let projects = tree
-        .iter()
-        .filter_map(|row| match row {
-            ProjectTreeRow::Project { project, .. } => Some(project.label.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    )
+    .into_iter()
+    .filter_map(|row| match row {
+        ProjectTreeRow::Project { project, .. } => {
+            Some(project.identity.display_path().to_path_buf())
+        }
+        _ => None,
+    })
+    .collect::<Vec<_>>();
 
-    assert_eq!(projects, ["newer", "older"]);
+    assert_eq!(
+        paths,
+        [
+            PathBuf::from("/projects/alpha"),
+            PathBuf::from("/projects/zulu")
+        ]
+    );
+}
+
+#[test]
+fn newly_discovered_older_project_is_not_added_to_the_tree() {
+    const DAY_MS: i64 = 86_400_000;
+    const NOW: i64 = 1_700_000_000_000;
+    let mut alpha = open_session_in_worktree("alpha", "/alpha", "main");
+    alpha.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/alpha")),
+        label: "alpha".into(),
+    });
+    alpha.state = SessionState::Exited;
+    alpha.last_activity_ms = NOW - 10 * DAY_MS;
+    let mut zulu = open_session_in_worktree("zulu", "/zulu", "main");
+    zulu.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/zulu")),
+        label: "zulu".into(),
+    });
+    zulu.state = SessionState::Exited;
+    zulu.last_activity_ms = NOW - 8 * DAY_MS;
+    let mut beta = open_session_in_worktree("beta", "/beta", "main");
+    beta.project = Some(Project {
+        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/beta")),
+        label: "beta".into(),
+    });
+    beta.state = SessionState::Exited;
+    beta.last_activity_ms = NOW - 30 * DAY_MS;
+
+    let mut sessions = vec![alpha, zulu];
+    let mut project_order = ProjectOrder::default();
+    project_order.observe(&sessions);
+    sessions.push(beta);
+    project_order.observe(&sessions);
+    let tree = rows_with_order(
+        &sessions,
+        &AttentionSnapshot::default(),
+        NOW,
+        &HashSet::new(),
+        &HashSet::new(),
+        &project_order,
+    );
+    assert!(tree.is_empty());
 }
 
 #[test]
@@ -329,7 +460,7 @@ fn project_with_only_recent_and_older_sessions_is_not_in_the_tree() {
     let mut older = open_session_in_worktree("older", "/history", "main");
     older.project = Some(project);
     older.state = SessionState::Exited;
-    older.last_activity_ms = NOW - 8 * DAY_MS;
+    older.last_activity_ms = NOW - 4 * DAY_MS;
 
     let snapshot = Snapshot {
         sessions: vec![recent, older],

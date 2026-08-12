@@ -1,22 +1,17 @@
-//! Terminal-safe, shape-distinct Session management provenance marks.
+//! Compact Project Tree suffix for externally observed Sessions.
 
 use super::theme::Theme;
 use crate::domain::SessionProvenance;
 use ratatui::style::Style;
 
-pub(super) const MANAGED: &str = "▦";
-pub(super) const OBSERVED: &str = "⌁";
-
-pub(super) fn icon(provenance: SessionProvenance) -> &'static str {
+/// Keep both variants two cells wide so operational evidence stays aligned.
+pub(super) fn suffix(provenance: SessionProvenance) -> &'static str {
     match provenance {
-        SessionProvenance::Managed => MANAGED,
-        SessionProvenance::Observed => OBSERVED,
+        SessionProvenance::Managed => "  ",
+        SessionProvenance::Observed => " ↗",
     }
 }
 
-pub(super) fn style(provenance: SessionProvenance, theme: Theme, base: Style) -> Style {
-    base.fg(match provenance {
-        SessionProvenance::Managed => theme.accent,
-        SessionProvenance::Observed => theme.muted,
-    })
+pub(super) fn style(theme: Theme, base: Style) -> Style {
+    base.fg(theme.muted)
 }

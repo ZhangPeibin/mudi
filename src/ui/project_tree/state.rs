@@ -1,9 +1,11 @@
 //! Project Tree interaction state and navigation.
 
 use super::model::{ProjectTreeKey, ProjectTreeRow};
+use super::ProjectOrder;
 use crate::app::Snapshot;
 use crate::domain::{ProjectIdentity, Session, SessionIdentity};
 use crate::managed_sessions::ManagedLaunchTarget;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -30,11 +32,19 @@ pub(in crate::ui) struct State {
     selection: Option<ProjectTreeKey>,
     collapsed_nodes: HashSet<ProjectTreeKey>,
     expanded_disclosures: HashSet<ProjectTreeKey>,
+    project_order: RefCell<ProjectOrder>,
 }
 
 impl State {
     pub(super) fn rows<'a>(&self, snap: &'a Snapshot) -> Vec<ProjectTreeRow<'a>> {
-        super::rows(snap, &self.collapsed_nodes, &self.expanded_disclosures)
+        let mut project_order = self.project_order.borrow_mut();
+        project_order.observe(&snap.sessions);
+        super::rows(
+            snap,
+            &self.collapsed_nodes,
+            &self.expanded_disclosures,
+            &project_order,
+        )
     }
 
     /// Resolve the stable selection, falling back deterministically when its node vanished.

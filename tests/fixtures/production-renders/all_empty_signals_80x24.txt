@@ -10,8 +10,8 @@
  PROJECT 1 ─────────── 5 OPEN  │ Session Workspace ─────────────────────────────
  ▾ sessionmesh (7)             │Session Claude Code / critical
    ▾ main !2                   │Conversation unavailable.
-    > ✳ critical     ⌁ ! ●  90%│
-      ⬡ x-shared     ⌁ ! ●  40%│
+    > ✳ critical ↗     ! •  90%│
+      ⬡ x-shared ↗     ! •  40%│
    ▾ warning                   │
  DETAILS ──────────────────────│
  Title       critical          │

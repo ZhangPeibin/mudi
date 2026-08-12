@@ -2604,7 +2604,7 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
         "90%",
         "main !2",
         "75%",
-        "○",
+        "◦",
         "Conversation unavailable.",
         "DETAILS",
     ] {
@@ -3105,7 +3105,7 @@ fn session_tree_keeps_open_sessions_visible_and_discloses_exited_age_bands() {
         "recent-model",
         SessionState::Exited,
         20_000,
-        NOW - 7 * DAY_MS,
+        NOW - 3 * DAY_MS,
         worktree,
     );
     let older = fixture_session(
@@ -3114,7 +3114,7 @@ fn session_tree_keeps_open_sessions_visible_and_discloses_exited_age_bands() {
         "older-model",
         SessionState::Exited,
         20_000,
-        NOW - 7 * DAY_MS - 1,
+        NOW - 3 * DAY_MS - 1,
         worktree,
     );
     let snapshot = Snapshot {
@@ -3721,7 +3721,7 @@ fn compact_now_uses_every_title_cell_before_operational_evidence() {
         .expect("critical NOW Session should render");
 
     assert!(
-        critical_row.contains("✳ ...hijklmnop ⌁ ! ●  90%│"),
+        critical_row.contains("✳ ...hijklmnop ↗ ! •  90%│"),
         "Session Title should use every cell before operational evidence:\n{critical_row}"
     );
 }
@@ -3781,7 +3781,7 @@ fn wide_now_aligns_all_operational_evidence_for_supported_context_values() {
     };
     let evidence_end = |row: &str, value: &str| column(row, value) + value.chars().count();
 
-    let lifecycle_column = column(rows[0].0, "●");
+    let lifecycle_column = column(rows[0].0, "•");
     let attention_column = lifecycle_column - 2;
     let context_end = evidence_end(rows[0].0, rows[0].1);
     let elapsed_end = evidence_end(rows[0].0, rows[0].3);
@@ -3790,7 +3790,7 @@ fn wide_now_aligns_all_operational_evidence_for_supported_context_values() {
             row.chars().nth(attention_column),
             Some(if needs_attention { '!' } else { ' ' })
         );
-        assert_eq!(column(row, "●"), lifecycle_column);
+        assert_eq!(column(row, "•"), lifecycle_column);
         assert_eq!(evidence_end(row, value), context_end);
         assert_eq!(evidence_end(row, elapsed), elapsed_end);
         assert!(
@@ -5159,8 +5159,8 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         let roles = [
             ("critical", rendered.style_at_in_row("critical", "!")),
             ("warning", rendered.style_at_in_row("-warning", "!")),
-            ("idle", rendered.style_at_in_row("dex-idle", "○")),
-            ("busy", rendered.style_at_in_row("critical", "●")),
+            ("idle", rendered.style_at_in_row("dex-idle", "◦")),
+            ("busy", rendered.style_at_in_row("critical", "•")),
         ];
         for (role, style) in roles {
             let ratio = contrast_ratio(style);
@@ -5171,21 +5171,21 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
         }
         assert_ne!(
             rendered.style_at_in_row("-warning", "!"),
-            rendered.style_at_in_row("dex-idle", "○")
+            rendered.style_at_in_row("dex-idle", "◦")
         );
         assert_ne!(
-            rendered.style_at_in_row("dex-idle", "○"),
-            rendered.style_at_in_row("critical", "●")
+            rendered.style_at_in_row("dex-idle", "◦"),
+            rendered.style_at_in_row("critical", "•")
         );
 
         let warning = rendered.style_at_in_row("-warning", "!");
-        let busy = rendered.style_at_in_row("-warning", "●");
-        let idle = rendered.style_at_in_row("dex-idle", "○");
+        let busy = rendered.style_at_in_row("-warning", "•");
+        let idle = rendered.style_at_in_row("dex-idle", "◦");
         let selected_row = "> ✳ critical";
         let selected_cursor = rendered.style_at_in_row(selected_row, ">");
         let selected_title = rendered.style_at_in_row(selected_row, "critical");
         let selected_critical = rendered.style_at_in_row(selected_row, "!");
-        let selected_busy = rendered.style_at_in_row(selected_row, "●");
+        let selected_busy = rendered.style_at_in_row(selected_row, "•");
         let critical_context = rendered.style_at_in_row(selected_row, "90%");
         let ratio = contrast_ratio(critical_context);
         assert!(

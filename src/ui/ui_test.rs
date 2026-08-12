@@ -1075,10 +1075,10 @@ fn now_groups_open_sessions_across_providers_and_omits_exited_sessions() {
 }
 
 #[test]
-fn now_sorts_projects_by_activity_and_their_sessions_by_attention() {
+fn now_sorts_initial_projects_by_activity_and_their_sessions_by_attention() {
     let mut healthy = demo_snapshot().sessions.remove(0);
     healthy.id = "healthy".into();
-    healthy.project = Some(test_project("healthy"));
+    healthy.project = Some(test_project("zulu"));
     healthy.worktree.as_mut().unwrap().root = PathBuf::from("/worktrees/healthy");
     healthy.latest_model = Some("healthy-model".into());
     healthy.context.tokens = 80_000;
@@ -1086,7 +1086,7 @@ fn now_sorts_projects_by_activity_and_their_sessions_by_attention() {
 
     let mut warning = healthy.clone();
     warning.id = "warning".into();
-    warning.project = Some(test_project("priority"));
+    warning.project = Some(test_project("alpha"));
     warning.worktree.as_mut().unwrap().root = PathBuf::from("/worktrees/a-warning");
     warning.latest_model = Some("warning-model".into());
     warning.context.tokens = 150_000;
@@ -1168,7 +1168,7 @@ fn now_shows_critical_context_label_and_exact_percentage_in_the_editor_tree() {
 
     assert!(critical.contains('!'));
     assert!(critical.contains("90%"));
-    assert!(critical.contains('●'));
+    assert!(critical.contains('•'));
     assert!(critical.contains('✳'));
     assert!(critical.contains("-session"));
 }
@@ -1224,8 +1224,8 @@ fn now_preserves_lifecycle_colors_when_attention_overrides_rank() {
     let ui = Ui::default();
 
     let terminal = render_terminal_at(&ui, &snapshot, 120, 30);
-    let busy = rendered_style_at(&terminal, "●");
-    let idle = rendered_style_at(&terminal, "○");
+    let busy = rendered_style_at(&terminal, "•");
+    let idle = rendered_style_at(&terminal, "◦");
     let warning = rendered_style_at(&terminal, "!");
 
     assert_eq!(busy.fg, Some(Color::Rgb(120, 205, 120)));
@@ -1268,9 +1268,9 @@ fn now_shows_idle_elapsed_from_transition_and_last_activity_fallback() {
         .find(|line| line.contains("⬡ ack-idle"))
         .unwrap();
 
-    assert!(observed.contains('○'));
+    assert!(observed.contains('◦'));
     assert!(observed.contains("ved-idle"));
-    assert!(fallback.contains('○'));
+    assert!(fallback.contains('◦'));
     assert!(fallback.contains("ack-idle"));
 }
 
@@ -1999,7 +1999,7 @@ fn now_keeps_healthy_busy_sessions_visible_without_manufacturing_attention() {
         .find(|line| line.contains("✳ -session"))
         .unwrap();
 
-    assert!(session.contains('●'));
+    assert!(session.contains('•'));
     assert!(session.contains('✳'));
     assert!(session.contains("40%"));
     assert!(session.contains("-session"));
@@ -2031,7 +2031,7 @@ fn compact_now_shortens_long_identity_before_operational_evidence() {
 
     assert!(page.contains("Worktree"));
     assert!(page.contains("Provider"));
-    for evidence in ["!", "●", "✳", "-session", "75%"] {
+    for evidence in ["!", "•", "✳", "-session", "75%"] {
         assert!(
             session.contains(evidence),
             "missing compact evidence: {evidence}"

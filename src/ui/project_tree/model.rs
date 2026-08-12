@@ -1,11 +1,106 @@
 //! Project Tree stable identities, row model, grouping, and ordering.
 
-use super::super::{current_attention, is_system_temporary_cwd, snapshot_now_ms};
+#[cfg(test)]
+use super::super::{current_attention, snapshot_now_ms};
+use super::super::{is_system_temporary_cwd, RECENT_SESSION_WINDOW_MS};
 use crate::app::Snapshot;
 use crate::attention::AttentionSnapshot;
 use crate::domain::{Project, ProjectIdentity, Session, SessionIdentity, Worktree};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+
+/// Per-application-run Project ordering. Initial Projects are ranked by activity;
+/// Projects discovered later are inserted ahead of the retained ranks.
+#[derive(Clone, Default)]
+pub(in crate::ui) struct ProjectOrder {
+    ranks: HashMap<ProjectIdentity, i64>,
+    next_new_rank: i64,
+    initialized: bool,
+}
+
+impl ProjectOrder {
+    pub(in crate::ui) fn observe(&mut self, sessions: &[Session]) {
+        let mut projects = project_ordering_candidates(sessions);
+        if !self.initialized {
+            projects.sort_by(compare_initial_projects);
+            for (rank, project) in projects.into_iter().enumerate() {
+                self.ranks
+                    .insert(project.project.identity.clone(), rank as i64);
+            }
+            self.next_new_rank = -1;
+            self.initialized = true;
+            return;
+        }
+
+        projects.retain(|project| !self.ranks.contains_key(&project.project.identity));
+        projects.sort_by(compare_initial_projects);
+        let first_rank = self.next_new_rank - projects.len() as i64 + 1;
+        for (offset, project) in projects.into_iter().enumerate() {
+            self.ranks
+                .insert(project.project.identity.clone(), first_rank + offset as i64);
+        }
+        self.next_new_rank = first_rank - 1;
+    }
+
+    pub(in crate::ui) fn compare(&self, left: &Project, right: &Project) -> std::cmp::Ordering {
+        match (
+            self.ranks.get(&left.identity),
+            self.ranks.get(&right.identity),
+        ) {
+            (Some(left_rank), Some(right_rank)) => left_rank.cmp(right_rank),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => compare_project_identity(left, right),
+        }
+    }
+}
+
+struct ProjectOrderingCandidate<'a> {
+    project: &'a Project,
+    latest_activity_ms: i64,
+}
+
+fn project_ordering_candidates(sessions: &[Session]) -> Vec<ProjectOrderingCandidate<'_>> {
+    let mut projects: Vec<ProjectOrderingCandidate<'_>> = Vec::new();
+    for session in sessions {
+        if is_system_temporary_cwd(session.cwd.as_deref()) {
+            continue;
+        }
+        let Some(project) = session.project.as_ref() else {
+            continue;
+        };
+        if let Some(existing) = projects
+            .iter_mut()
+            .find(|existing| existing.project.identity == project.identity)
+        {
+            existing.latest_activity_ms = existing.latest_activity_ms.max(session.last_activity_ms);
+        } else {
+            projects.push(ProjectOrderingCandidate {
+                project,
+                latest_activity_ms: session.last_activity_ms,
+            });
+        }
+    }
+    projects
+}
+
+fn compare_initial_projects(
+    left: &ProjectOrderingCandidate<'_>,
+    right: &ProjectOrderingCandidate<'_>,
+) -> std::cmp::Ordering {
+    right
+        .latest_activity_ms
+        .cmp(&left.latest_activity_ms)
+        .then_with(|| compare_project_identity(left.project, right.project))
+}
+
+fn compare_project_identity(left: &Project, right: &Project) -> std::cmp::Ordering {
+    left.label.cmp(&right.label).then_with(|| {
+        left.identity
+            .display_path()
+            .cmp(right.identity.display_path())
+    })
+}
 
 /// Time bucket used by historical Session disclosures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -127,6 +222,7 @@ struct HistoricalDisclosure<'bucket, 'session> {
 ///
 /// 只有一个 Worktree 且没有 Project 直属 Session 时省略 Worktree 层；多个
 /// Worktree 仍保留分组，避免不同工作副本的 Session 混在一起。
+#[cfg(test)]
 pub(super) fn rows<'a>(
     sessions: &'a [Session],
     attention: &AttentionSnapshot,
@@ -134,8 +230,28 @@ pub(super) fn rows<'a>(
     collapsed: &HashSet<ProjectTreeKey>,
     expanded_disclosures: &HashSet<ProjectTreeKey>,
 ) -> Vec<ProjectTreeRow<'a>> {
+    let mut project_order = ProjectOrder::default();
+    project_order.observe(sessions);
+    rows_with_order(
+        sessions,
+        attention,
+        now_ms,
+        collapsed,
+        expanded_disclosures,
+        &project_order,
+    )
+}
+
+pub(super) fn rows_with_order<'a>(
+    sessions: &'a [Session],
+    attention: &AttentionSnapshot,
+    now_ms: i64,
+    collapsed: &HashSet<ProjectTreeKey>,
+    expanded_disclosures: &HashSet<ProjectTreeKey>,
+    project_order: &ProjectOrder,
+) -> Vec<ProjectTreeRow<'a>> {
     let mut rows = Vec::new();
-    let inventory = grouped_sessions(sessions, attention, now_ms);
+    let inventory = grouped_sessions(sessions, attention, now_ms, project_order);
     for project in inventory.current_projects {
         append_project(&mut rows, project, None, 0, collapsed, expanded_disclosures);
     }
@@ -348,6 +464,7 @@ pub(super) fn tree_counts(snap: &Snapshot) -> (usize, usize) {
 }
 
 /// 按首页 Attention 顺序返回已解析到 Project 的 Open Session。
+#[cfg(test)]
 pub(super) fn sessions(snap: &Snapshot) -> Vec<&Session> {
     let attention = current_attention(snap);
     let collapsed = HashSet::new();
@@ -411,7 +528,6 @@ struct ProjectGroup<'a> {
     project: &'a Project,
     worktrees: Vec<WorktreeGroup<'a>>,
     direct_sessions: SessionBuckets<'a>,
-    latest_activity_ms: i64,
     has_open_session: bool,
 }
 
@@ -424,14 +540,15 @@ struct ProjectInventory<'a> {
     current_projects: Vec<ProjectGroup<'a>>,
 }
 
-/// 将已解析 Project 的 Session 分组，并按 Project 最新 Session 活动时间倒序排列。
+/// 将已解析 Project 的 Session 分组。Project 列表使用本次运行固定的 rank；最新
+/// 活动只决定 Current/Older 分区，避免同时活跃的 Project 随每次刷新重排。
 fn grouped_sessions<'a>(
     sessions: &'a [Session],
     attention: &AttentionSnapshot,
     now_ms: i64,
+    project_order: &ProjectOrder,
 ) -> ProjectInventory<'a> {
-    const SEVEN_DAYS_MS: i64 = 7 * 86_400_000;
-    let cutoff_ms = now_ms - SEVEN_DAYS_MS;
+    let cutoff_ms = now_ms - RECENT_SESSION_WINDOW_MS;
     let mut projects: Vec<ProjectGroup<'_>> = Vec::new();
 
     for session in sessions {
@@ -449,13 +566,11 @@ fn grouped_sessions<'a>(
                     project: resolved_project,
                     worktrees: Vec::new(),
                     direct_sessions: SessionBuckets::default(),
-                    latest_activity_ms: session.last_activity_ms,
                     has_open_session: false,
                 });
                 projects.len() - 1
             });
         let project = &mut projects[project_index];
-        project.latest_activity_ms = project.latest_activity_ms.max(session.last_activity_ms);
         project.has_open_session |= session.state.is_open();
 
         if let Some(worktree) = session.worktree.as_ref() {
@@ -490,12 +605,7 @@ fn grouped_sessions<'a>(
         });
         project.direct_sessions.sort(attention);
     }
-    projects.sort_by(|left, right| {
-        right
-            .latest_activity_ms
-            .cmp(&left.latest_activity_ms)
-            .then_with(|| left.project.label.cmp(&right.project.label))
-    });
+    projects.sort_by(|left, right| project_order.compare(left.project, right.project));
     projects.retain(|project| project.has_open_session);
     ProjectInventory {
         current_projects: projects,

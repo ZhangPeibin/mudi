@@ -1146,8 +1146,12 @@ fn assert_managed_refresh(
         "Project row missing:\n{rendered}"
     );
     assert!(
-        rendered.contains("Managed work") && rendered.contains('▦'),
+        rendered.contains("Managed work"),
         "verified Managed row missing:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains('▦'),
+        "Managed row still used the old provenance icon:\n{rendered}"
     );
 }
 
