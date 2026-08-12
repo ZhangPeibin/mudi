@@ -209,9 +209,7 @@ fn process_matches(pid: i64, expected_started_ms: Option<i64>) -> Option<bool> {
     if etime.is_empty() {
         return Some(false); // process not alive
     }
-    let Some(elapsed_s) = parse_etime(&etime) else {
-        return None;
-    };
+    let elapsed_s = parse_etime(&etime)?;
 
     match expected_started_ms {
         Some(exp_ms) => {

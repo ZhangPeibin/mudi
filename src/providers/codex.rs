@@ -155,9 +155,12 @@ fn successor_arguments(provider_name: &str, artifact_path: &Path) -> Vec<String>
 
 fn resolve_successor_session(
     cfg: &Config,
-    process: super::state::ProcessIdentity,
+    launch_process: super::state::ProcessIdentity,
 ) -> Option<String> {
-    binding_evidence(cfg, process).map(|evidence| evidence.source_session_id)
+    // Linking a foreground Successor needs only one rollout held by this exact
+    // launch tree. Full binding evidence also requires `cwd`, which may not be
+    // present in the first metadata record when the Successor is launched.
+    native_session_id(&rollout_held_by_launch_tree(cfg, launch_process)?)
 }
 
 fn binding_evidence(
@@ -173,6 +176,22 @@ fn binding_evidence(
     };
     evidence.launch_process = launch_process;
     Some(evidence.clone())
+}
+
+fn rollout_held_by_launch_tree(
+    cfg: &Config,
+    launch_process: super::state::ProcessIdentity,
+) -> Option<PathBuf> {
+    let mut rollouts = super::state::process_tree_identities(launch_process)?
+        .into_iter()
+        .filter_map(|provider_process| binding_rollout(cfg, provider_process))
+        .collect::<Vec<_>>();
+    rollouts.sort();
+    rollouts.dedup();
+    let [rollout] = rollouts.as_slice() else {
+        return None;
+    };
+    Some(rollout.clone())
 }
 
 fn binding_evidence_for_process(
@@ -217,6 +236,30 @@ fn binding_rollout(cfg: &Config, process: super::state::ProcessIdentity) -> Opti
         return None;
     };
     super::state::process_identity_is_live(process).then(|| rollout.clone())
+}
+
+fn native_session_id(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut session_id: Option<String> = None;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let value: Value = serde_json::from_str(line).ok()?;
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let observed = value
+            .get("payload")
+            .and_then(|payload| payload.get("id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())?;
+        if session_id
+            .as_deref()
+            .is_some_and(|current| current != observed)
+        {
+            return None;
+        }
+        session_id = Some(observed.to_string());
+    }
+    session_id
 }
 
 fn binding_source_metadata(path: &Path) -> Option<(String, PathBuf)> {
