@@ -19,6 +19,8 @@ not change an accepted version scope on their own.
 - [`v2.0.1 / Work Continuity`](./feature/v2.0.1/work-continuity/discussion.md)
 - [`v2.0.1 / Failed Session Recovery`](./feature/v2.0.1/failed-session-recovery/discussion.md)
   - candidate small requirement; not yet part of the accepted v2.0.1 scope.
+- [`v2.0.1 / Managed Session Lifecycle Tasks`](./feature/v2.0.1/managed-session-lifecycle-tasks/discussion.md)
+  - candidate change that unifies New, Resume, and Handoff under Operation Tasks.
 
 ## Engineering Conventions
 
