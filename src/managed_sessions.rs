@@ -316,7 +316,7 @@ impl SystemManagedResumeProviderEvidence {
         }
         let live = registry()
             .runtime_control(run.provider)?
-            .observe_current_run(&detector, &run.native_session_id, &source);
+            .observe_current_run(detector, &run.native_session_id, &source);
         if live.state.is_open() {
             Ok(ManagedCurrentRunLifecycle::Open)
         } else if live.state == crate::domain::SessionState::Exited
@@ -2628,6 +2628,11 @@ impl ManagedLaunchBroker for TmuxLaunchBroker {
         )?;
         validate_tmux_name(&registration.tmux.socket_name)?;
         validate_tmux_name(&registration.tmux.session_name)?;
+        let terminal_title = escape_tmux_format(&registration.session_alias);
+        let window_title = tmux_window_title(
+            &registration.session_alias,
+            registration.description.as_deref(),
+        );
         let output = Command::new(&self.tmux_executable)
             .env_remove("TMUX")
             .args([OsStr::new("-f"), OsStr::new("/dev/null"), OsStr::new("-L")])
@@ -2641,11 +2646,22 @@ impl ManagedLaunchBroker for TmuxLaunchBroker {
                 OsStr::new("-s"),
             ])
             .arg(&registration.tmux.session_name)
+            .arg("-n")
+            .arg(window_title)
             .arg("-c")
             .arg(&registration.target.working_directory)
             .arg("--")
             .arg(&registration.provider_command.executable)
             .args(&registration.provider_command.arguments)
+            .arg(";")
+            .args(["set-option", "-w", "automatic-rename", "off"])
+            .arg(";")
+            .args(["set-option", "-g", "set-titles", "on"])
+            .arg(";")
+            .args(["set-option", "-g", "set-titles-string"])
+            .arg(&terminal_title)
+            .arg(";")
+            .args(["set-option", "-g", "mouse", "on"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -2675,6 +2691,14 @@ impl ManagedLaunchBroker for TmuxLaunchBroker {
     fn cancel(&mut self, registration: &ManagedLaunchRegistration) -> Result<()> {
         terminate_private_tmux(&self.tmux_executable, &registration.tmux)
     }
+}
+
+fn escape_tmux_format(value: &str) -> String {
+    value.replace('#', "##")
+}
+
+fn tmux_window_title(title: &str, description: Option<&str>) -> String {
+    escape_tmux_format(description.unwrap_or(title))
 }
 
 fn terminate_private_tmux(
@@ -2880,4 +2904,14 @@ fn shell_quote_os(value: &OsStr) -> Result<String> {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tmux_window_title;
+
+    #[test]
+    fn tmux_window_title_falls_back_to_the_session_title() {
+        assert_eq!(tmux_window_title("Title #S", None), "Title ##S".to_string());
+    }
 }

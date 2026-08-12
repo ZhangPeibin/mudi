@@ -381,7 +381,7 @@ fn needs_review_diagnostics_include_only_launch_metadata() {
         "Project: project",
         "Worktree: N/A",
         &format!("Working directory: {}", temp.path().display()),
-        "Provider process: pid 42, started 41000",
+        "Launched pane process: pid 42, started 41000",
         "Evidence: private tmux pane %42; Binding Receipt not issued",
         "Binding error: native Session evidence conflicts",
     ] {

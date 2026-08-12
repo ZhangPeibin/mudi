@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 /// Compaction events emitted within this window (ms) are treated as one event.
 const COMPACT_DEDUP_MS: i64 = 2000;
+const FULL_ACCESS_ARGUMENT: &str = "--dangerously-bypass-approvals-and-sandbox";
 
 /// The Codex CLI provider adapter.
 pub struct CodexAdapter;
@@ -88,14 +89,19 @@ impl RuntimeControlPort for CodexAdapter {
     }
 
     fn new_session_args(&self, binding_initializer: bool) -> Vec<String> {
-        binding_initializer
-            .then(|| super::BINDING_INITIALIZER.to_string())
-            .into_iter()
-            .collect()
+        let mut arguments = vec![FULL_ACCESS_ARGUMENT.to_string()];
+        if binding_initializer {
+            arguments.push(super::BINDING_INITIALIZER.to_string());
+        }
+        arguments
     }
 
     fn resume_session_args(&self, native_session_id: &str) -> Vec<String> {
-        vec!["resume".to_string(), native_session_id.to_string()]
+        vec![
+            FULL_ACCESS_ARGUMENT.to_string(),
+            "resume".to_string(),
+            native_session_id.to_string(),
+        ]
     }
 
     fn handoff_resume_args(&self, native_session_id: &str) -> Vec<String> {

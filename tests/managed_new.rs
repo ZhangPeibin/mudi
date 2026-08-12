@@ -31,15 +31,25 @@ use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn provider_adapters_build_native_new_commands_without_collecting_a_prompt() {
-    for provider in [Provider::CodexCli, Provider::ClaudeCode] {
-        let adapter = registry().runtime_control(provider).unwrap();
+    let codex = registry().runtime_control(Provider::CodexCli).unwrap();
+    assert_eq!(
+        codex.new_session_args(false),
+        vec!["--dangerously-bypass-approvals-and-sandbox".to_string()]
+    );
+    assert_eq!(
+        codex.new_session_args(true),
+        vec![
+            "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            BINDING_INITIALIZER.to_string(),
+        ]
+    );
 
-        assert_eq!(adapter.new_session_args(false), Vec::<String>::new());
-        assert_eq!(
-            adapter.new_session_args(true),
-            vec![BINDING_INITIALIZER.to_string()]
-        );
-    }
+    let claude = registry().runtime_control(Provider::ClaudeCode).unwrap();
+    assert_eq!(claude.new_session_args(false), Vec::<String>::new());
+    assert_eq!(
+        claude.new_session_args(true),
+        vec![BINDING_INITIALIZER.to_string()]
+    );
 }
 
 struct AssertPersistedBeforeLaunch {
@@ -197,6 +207,8 @@ fn private_tmux_broker_runs_the_selected_native_command_in_the_target_worktree()
     let codex = executable(temp.path(), "codex");
     let store_path = temp.path().join("managed-launches.db");
     let opened = Arc::new(Mutex::new(Vec::new()));
+    let title = "Initializer #S #{session_name}";
+    let description = "Inspect #W startup";
     let mut service = ManagedSessionService::new(
         ManagedLaunchStore::open(&store_path).unwrap(),
         ProviderExecutables::new(claude.clone(), codex),
@@ -214,8 +226,8 @@ fn private_tmux_broker_runs_the_selected_native_command_in_the_target_worktree()
                     worktree_root: None,
                     working_directory: worktree.clone(),
                 },
-                title: "Initializer contract".into(),
-                description: None,
+                title: title.into(),
+                description: Some(description.into()),
                 binding_initializer: true,
             },
             43_000,
@@ -241,11 +253,33 @@ fn private_tmux_broker_runs_the_selected_native_command_in_the_target_worktree()
             "#{pane_id}\t#{pane_pid}".to_string(),
             "-s".to_string(),
             "managed".to_string(),
+            "-n".to_string(),
+            "Inspect ##W startup".to_string(),
             "-c".to_string(),
             worktree.to_string_lossy().into_owned(),
             "--".to_string(),
             claude.to_string_lossy().into_owned(),
             BINDING_INITIALIZER.to_string(),
+            ";".to_string(),
+            "set-option".to_string(),
+            "-w".to_string(),
+            "automatic-rename".to_string(),
+            "off".to_string(),
+            ";".to_string(),
+            "set-option".to_string(),
+            "-g".to_string(),
+            "set-titles".to_string(),
+            "on".to_string(),
+            ";".to_string(),
+            "set-option".to_string(),
+            "-g".to_string(),
+            "set-titles-string".to_string(),
+            "Initializer ##S ##{session_name}".to_string(),
+            ";".to_string(),
+            "set-option".to_string(),
+            "-g".to_string(),
+            "mouse".to_string(),
+            "on".to_string(),
         ]
     );
     let provider_process = outcome
@@ -581,8 +615,7 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
     }
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    let start = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    let start = ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap();
     assert!(matches!(start, UiAction::StartManagedNew { .. }));
     assert!(!controller.handle(start, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
 
@@ -656,8 +689,7 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
     }
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    let intent = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    let intent = ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap();
     assert!(
         matches!(intent, UiAction::StartManagedNew { .. }),
         "unexpected UI intent: {intent:?}"

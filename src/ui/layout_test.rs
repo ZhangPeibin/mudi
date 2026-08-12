@@ -23,3 +23,13 @@ fn capped_centered_rect_keeps_the_requested_height_and_caps_width() {
         Rect::new(30, 4, 100, 32)
     );
 }
+
+#[test]
+fn content_sized_rect_caps_both_dimensions_and_stays_centered() {
+    let area = Rect::new(7, 11, 160, 40);
+
+    assert_eq!(
+        centered_rect_with_max_size(80, 100, 14, area),
+        Rect::new(37, 24, 100, 14)
+    );
+}

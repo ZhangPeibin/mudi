@@ -566,6 +566,20 @@ fn rendered_rows_at(ui: &Ui, snapshot: &Snapshot, width: u16, height: u16) -> St
         .join("\n")
 }
 
+fn rendered_modal_height(rendered: &str, title: &str) -> usize {
+    let rows = rendered.lines().collect::<Vec<_>>();
+    let top = rows.iter().position(|row| row.contains(title)).unwrap();
+    let modal_x = rows[top].chars().position(|cell| cell == '┌').unwrap();
+    let bottom = rows
+        .iter()
+        .enumerate()
+        .skip(top + 1)
+        .find(|(_, row)| row.chars().nth(modal_x) == Some('└'))
+        .map(|(index, _)| index)
+        .unwrap();
+    bottom - top + 1
+}
+
 /// 返回指定可见文本首个字符使用的 Ratatui 样式。
 fn rendered_style_at(terminal: &Terminal<TestBackend>, text: &str) -> Style {
     let buffer = terminal.backend().buffer();
@@ -696,8 +710,24 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
     let initial = rendered_rows_at(&ui, &snapshot, 120, 36);
     assert!(initial.contains("New Session"));
     assert!(initial.contains("/Users/x/code/sessionmesh"));
-    assert!(initial.contains("Choose Provider"));
-    assert!(initial.contains("[ ] Off"));
+    assert!(initial.contains("◦ Claude Code    ◦ Codex CLI"));
+    assert!(initial.contains("1 of 2"));
+    assert!(!initial.contains("1/2"));
+    assert!(initial.contains("Initialize    Off"));
+    assert!(initial.contains("Required"));
+    assert!(initial.contains("Optional"));
+    assert!(initial.contains("› Provider"));
+    assert!(initial.contains("j/k Move · ←/→ Select · y Start · n Cancel"));
+    assert!(!initial.contains("Full access · No sandbox · No approvals"));
+    assert!(!initial.contains("Start New"));
+    assert_eq!(rendered_modal_height(&initial, "New Session"), 10);
+    let initial_terminal = render_terminal_at(&ui, &snapshot, 120, 36);
+    assert!(rendered_style_at(&initial_terminal, "PROJECT")
+        .add_modifier
+        .contains(Modifier::DIM));
+    assert!(!rendered_style_at(&initial_terminal, "New Session")
+        .add_modifier
+        .contains(Modifier::DIM));
     let compact = rendered_rows_at(&ui, &snapshot, 80, 24);
     for visible_control in [
         "New Session",
@@ -705,16 +735,41 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
         "Worktree",
         "Title",
         "Description",
-        "Binding Initializer",
-        "Start New",
+        "Initialize",
     ] {
         assert!(compact.contains(visible_control));
     }
+    assert!(!compact.contains("Start New"));
+    assert_eq!(rendered_modal_height(&compact, "New Session"), 10);
 
+    ui.handle_key(key(KeyCode::Char('j')), &snapshot).unwrap();
+    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("› Worktree"));
+    ui.handle_key(key(KeyCode::Char('k')), &snapshot).unwrap();
+    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("› Provider"));
     ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    let codex_selected = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(codex_selected.contains("◦ Claude Code    • Codex CLI"));
+    assert!(codex_selected.contains("Full access · No sandbox · No approvals"));
+    assert_eq!(rendered_modal_height(&codex_selected, "New Session"), 10);
+    let codex_terminal = render_terminal_at(&ui, &snapshot, 120, 36);
+    assert_eq!(
+        rendered_style_at(&codex_terminal, "• Codex CLI").fg,
+        Some(ui.theme.palette().provider_codex)
+    );
+    assert_eq!(
+        rendered_style_at(&codex_terminal, "• Codex CLI").bg,
+        Some(ui.theme.palette().background)
+    );
+    assert_eq!(
+        rendered_style_at(&codex_terminal, "◦ Claude Code").bg,
+        Some(ui.theme.palette().background)
+    );
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("2 of 2"));
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    assert!(rendered_rows_at(&ui, &snapshot, 120, 36)
+        .contains("Type to edit · ↑/↓ Move · Enter Next · Esc Cancel"));
     for character in "Investigate startup".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
@@ -725,11 +780,11 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
             .unwrap();
     }
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Char(' ')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("Initialize    On"));
 
     assert_eq!(
-        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+        ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap(),
         UiAction::StartManagedNew {
             request: crate::managed_sessions::ManagedNewRequest {
                 provider: Provider::CodexCli,
@@ -750,6 +805,52 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
             }
         }
     );
+}
+
+#[test]
+fn single_worktree_new_omits_a_meaningless_count() {
+    let snapshot = demo_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+
+    let rendered = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(rendered.contains("/Users/x/code/sessionmesh"));
+    assert!(!rendered.contains("1/1"));
+    assert!(!rendered.contains("1 of 1"));
+}
+
+#[test]
+fn new_session_shortcut_letters_are_text_inside_inputs() {
+    let snapshot = managed_new_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+
+    for character in "jkyn".chars() {
+        assert_eq!(
+            ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+                .unwrap(),
+            UiAction::None
+        );
+    }
+    assert_eq!(ui.new_session.as_ref().unwrap().title, "jkyn");
+
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "nykj".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    assert_eq!(ui.new_session.as_ref().unwrap().description, "nykj");
 }
 
 #[test]
@@ -850,20 +951,23 @@ fn selected_worktree_new_requires_title_and_does_not_remember_provider() {
 
     let selected = rendered_rows_at(&ui, &snapshot, 120, 36);
     assert!(selected.contains("/Users/x/code/sessionmesh-feature"));
-    assert!(selected.contains("Choose Provider"));
+    assert!(selected.contains("◦ Claude Code    ◦ Codex CLI"));
     ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
-    for _ in 0..5 {
+    for _ in 0..4 {
         ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
     }
     assert_eq!(
-        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+        ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap(),
         UiAction::None
     );
-    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("Title is required"));
+    let invalid = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(invalid.contains("Title is required"));
+    assert_eq!(rendered_modal_height(&invalid, "New Session"), 10);
 
     ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("Choose Provider"));
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    assert!(!rendered_rows_at(&ui, &snapshot, 120, 36).contains("New Session"));
 }
 
 /// 对总览及可选详情状态执行一次无崩溃渲染。

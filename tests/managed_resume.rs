@@ -39,7 +39,11 @@ fn provider_adapters_build_exact_interactive_resume_commands() {
             .runtime_control(Provider::CodexCli)
             .unwrap()
             .resume_session_args(native_session_id),
-        vec!["resume".to_string(), native_session_id.to_string()]
+        vec![
+            "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            "resume".to_string(),
+            native_session_id.to_string(),
+        ]
     );
     assert_eq!(
         registry()
@@ -115,7 +119,11 @@ fn verified_exited_session_launches_an_exact_resume_from_a_durable_registration(
             Provider::CodexCli,
             "native-session-49".to_string(),
             codex,
-            vec!["resume".to_string(), "native-session-49".to_string()],
+            vec![
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+                "resume".to_string(),
+                "native-session-49".to_string(),
+            ],
         )]
     );
     assert_eq!(
@@ -907,6 +915,7 @@ fn only_verified_exited_managed_sessions_offer_an_explicit_resume_confirmation()
             "missing {required:?}"
         );
     }
+    assert!(!compact_confirmation.contains("Full access · No sandbox · No approvals"));
     assert!(!compact_confirmation.contains("Terminal too small"));
     assert_eq!(
         ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &eligible)
@@ -948,6 +957,30 @@ fn only_verified_exited_managed_sessions_offer_an_explicit_resume_confirmation()
             UiAction::StartManagedResume { .. }
         ));
     }
+}
+
+#[test]
+fn codex_resume_discloses_full_access_before_authorization() {
+    let mut session = display_session(SessionState::Exited, SessionProvenance::Managed);
+    session.provider = Provider::CodexCli;
+    session.latest_model = Some("gpt-5-codex".into());
+    let eligible = RefreshSnapshot {
+        sessions: vec![session, open_companion_session()],
+        resumable_managed_sessions: vec![ManagedResumeSummary {
+            provider: Provider::CodexCli,
+            native_session_id: "native-session-49".into(),
+        }],
+        ready: true,
+        ..RefreshSnapshot::default()
+    };
+    let mut ui = Ui::default();
+    open_session_detail(&mut ui, &eligible);
+    ui.handle_key(key('r'), &eligible).unwrap();
+
+    let confirmation = render_ui_at(&ui, &eligible, 80, 24);
+    assert!(confirmation.contains("Authorize Resume"));
+    assert!(confirmation.contains("Provider    Codex CLI"));
+    assert!(confirmation.contains("Full access · No sandbox · No approvals"));
 }
 
 #[test]
@@ -1326,9 +1359,11 @@ impl ManagedResumeEvidence for FixedResumeEvidence {
     }
 }
 
+type RecordedLaunch = (Provider, String, PathBuf, Vec<String>);
+
 struct RecordingLaunchBroker {
     store_path: PathBuf,
-    launched: Arc<Mutex<Vec<(Provider, String, PathBuf, Vec<String>)>>>,
+    launched: Arc<Mutex<Vec<RecordedLaunch>>>,
 }
 
 struct FailingLaunchBroker;

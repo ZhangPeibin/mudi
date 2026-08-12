@@ -210,17 +210,15 @@ enum NewSessionField {
     Title,
     Description,
     BindingInitializer,
-    Confirm,
 }
 
 impl NewSessionField {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 5] = [
         Self::Provider,
         Self::Target,
         Self::Title,
         Self::Description,
         Self::BindingInitializer,
-        Self::Confirm,
     ];
 
     fn move_by(self, offset: isize) -> Self {
@@ -1376,19 +1374,37 @@ impl Ui {
             return UiAction::None;
         };
         form.error = None;
+        let is_text_field = matches!(
+            form.field,
+            NewSessionField::Title | NewSessionField::Description
+        );
         match key.code {
             crossterm::event::KeyCode::Esc => self.new_session = None,
+            crossterm::event::KeyCode::Up => form.field = form.field.move_by(-1),
+            crossterm::event::KeyCode::Down => form.field = form.field.move_by(1),
             crossterm::event::KeyCode::Tab => form.field = form.field.move_by(1),
             crossterm::event::KeyCode::BackTab => form.field = form.field.move_by(-1),
+            crossterm::event::KeyCode::Char('k') if !is_text_field => {
+                form.field = form.field.move_by(-1)
+            }
+            crossterm::event::KeyCode::Char('j') if !is_text_field => {
+                form.field = form.field.move_by(1)
+            }
+            crossterm::event::KeyCode::Char('n') if !is_text_field => self.new_session = None,
+            crossterm::event::KeyCode::Char('y') if !is_text_field => match form.request() {
+                Ok(request) => {
+                    self.new_session = None;
+                    return UiAction::StartManagedNew { request };
+                }
+                Err(error) => form.error = Some(error),
+            },
             crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right
                 if form.field == NewSessionField::Provider =>
             {
-                form.provider = match (form.provider, key.code) {
-                    (None, crossterm::event::KeyCode::Left) => Some(Provider::ClaudeCode),
-                    (None, crossterm::event::KeyCode::Right) => Some(Provider::CodexCli),
-                    (Some(Provider::ClaudeCode), _) => Some(Provider::CodexCli),
-                    (Some(Provider::CodexCli), _) => Some(Provider::ClaudeCode),
-                    _ => form.provider,
+                form.provider = match key.code {
+                    crossterm::event::KeyCode::Left => Some(Provider::ClaudeCode),
+                    crossterm::event::KeyCode::Right => Some(Provider::CodexCli),
+                    _ => unreachable!(),
                 };
             }
             crossterm::event::KeyCode::Left
@@ -1403,6 +1419,16 @@ impl Ui {
                 if form.field == NewSessionField::Target && !form.targets.is_empty() =>
             {
                 form.target_index = (form.target_index + 1) % form.targets.len();
+            }
+            crossterm::event::KeyCode::Left
+                if form.field == NewSessionField::BindingInitializer =>
+            {
+                form.binding_initializer = false;
+            }
+            crossterm::event::KeyCode::Right
+                if form.field == NewSessionField::BindingInitializer =>
+            {
+                form.binding_initializer = true;
             }
             crossterm::event::KeyCode::Char(' ')
                 if form.field == NewSessionField::BindingInitializer =>
@@ -1423,15 +1449,6 @@ impl Ui {
             {
                 if let Some(input) = form.active_input_mut() {
                     input.push(character);
-                }
-            }
-            crossterm::event::KeyCode::Enter if form.field == NewSessionField::Confirm => {
-                match form.request() {
-                    Ok(request) => {
-                        self.new_session = None;
-                        return UiAction::StartManagedNew { request };
-                    }
-                    Err(error) => form.error = Some(error),
                 }
             }
             crossterm::event::KeyCode::Enter

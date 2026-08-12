@@ -108,7 +108,7 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     } else if ui.hidden_tree_open {
         "j/k Move | Enter Expand/Collapse | u Restore | d Delete | Esc Back"
     } else if ui.new_session.is_some() {
-        "Tab Fields | Left/Right Select | Enter | Esc"
+        ""
     } else if ui.task_retry_confirmation.is_some() {
         "Left/Right Provider | Enter Authorize Retry | Esc Cancel"
     } else if ui.task_cancellation_confirmation.is_some() {

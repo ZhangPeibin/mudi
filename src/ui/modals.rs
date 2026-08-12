@@ -14,6 +14,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+const CODEX_FULL_ACCESS_NOTICE: &str = "Full access · No sandbox · No approvals";
+
 /// Whether a modal interaction layer currently owns input over page content.
 pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
     ui.hidden_tree_open
@@ -198,9 +200,9 @@ fn draw_managed_resume_confirmation(f: &mut Frame, ui: &Ui) {
         return;
     };
     let theme = ui.theme.palette();
-    let area = layout::centered_rect_with_max_width(82, 62, 72, f.area());
+    let area = layout::centered_rect_with_max_width(82, 70, 72, f.area());
     f.render_widget(Clear, area);
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             "Authorize Resume?",
             Style::default()
@@ -211,6 +213,17 @@ fn draw_managed_resume_confirmation(f: &mut Frame, ui: &Ui) {
         Line::from(format!("Provider    {}", target.provider.label())),
         Line::from(format!("Session ID  {}", target.native_session_id)),
         Line::from(""),
+    ];
+    if target.provider == Provider::CodexCli {
+        lines.push(Line::from(Span::styled(
+            CODEX_FULL_ACCESS_NOTICE,
+            Style::default()
+                .fg(theme.warning)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+    }
+    lines.extend([
         Line::from("Starts the Provider's exact native Resume path."),
         Line::from("Creates a new private tmux and distinct Current Run."),
         Line::from("Managed authority requires a new complete Binding Receipt."),
@@ -220,7 +233,7 @@ fn draw_managed_resume_confirmation(f: &mut Frame, ui: &Ui) {
             "Enter Authorize   Esc Cancel",
             Style::default().fg(theme.accent),
         )),
-    ];
+    ]);
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -237,52 +250,151 @@ fn draw_managed_resume_confirmation(f: &mut Frame, ui: &Ui) {
 
 fn draw_new_session(f: &mut Frame, ui: &Ui) {
     const FIELD_INDICATOR_WIDTH: usize = 2;
-    const FIELD_LABEL_WIDTH: usize = 20;
+    const FIELD_LABEL_WIDTH: usize = 14;
 
     let Some(form) = &ui.new_session else {
         return;
     };
     let theme = ui.theme.palette();
-    let area = layout::centered_rect(76, 62, f.area());
+    let shows_codex_warning = form.provider == Some(Provider::CodexCli);
+    let area = layout::centered_rect_with_max_size(88, 78, 10, f.area());
     let value_width =
         usize::from(area.width).saturating_sub(3 + FIELD_INDICATOR_WIDTH + FIELD_LABEL_WIDTH);
     let title_input = text::visible_input_tail(&form.title, value_width);
     let description_input = text::visible_input_tail(&form.description, value_width);
     let target = form.targets.get(form.target_index);
+    let target_count = form.targets.len();
     let target_text = target.map(|target| {
-        text::visible_input_tail(&target.working_directory.to_string_lossy(), value_width)
+        let suffix = if form.directory_context || target_count <= 1 {
+            String::new()
+        } else {
+            format!("  {} of {target_count}", form.target_index + 1)
+        };
+        let path_width = value_width.saturating_sub(UnicodeWidthStr::width(suffix.as_str()));
+        format!(
+            "{}{}",
+            text::visible_input_tail(&target.working_directory.to_string_lossy(), path_width),
+            suffix
+        )
     });
-    let field_line = |label: &str, value: String, field: NewSessionField| {
+    let field_line = |label: &str, value: String, placeholder: &str, field: NewSessionField| {
         let focused = form.field == field;
-        let style = if focused {
+        let label_style = if focused {
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.muted)
         };
+        let empty = value.is_empty();
+        let visible_value = if empty {
+            placeholder.to_string()
+        } else {
+            value
+        };
+        let value_style = Style::default()
+            .fg(if empty {
+                theme.muted
+            } else if focused {
+                theme.selected_foreground
+            } else {
+                theme.foreground
+            })
+            .bg(if focused {
+                theme.selected_background
+            } else {
+                theme.background
+            });
+        let padding =
+            " ".repeat(value_width.saturating_sub(UnicodeWidthStr::width(visible_value.as_str())));
         Line::from(vec![
-            Span::styled(if focused { "> " } else { "  " }, style),
-            Span::styled(format!("{label:<FIELD_LABEL_WIDTH$}"), style),
-            Span::styled(value, Style::default().fg(theme.foreground)),
+            Span::styled(if focused { "› " } else { "  " }, label_style),
+            Span::styled(format!("{label:<FIELD_LABEL_WIDTH$}"), label_style),
+            Span::styled(visible_value, value_style),
+            Span::styled(padding, value_style),
         ])
     };
-    let provider = match form.provider {
-        None => "Choose Provider".to_string(),
-        Some(Provider::ClaudeCode) => "[Claude Code]  Codex CLI".to_string(),
-        Some(Provider::CodexCli) => "Claude Code  [Codex CLI]".to_string(),
-    };
-    let target_count = form.targets.len();
-    let mut lines = vec![
+    let provider_line = || {
+        const CLAUDE_NAME: &str = "Claude Code";
+        const SEPARATOR: &str = "    ";
+        const CODEX_NAME: &str = "Codex CLI";
+
+        let focused = form.field == NewSessionField::Provider;
+        let label_style = Style::default()
+            .fg(if focused { theme.accent } else { theme.muted })
+            .add_modifier(if focused {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            });
+        let provider_name_style = |selected| {
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                })
+        };
+        let claude_selected = form.provider == Some(Provider::ClaudeCode);
+        let codex_selected = form.provider == Some(Provider::CodexCli);
+        let used_width = UnicodeWidthStr::width("◦ ")
+            + UnicodeWidthStr::width(CLAUDE_NAME)
+            + UnicodeWidthStr::width(SEPARATOR)
+            + UnicodeWidthStr::width("◦ ")
+            + UnicodeWidthStr::width(CODEX_NAME);
+        let padding = " ".repeat(value_width.saturating_sub(used_width));
+
         Line::from(vec![
-            Span::styled("Project  ", Style::default().fg(theme.muted)),
+            Span::styled(if focused { "› " } else { "  " }, label_style),
+            Span::styled(format!("{:<FIELD_LABEL_WIDTH$}", "Provider"), label_style),
+            Span::styled(
+                if claude_selected { "• " } else { "◦ " },
+                Style::default().fg(if claude_selected {
+                    theme.provider_claude
+                } else {
+                    theme.muted
+                }),
+            ),
+            Span::styled(CLAUDE_NAME, provider_name_style(claude_selected)),
+            Span::raw(SEPARATOR),
+            Span::styled(
+                if codex_selected { "• " } else { "◦ " },
+                Style::default().fg(if codex_selected {
+                    theme.provider_codex
+                } else {
+                    theme.muted
+                }),
+            ),
+            Span::styled(CODEX_NAME, provider_name_style(codex_selected)),
+            Span::raw(padding),
+        ])
+    };
+    let status_line = if let Some(error) = &form.error {
+        Line::from(Span::styled(
+            format!("! {error}"),
+            Style::default().fg(theme.critical),
+        ))
+    } else if shows_codex_warning {
+        Line::from(Span::styled(
+            format!("! {CODEX_FULL_ACCESS_NOTICE}"),
+            Style::default()
+                .fg(theme.warning)
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        Line::from("")
+    };
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Create in  ", Style::default().fg(theme.muted)),
             Span::styled(
                 target.map_or("Unavailable", |target| target.project_label.as_str()),
                 Style::default().fg(theme.foreground),
             ),
         ]),
         Line::from(""),
-        field_line("Provider", provider, NewSessionField::Provider),
+        provider_line(),
         field_line(
             if form.directory_context {
                 "Directory"
@@ -290,41 +402,48 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
                 "Worktree"
             },
             match target_text {
-                Some(target_text) if form.directory_context => target_text,
-                Some(target_text) => format!(
-                    "{}  {}/{}",
-                    target_text,
-                    form.target_index + 1,
-                    target_count
-                ),
+                Some(target_text) => target_text,
                 None => "Choose Directory".to_string(),
             },
+            "Choose Directory",
             NewSessionField::Target,
         ),
-        field_line("Title", title_input.clone(), NewSessionField::Title),
+        field_line(
+            "Title",
+            title_input.clone(),
+            "Required",
+            NewSessionField::Title,
+        ),
         field_line(
             "Description",
             description_input.clone(),
+            "Optional",
             NewSessionField::Description,
         ),
         field_line(
-            "Binding Initializer",
+            "Initialize",
             if form.binding_initializer {
-                "[x] On".to_string()
+                "On".to_string()
             } else {
-                "[ ] Off".to_string()
+                "Off".to_string()
             },
+            "",
             NewSessionField::BindingInitializer,
         ),
-        Line::from(""),
-        field_line("", "[ Start New ]".to_string(), NewSessionField::Confirm),
+        status_line,
     ];
-    if let Some(error) = &form.error {
-        lines.push(Line::from(Span::styled(
-            error.clone(),
-            Style::default().fg(theme.critical),
-        )));
-    }
+    let footer = if matches!(
+        form.field,
+        NewSessionField::Title | NewSessionField::Description
+    ) {
+        " Type to edit · ↑/↓ Move · Enter Next · Esc Cancel "
+    } else {
+        " j/k Move · ←/→ Select · y Start · n Cancel "
+    };
+    f.render_widget(
+        Block::default().style(Style::default().add_modifier(Modifier::DIM)),
+        f.area(),
+    );
     f.render_widget(Clear, area);
     f.render_widget(
         Paragraph::new(lines)
@@ -332,7 +451,7 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.accent))
+                    .border_style(Style::default().fg(theme.border))
                     .title(Span::styled(
                         " New Session ",
                         Style::default()
@@ -340,11 +459,8 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
                             .add_modifier(Modifier::BOLD),
                     ))
                     .title_bottom(
-                        Line::from(Span::styled(
-                            " Tab Fields | Left/Right Select | Enter | Esc ",
-                            Style::default().fg(theme.muted),
-                        ))
-                        .right_aligned(),
+                        Line::from(Span::styled(footer, Style::default().fg(theme.muted)))
+                            .centered(),
                     ),
             ),
         area,
