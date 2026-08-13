@@ -245,6 +245,47 @@ struct NewSessionForm {
     error: Option<String>,
 }
 
+struct DirectoryBrowser {
+    explorer: ratatui_explorer::FileExplorer,
+}
+
+impl DirectoryBrowser {
+    fn new(start_directory: PathBuf, theme: theme::Theme) -> std::io::Result<Self> {
+        let explorer_theme = ratatui_explorer::Theme::new()
+            .with_block(
+                ratatui::widgets::Block::default()
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .border_style(Style::default().fg(theme.border))
+                    .title(ratatui::text::Span::styled(
+                        " Choose Directory ",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    )),
+            )
+            .add_default_title()
+            .with_title_bottom(|_| {
+                ratatui::text::Line::from(
+                    " ↑/↓ or j/k Move · ←/→ or h/l Navigate · y Select · Esc Cancel ",
+                )
+                .centered()
+            })
+            .with_style(Style::default().fg(theme.foreground).bg(theme.background))
+            .with_dir_style(Style::default().fg(theme.foreground))
+            .with_highlight_dir_style(
+                Style::default()
+                    .fg(theme.selected_foreground)
+                    .bg(theme.selected_background)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )
+            .with_highlight_symbol("› ")
+            .with_scroll_padding(2);
+        let mut explorer = ratatui_explorer::FileExplorer::with_theme(explorer_theme)?;
+        explorer.set_cwd(start_directory)?;
+        Ok(Self { explorer })
+    }
+}
+
 impl NewSessionForm {
     fn new(
         targets: Vec<ManagedLaunchTarget>,
@@ -386,6 +427,7 @@ pub struct Ui {
     guide_max_scroll: StateCell<usize>,
     /// 编辑器及所有需要显式确认的模态状态。
     new_session: Option<NewSessionForm>,
+    directory_browser: Option<DirectoryBrowser>,
     edit_session: Option<SessionEditor>,
     handoff_confirmation: Option<HandoffConfirmation>,
     managed_resume_confirmation: Option<ManagedResumeConfirmation>,
@@ -455,7 +497,9 @@ pub enum UiAction {
     OpenSuccessorTerminal {
         task_id: String,
     },
-    ChooseManagedNewDirectory,
+    ResolveManagedNewDirectory {
+        directory: PathBuf,
+    },
     StartManagedNew {
         request: ManagedNewRequest,
     },
@@ -508,6 +552,7 @@ impl Default for Ui {
             guide_scroll: 0,
             guide_max_scroll: StateCell::new(UNMEASURED_GUIDE_MAX_SCROLL),
             new_session: None,
+            directory_browser: None,
             edit_session: None,
             handoff_confirmation: None,
             managed_resume_confirmation: None,
@@ -715,6 +760,9 @@ impl Ui {
         self.clamp_selections(snap);
         let normal_snapshot = self.normal_snapshot(snap);
         let snap = &normal_snapshot;
+        if self.directory_browser.is_some() {
+            return Ok(self.handle_directory_browser_key(key));
+        }
         if self.new_session.is_some() {
             return Ok(self.handle_new_session_key(key));
         }
@@ -1447,10 +1495,52 @@ impl Ui {
                 }
             }
             crossterm::event::KeyCode::Enter if form.field == NewSessionField::Target => {
-                return UiAction::ChooseManagedNewDirectory;
+                let start_directory = form
+                    .targets
+                    .get(form.target_index)
+                    .map(|target| target.working_directory.clone())
+                    .or_else(|| std::env::current_dir().ok());
+                match start_directory {
+                    Some(start_directory) => {
+                        match DirectoryBrowser::new(start_directory, self.theme.palette()) {
+                            Ok(browser) => self.directory_browser = Some(browser),
+                            Err(error) => {
+                                form.error = Some(format!("Directory browser failed: {error}"))
+                            }
+                        }
+                    }
+                    None => form.error = Some("Directory browser has no start directory".into()),
+                }
             }
             crossterm::event::KeyCode::Enter => form.field = form.field.move_by(1),
             _ => {}
+        }
+        UiAction::None
+    }
+
+    fn handle_directory_browser_key(&mut self, key: crossterm::event::KeyEvent) -> UiAction {
+        if key.code == crossterm::event::KeyCode::Esc {
+            self.directory_browser = None;
+            return UiAction::None;
+        }
+        if key.code == crossterm::event::KeyCode::Char('y') {
+            let directory = self
+                .directory_browser
+                .take()
+                .expect("directory browser checked above")
+                .explorer
+                .cwd()
+                .clone();
+            return UiAction::ResolveManagedNewDirectory { directory };
+        }
+        if let Some(browser) = self.directory_browser.as_mut() {
+            let event = crossterm::event::Event::Key(key);
+            if let Err(error) = browser.explorer.handle(&event) {
+                self.directory_browser = None;
+                if let Some(form) = self.new_session.as_mut() {
+                    form.error = Some(format!("Directory browser failed: {error}"));
+                }
+            }
         }
         UiAction::None
     }

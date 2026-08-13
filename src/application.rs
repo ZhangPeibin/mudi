@@ -12,22 +12,7 @@ use crate::read_model::RefreshSnapshot;
 use crate::successor::TerminalLauncher;
 use crate::ui::{Ui, UiIntent};
 use anyhow::Result;
-use std::path::PathBuf;
 use tokio::sync::mpsc;
-
-pub trait DirectoryPicker {
-    fn pick_directory(&mut self) -> Result<Option<PathBuf>>;
-}
-
-pub struct RfdDirectoryPicker;
-
-impl DirectoryPicker for RfdDirectoryPicker {
-    fn pick_directory(&mut self) -> Result<Option<PathBuf>> {
-        Ok(rfd::FileDialog::new()
-            .set_title("Choose Session directory")
-            .pick_folder())
-    }
-}
 
 /// Performs authorized effects requested by the UI and schedules a subsequent refresh.
 pub struct ApplicationController<L, T> {
@@ -35,7 +20,6 @@ pub struct ApplicationController<L, T> {
     terminal_launcher: T,
     managed_sessions: ManagedSessionService,
     managed_current_runs: Option<ManagedCurrentRunAccessService>,
-    directory_picker: Box<dyn DirectoryPicker>,
 }
 
 impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
@@ -49,13 +33,7 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
             terminal_launcher,
             managed_sessions,
             managed_current_runs: None,
-            directory_picker: Box::new(RfdDirectoryPicker),
         }
-    }
-
-    pub fn with_directory_picker(mut self, directory_picker: Box<dyn DirectoryPicker>) -> Self {
-        self.directory_picker = directory_picker;
-        self
     }
 
     pub fn with_managed_current_run_access(
@@ -221,20 +199,11 @@ impl<L: WorkerLauncher, T: TerminalLauncher> ApplicationController<L, T> {
                 let _ = rescan_tx.send(());
                 false
             }
-            UiIntent::ChooseManagedNewDirectory => {
-                let selection = self
-                    .directory_picker
-                    .pick_directory()
-                    .map_err(|error| format!("Directory chooser failed: {error}"))
-                    .and_then(|selected| {
-                        selected
-                            .map(|directory| {
-                                resolve_selected_directory(&directory)
-                                    .and_then(canonical_context_target)
-                                    .map_err(|error| error.to_string())
-                            })
-                            .transpose()
-                    });
+            UiIntent::ResolveManagedNewDirectory { directory } => {
+                let selection = resolve_selected_directory(&directory)
+                    .and_then(canonical_context_target)
+                    .map(Some)
+                    .map_err(|error| error.to_string());
                 ui.finish_managed_new_directory_selection(selection);
                 false
             }

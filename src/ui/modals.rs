@@ -22,6 +22,7 @@ pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
         || ui.detail.is_some()
         || ui.guide_open
         || ui.new_session.is_some()
+        || ui.directory_browser.is_some()
         || ui.edit_session.is_some()
         || ui.managed_resume_confirmation.is_some()
         || ui.handoff_confirmation.is_some()
@@ -43,6 +44,9 @@ pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     }
     if ui.new_session.is_some() {
         draw_new_session(f, ui);
+    }
+    if ui.directory_browser.is_some() {
+        draw_directory_browser(f, ui);
     }
     if ui.edit_session.is_some() {
         draw_session_editor(f, ui);
@@ -68,6 +72,24 @@ pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     if ui.inventory_delete_confirmation.is_some() {
         draw_inventory_delete_confirmation(f, ui);
     }
+}
+
+fn draw_directory_browser(f: &mut Frame, ui: &Ui) {
+    let Some(browser) = ui.directory_browser.as_ref() else {
+        return;
+    };
+    let theme = ui.theme.palette();
+    let area = layout::centered_rect_with_max_size(92, 82, 18, f.area());
+    f.render_widget(
+        Block::default().style(Style::default().add_modifier(Modifier::DIM)),
+        f.area(),
+    );
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme.background)),
+        area,
+    );
+    f.render_widget_ref(browser.explorer.widget(), area);
 }
 
 fn draw_inventory_delete_confirmation(f: &mut Frame, ui: &Ui) {

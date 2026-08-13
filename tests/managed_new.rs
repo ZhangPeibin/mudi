@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use sessionmesh::app::Snapshot;
-use sessionmesh::application::{ApplicationController, DirectoryPicker};
+use sessionmesh::application::ApplicationController;
 use sessionmesh::clipboard::Clipboard;
 use sessionmesh::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceMetadata, Usage,
@@ -20,7 +20,6 @@ use sessionmesh::providers::ProviderExecutables;
 use sessionmesh::providers::{registry, BINDING_INITIALIZER};
 use sessionmesh::successor::TerminalLauncher;
 use sessionmesh::ui::{draw, Ui, UiAction};
-use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -480,16 +479,6 @@ impl ManagedTerminalAccess for RecordingRecoveryTerminal {
     }
 }
 
-struct FakeDirectoryPicker {
-    selected: VecDeque<Option<PathBuf>>,
-}
-
-impl DirectoryPicker for FakeDirectoryPicker {
-    fn pick_directory(&mut self) -> Result<Option<PathBuf>> {
-        Ok(self.selected.pop_front().flatten())
-    }
-}
-
 #[test]
 fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
     let temp = TempDir::new("picked-directory");
@@ -529,14 +518,7 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         NeverLaunchHandoff,
     )
     .unwrap();
-    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions)
-        .with_directory_picker(Box::new(FakeDirectoryPicker {
-            selected: VecDeque::from([
-                Some(broken),
-                Some(selected_alias.clone()),
-                Some(replacement.clone()),
-            ]),
-        }));
+    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions);
     let snapshot = Snapshot {
         ready: true,
         ..Snapshot::default()
@@ -562,11 +544,13 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
     assert!(initial.contains("New Session"));
     assert!(initial.contains("Choose Directory"));
 
-    let choose = ui
-        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &snapshot)
-        .unwrap();
-    assert_eq!(choose, UiAction::ChooseManagedNewDirectory);
-    assert!(!controller.handle(choose, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    assert!(!controller.handle(
+        UiAction::ResolveManagedNewDirectory { directory: broken },
+        &snapshot,
+        &mut ui,
+        &mut NoopClipboard,
+        &rescan_tx,
+    ));
 
     assert!(rescan_rx.try_recv().is_err());
     let rejected = render_ui(&ui, &snapshot);
@@ -577,9 +561,15 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
     assert!(launched.lock().unwrap().is_empty());
 
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
-    let retry = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    assert_eq!(retry, UiAction::ChooseManagedNewDirectory);
-    assert!(!controller.handle(retry, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    assert!(!controller.handle(
+        UiAction::ResolveManagedNewDirectory {
+            directory: selected_alias.clone(),
+        },
+        &snapshot,
+        &mut ui,
+        &mut NoopClipboard,
+        &rescan_tx,
+    ));
     let rendered = render_ui(&ui, &snapshot);
     assert!(
         rendered.contains("New Session"),
@@ -600,9 +590,15 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         "directory alias was not canonicalized:\n{rendered}"
     );
 
-    let switch = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    assert_eq!(switch, UiAction::ChooseManagedNewDirectory);
-    assert!(!controller.handle(switch, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    assert!(!controller.handle(
+        UiAction::ResolveManagedNewDirectory {
+            directory: replacement.clone(),
+        },
+        &snapshot,
+        &mut ui,
+        &mut NoopClipboard,
+        &rescan_tx,
+    ));
     let switched = render_ui(&ui, &snapshot);
     assert!(
         switched.contains("replacement-notes"),
@@ -674,10 +670,7 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
         NeverLaunchHandoff,
     )
     .unwrap();
-    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions)
-        .with_directory_picker(Box::new(FakeDirectoryPicker {
-            selected: VecDeque::from([None, Some(broken), Some(replacement.clone())]),
-        }));
+    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions);
     let snapshot = Snapshot {
         sessions: vec![session_in_project(&selected)],
         ready: true,
@@ -703,14 +696,19 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
 
     let (rescan_tx, mut rescan_rx) = tokio::sync::mpsc::unbounded_channel();
     let cancel = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    assert_eq!(cancel, UiAction::ChooseManagedNewDirectory);
-    assert!(!controller.handle(cancel, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    assert_eq!(cancel, UiAction::None);
+    ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
     let after_cancel = render_ui(&ui, &snapshot);
     assert!(after_cancel.contains("Retain launch form"));
     assert!(after_cancel.contains("Create in  project"));
 
-    let reject = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    assert!(!controller.handle(reject, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    assert!(!controller.handle(
+        UiAction::ResolveManagedNewDirectory { directory: broken },
+        &snapshot,
+        &mut ui,
+        &mut NoopClipboard,
+        &rescan_tx,
+    ));
     let after_rejection = render_ui(&ui, &snapshot);
     assert!(after_rejection.contains("Retain launch form"));
     assert!(after_rejection.contains("ambiguous Git identity"));
@@ -718,8 +716,15 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
     assert!(launched.lock().unwrap().is_empty());
     assert!(rescan_rx.try_recv().is_err());
 
-    let replace = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
-    assert!(!controller.handle(replace, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    assert!(!controller.handle(
+        UiAction::ResolveManagedNewDirectory {
+            directory: replacement.clone(),
+        },
+        &snapshot,
+        &mut ui,
+        &mut NoopClipboard,
+        &rescan_tx,
+    ));
     let after_replacement = render_ui(&ui, &snapshot);
     assert!(after_replacement.contains("Retain launch form"));
     assert!(after_replacement.contains("replacement-project"));

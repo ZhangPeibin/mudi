@@ -15,6 +15,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 use ratatui::Terminal;
+use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -879,8 +880,33 @@ fn selected_session_new_inherits_its_worktree_context() {
 }
 
 #[test]
-fn inherited_new_target_can_open_the_directory_picker() {
-    let snapshot = managed_new_snapshot();
+fn inherited_new_target_opens_an_in_tui_directory_browser() {
+    let project_root = std::env::current_dir().unwrap();
+    let snapshot = Snapshot {
+        sessions: vec![Session {
+            provider: Provider::ClaudeCode,
+            id: "local-session".into(),
+            provenance: crate::domain::SessionProvenance::Observed,
+            source: Default::default(),
+            project: Some(Project {
+                identity: ProjectIdentity::CanonicalCwd(project_root.clone()),
+                label: "sessionMesh".into(),
+            }),
+            worktree: None,
+            cwd: Some(project_root.to_string_lossy().into_owned()),
+            latest_model: None,
+            state: SessionState::Idle,
+            context: ContextState::default(),
+            usage: Usage::default(),
+            per_model: Vec::new(),
+            current_run_usage: None,
+            compactions: Vec::new(),
+            last_activity_ms: 1,
+            cost: None,
+        }],
+        ready: true,
+        ..Snapshot::default()
+    };
     let mut ui = Ui::default();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     ui.clamp_selections(&snapshot);
@@ -890,13 +916,217 @@ fn inherited_new_target_can_open_the_directory_picker() {
 
     assert_eq!(
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
-        UiAction::ChooseManagedNewDirectory
+        UiAction::None
     );
-    let form = ui.new_session.as_ref().unwrap();
+    let rendered = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(rendered.contains("Choose Directory"));
+    assert!(rendered.contains(project_root.to_string_lossy().as_ref()));
+    assert!(rendered.contains("↑/↓ or j/k Move"));
+    assert!(rendered.contains("h/l Navigate"));
+    assert!(rendered.contains("y Select"));
+    assert!(rendered.contains("Esc Cancel"));
+}
+
+#[test]
+fn confirming_the_directory_browser_requests_resolution_of_its_current_directory() {
+    let project_root = std::env::current_dir().unwrap();
+    let snapshot = Snapshot {
+        sessions: vec![Session {
+            provider: Provider::ClaudeCode,
+            id: "local-session".into(),
+            provenance: crate::domain::SessionProvenance::Observed,
+            source: Default::default(),
+            project: Some(Project {
+                identity: ProjectIdentity::CanonicalCwd(project_root.clone()),
+                label: "sessionMesh".into(),
+            }),
+            worktree: None,
+            cwd: Some(project_root.to_string_lossy().into_owned()),
+            latest_model: None,
+            state: SessionState::Idle,
+            context: ContextState::default(),
+            usage: Usage::default(),
+            per_model: Vec::new(),
+            current_run_usage: None,
+            compactions: Vec::new(),
+            last_activity_ms: 1,
+            cost: None,
+        }],
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
     assert_eq!(
-        form.targets[form.target_index].working_directory,
-        PathBuf::from("/Users/x/code/sessionmesh")
+        ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap(),
+        UiAction::ResolveManagedNewDirectory {
+            directory: project_root,
+        }
     );
+    assert!(ui.directory_browser.is_none());
+    assert!(ui.new_session.is_some());
+}
+
+#[test]
+fn directory_browser_navigates_with_arrow_and_vim_keys_and_cancel_preserves_the_new_form() {
+    let root = unused_profile_path("directory-browser-root");
+    fs::create_dir_all(root.join("child")).unwrap();
+    let project_root = std::env::current_dir().unwrap();
+    let snapshot = Snapshot {
+        sessions: vec![Session {
+            provider: Provider::ClaudeCode,
+            id: "local-session".into(),
+            provenance: crate::domain::SessionProvenance::Observed,
+            source: Default::default(),
+            project: Some(Project {
+                identity: ProjectIdentity::CanonicalCwd(project_root.clone()),
+                label: "sessionMesh".into(),
+            }),
+            worktree: None,
+            cwd: Some(project_root.to_string_lossy().into_owned()),
+            latest_model: None,
+            state: SessionState::Idle,
+            context: ContextState::default(),
+            usage: Usage::default(),
+            per_model: Vec::new(),
+            current_run_usage: None,
+            compactions: Vec::new(),
+            last_activity_ms: 1,
+            cost: None,
+        }],
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.finish_managed_new_directory_selection(Ok(Some(ManagedLaunchTarget {
+        project: ProjectIdentity::CanonicalCwd(root.clone()),
+        project_label: "browser-root".into(),
+        worktree_root: None,
+        working_directory: root.clone(),
+    })));
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Preserve this title".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
+    let form_before = ui.new_session.clone();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+    ui.handle_key(key(KeyCode::Char('j')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Char('k')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    assert_eq!(
+        ui.directory_browser.as_ref().unwrap().explorer.cwd(),
+        &root.join("child")
+    );
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    assert_eq!(ui.directory_browser.as_ref().unwrap().explorer.cwd(), &root);
+    ui.handle_key(key(KeyCode::Char('j')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Char('l')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Char('h')), &snapshot).unwrap();
+    assert_eq!(ui.directory_browser.as_ref().unwrap().explorer.cwd(), &root);
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap(),
+        UiAction::None
+    );
+    assert!(ui.directory_browser.is_none());
+    assert_eq!(ui.new_session, form_before);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn empty_target_directory_browser_starts_from_sessionmesh_working_directory() {
+    let snapshot = Snapshot {
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+        UiAction::None
+    );
+
+    assert_eq!(
+        ui.directory_browser.as_ref().unwrap().explorer.cwd(),
+        &std::env::current_dir().unwrap()
+    );
+}
+
+#[test]
+fn unreadable_directory_browser_start_preserves_the_new_form_and_shows_an_error() {
+    let snapshot = managed_new_snapshot();
+    let missing = unused_profile_path("missing-directory-browser-root");
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Preserve on browser error".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    ui.finish_managed_new_directory_selection(Ok(Some(ManagedLaunchTarget {
+        project: ProjectIdentity::CanonicalCwd(missing.clone()),
+        project_label: "missing".into(),
+        worktree_root: None,
+        working_directory: missing,
+    })));
+    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+        UiAction::None
+    );
+
+    assert!(ui.directory_browser.is_none());
+    let form = ui.new_session.as_ref().unwrap();
+    assert_eq!(form.provider, Some(Provider::CodexCli));
+    assert_eq!(form.title, "Preserve on browser error");
+    assert!(form
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("Directory browser failed"));
+    assert!(rendered_rows_at(&ui, &snapshot, 80, 24).contains("Directory browser failed"));
+}
+
+#[test]
+fn directory_browser_keeps_essential_controls_visible_at_minimum_terminal_size() {
+    let snapshot = Snapshot {
+        ready: true,
+        ..Snapshot::default()
+    };
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+    let rendered = rendered_rows_at(&ui, &snapshot, 80, 24);
+    assert!(rendered.contains("Choose Directory"));
+    assert!(rendered.contains("↑/↓ or j/k Move"));
+    assert!(rendered.contains("h/l Navigate"));
+    assert!(rendered.contains("y Select"));
+    assert!(rendered.contains("Esc Cancel"));
 }
 
 #[test]
@@ -997,7 +1227,7 @@ fn failed_inherited_target_replacement_preserves_inputs_and_blocks_start() {
 }
 
 #[test]
-fn new_without_project_tree_context_opens_the_form_before_the_directory_picker() {
+fn new_without_project_tree_context_opens_the_form_before_the_directory_browser() {
     let snapshot = Snapshot {
         ready: true,
         ..Snapshot::default()
@@ -1015,12 +1245,13 @@ fn new_without_project_tree_context_opens_the_form_before_the_directory_picker()
 
     assert_eq!(
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
-        UiAction::ChooseManagedNewDirectory
+        UiAction::None
     );
+    assert!(ui.directory_browser.is_some());
 }
 
 #[test]
-fn repeated_new_shortcuts_never_request_the_directory_picker() {
+fn repeated_new_shortcuts_never_open_the_directory_browser() {
     let snapshot = Snapshot {
         ready: true,
         ..Snapshot::default()
@@ -1040,28 +1271,37 @@ fn directory_context_can_be_reselected_before_new_is_confirmed() {
         ready: true,
         ..Snapshot::default()
     };
+    let directory = std::env::current_dir().unwrap();
     let mut ui = Ui::default();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     ui.finish_managed_new_directory_selection(Ok(Some(
         crate::managed_sessions::ManagedLaunchTarget {
-            project: ProjectIdentity::CanonicalCwd(PathBuf::from("/Users/x/code/notes")),
-            project_label: "notes".into(),
+            project: ProjectIdentity::CanonicalCwd(directory.clone()),
+            project_label: "sessionMesh".into(),
             worktree_root: None,
-            working_directory: PathBuf::from("/Users/x/code/notes"),
+            working_directory: directory.clone(),
         },
     )));
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
 
     assert_eq!(
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
-        UiAction::ChooseManagedNewDirectory
+        UiAction::None
     );
+    assert!(ui.directory_browser.is_some());
+    ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
 
     ui.finish_managed_new_directory_selection(Err("ambiguous Git identity".into()));
     let rendered = rendered_rows_at(&ui, &snapshot, 120, 36);
     assert!(rendered.contains("Choose Directory"));
     assert!(rendered.contains("ambiguous Git identity"));
-    assert!(!rendered.contains("/Users/x/code/notes"));
+    assert!(!rendered.contains(directory.to_string_lossy().as_ref()));
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+        UiAction::None
+    );
+    assert!(ui.directory_browser.is_some());
 }
 
 #[test]
