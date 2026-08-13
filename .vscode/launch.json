@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug SessionMesh TUI",
+      "cargo": {
+        "args": [
+          "build",
+          "--bin",
+          "sessionmesh"
+        ],
+        "filter": {
+          "name": "sessionmesh",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "SESSIONMESH_DATA_DIR": "/tmp/sessionmesh-vscode-debug"
+      },
+      "initCommands": [
+        "breakpoint set --file ${workspaceFolder}/src/main.rs --line 230"
+      ],
+      "terminal": "external",
+      "sourceLanguages": [
+        "rust"
+      ]
+    }
+  ]
+}
