@@ -2662,6 +2662,8 @@ impl ManagedLaunchBroker for TmuxLaunchBroker {
             .arg(&terminal_title)
             .arg(";")
             .args(["set-option", "-g", "mouse", "on"])
+            .arg(";")
+            .args(["set-option", "-s", "copy-command", "/usr/bin/pbcopy"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

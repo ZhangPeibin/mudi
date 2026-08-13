@@ -279,6 +279,11 @@ fn private_tmux_broker_runs_the_selected_native_command_in_the_target_worktree()
             "-g".to_string(),
             "mouse".to_string(),
             "on".to_string(),
+            ";".to_string(),
+            "set-option".to_string(),
+            "-s".to_string(),
+            "copy-command".to_string(),
+            "/usr/bin/pbcopy".to_string(),
         ]
     );
     let provider_process = outcome
