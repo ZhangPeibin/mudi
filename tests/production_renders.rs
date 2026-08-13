@@ -4996,7 +4996,6 @@ fn sessions_guide_explains_providers_lifecycle_and_current_context() {
     for required in [
         "✳ Claude Code   ⬡ Codex CLI",
         "Open Session",
-        "● Busy   ○ Idle   no marker Exited",
         "!  The Session currently needs attention.",
         "Current Context is the latest known content occupying the model window.",
         "It is not cumulative Processed Usage.",

@@ -174,12 +174,19 @@ fn guide_content(
             Line::from("e Edit session  Set or clear its local Title and Description."),
             Line::from("Inventory: H hides Exited Sessions; h opens Hidden Tree."),
             Line::from("u restores; d excludes permanently. Provider history stays unchanged."),
-            heading("Providers"),
-            Line::from(format!(
-                "{claude_mark} Claude Code   {codex_mark} Codex CLI"
-            )),
+            Line::from(vec![
+                Span::styled(
+                    "Providers  ",
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!(
+                    "{claude_mark} Claude Code   {codex_mark} Codex CLI"
+                )),
+            ]),
             heading("Open Session"),
-            Line::from("● Busy   ○ Idle   no marker Exited"),
+            Line::from("• Busy   ◦ Idle   no marker Exited"),
             Line::from("!  The Session currently needs attention."),
             heading("Current Context"),
             Line::from("Current Context is the latest known content occupying the model window."),
