@@ -432,13 +432,15 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         ),
         status_line,
     ];
-    let footer = if matches!(
-        form.field,
-        NewSessionField::Title | NewSessionField::Description
-    ) {
-        " Type to edit · ↑/↓ Move · Enter Next · Esc Cancel "
-    } else {
-        " j/k Move · ←/→ Select · y Start · n Cancel "
+    let footer = match form.field {
+        NewSessionField::Title | NewSessionField::Description => {
+            " Type to edit · ↑/↓ Move · Enter Next · Esc Cancel "
+        }
+        NewSessionField::Target if form.directory_context => {
+            " Enter Choose Directory · y Start · n Cancel "
+        }
+        NewSessionField::Target => " ←/→ Worktree · Enter Directory · y Start · n Cancel ",
+        _ => " j/k Move · ←/→ Select · y Start · n Cancel ",
     };
     f.render_widget(
         Block::default().style(Style::default().add_modifier(Modifier::DIM)),

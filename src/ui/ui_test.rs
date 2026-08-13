@@ -721,6 +721,12 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
     assert!(!initial.contains("Full access · No sandbox · No approvals"));
     assert!(!initial.contains("Start New"));
     assert_eq!(rendered_modal_height(&initial, "New Session"), 10);
+
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    let target_focused = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(target_focused.contains("←/→ Worktree · Enter Directory · y Start · n Cancel"));
+
+    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
     let initial_terminal = render_terminal_at(&ui, &snapshot, 120, 36);
     assert!(rendered_style_at(&initial_terminal, "PROJECT")
         .add_modifier
@@ -869,6 +875,124 @@ fn selected_session_new_inherits_its_worktree_context() {
     assert_eq!(
         form.targets[form.target_index].working_directory,
         PathBuf::from("/Users/x/code/sessionmesh")
+    );
+}
+
+#[test]
+fn inherited_new_target_can_open_the_directory_picker() {
+    let snapshot = managed_new_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
+        UiAction::ChooseManagedNewDirectory
+    );
+    let form = ui.new_session.as_ref().unwrap();
+    assert_eq!(
+        form.targets[form.target_index].working_directory,
+        PathBuf::from("/Users/x/code/sessionmesh")
+    );
+}
+
+#[test]
+fn replacing_an_inherited_new_target_preserves_form_values() {
+    let snapshot = managed_new_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Keep title".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Keep description".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+
+    ui.finish_managed_new_directory_selection(Ok(Some(
+        crate::managed_sessions::ManagedLaunchTarget {
+            project: ProjectIdentity::CanonicalCwd(PathBuf::from("/Users/x/code/notes")),
+            project_label: "notes".into(),
+            worktree_root: None,
+            working_directory: PathBuf::from("/Users/x/code/notes"),
+        },
+    )));
+
+    let form = ui.new_session.as_ref().unwrap();
+    assert_eq!(form.provider, Some(Provider::CodexCli));
+    assert_eq!(form.title, "Keep title");
+    assert_eq!(form.description, "Keep description");
+    assert!(form.binding_initializer);
+    assert_eq!(
+        form.targets[form.target_index].working_directory,
+        PathBuf::from("/Users/x/code/notes")
+    );
+}
+
+#[test]
+fn cancelling_inherited_target_replacement_preserves_the_entire_form() {
+    let snapshot = managed_new_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Keep everything".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    let before = ui.new_session.clone();
+
+    ui.finish_managed_new_directory_selection(Ok(None));
+
+    assert_eq!(ui.new_session, before);
+}
+
+#[test]
+fn failed_inherited_target_replacement_preserves_inputs_and_blocks_start() {
+    let snapshot = managed_new_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Keep title".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    ui.finish_managed_new_directory_selection(Err("ambiguous Git identity".into()));
+
+    let form = ui.new_session.as_ref().unwrap();
+    assert_eq!(form.provider, Some(Provider::ClaudeCode));
+    assert_eq!(form.title, "Keep title");
+    assert!(form.targets.is_empty());
+    assert!(form.directory_context);
+    assert_eq!(form.field, NewSessionField::Target);
+    assert_eq!(form.error.as_deref(), Some("ambiguous Git identity"));
+    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("ambiguous Git identity"));
+
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap(),
+        UiAction::None
     );
 }
 

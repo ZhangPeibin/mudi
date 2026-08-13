@@ -591,13 +591,10 @@ impl Ui {
     ) {
         match selection {
             Ok(Some(target)) => {
-                if let Some(form) = self
-                    .new_session
-                    .as_mut()
-                    .filter(|form| form.directory_context)
-                {
+                if let Some(form) = self.new_session.as_mut() {
                     form.targets = vec![target];
                     form.target_index = 0;
+                    form.directory_context = true;
                     form.error = None;
                 } else {
                     self.new_session = Some(NewSessionForm::new(vec![target], 0, true));
@@ -605,13 +602,10 @@ impl Ui {
             }
             Ok(None) => {}
             Err(error) => {
-                if let Some(form) = self
-                    .new_session
-                    .as_mut()
-                    .filter(|form| form.directory_context)
-                {
+                if let Some(form) = self.new_session.as_mut() {
                     form.targets.clear();
                     form.target_index = 0;
+                    form.directory_context = true;
                     form.error = Some(error);
                     form.field = NewSessionField::Target;
                 } else {
@@ -1452,9 +1446,7 @@ impl Ui {
                     input.push(character);
                 }
             }
-            crossterm::event::KeyCode::Enter
-                if form.field == NewSessionField::Target && form.directory_context =>
-            {
+            crossterm::event::KeyCode::Enter if form.field == NewSessionField::Target => {
                 return UiAction::ChooseManagedNewDirectory;
             }
             crossterm::event::KeyCode::Enter => form.field = form.field.move_by(1),

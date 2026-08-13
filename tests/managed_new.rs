@@ -481,12 +481,12 @@ impl ManagedTerminalAccess for RecordingRecoveryTerminal {
 }
 
 struct FakeDirectoryPicker {
-    selected: VecDeque<PathBuf>,
+    selected: VecDeque<Option<PathBuf>>,
 }
 
 impl DirectoryPicker for FakeDirectoryPicker {
     fn pick_directory(&mut self) -> Result<Option<PathBuf>> {
-        Ok(self.selected.pop_front())
+        Ok(self.selected.pop_front().flatten())
     }
 }
 
@@ -531,7 +531,11 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
     .unwrap();
     let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions)
         .with_directory_picker(Box::new(FakeDirectoryPicker {
-            selected: VecDeque::from([broken, selected_alias.clone(), replacement.clone()]),
+            selected: VecDeque::from([
+                Some(broken),
+                Some(selected_alias.clone()),
+                Some(replacement.clone()),
+            ]),
         }));
     let snapshot = Snapshot {
         ready: true,
@@ -631,6 +635,112 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         fs::canonicalize(replacement).unwrap()
     );
     assert_eq!(registration.session_alias, "Picked directory launch");
+}
+
+#[test]
+fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() {
+    let temp = TempDir::new("replace-inherited-directory");
+    let selected = std::env::current_dir().unwrap();
+    let replacement = temp.path().join("replacement-project");
+    let broken = temp.path().join("broken-worktree");
+    fs::create_dir(&replacement).unwrap();
+    fs::create_dir(&broken).unwrap();
+    fs::write(broken.join(".git"), "gitdir: ../missing-git-dir\n").unwrap();
+
+    let claude = executable(temp.path(), "claude");
+    let codex = executable(temp.path(), "codex");
+    let executables = ProviderExecutables::new(claude, codex);
+    let store_path = temp.path().join("managed-launches.db");
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let managed_sessions = ManagedSessionService::new(
+        ManagedLaunchStore::open(&store_path).unwrap(),
+        executables.clone(),
+        Box::new(AssertPersistedBeforeLaunch {
+            store_path: store_path.clone(),
+            launched: launched.clone(),
+        }),
+        Box::new(AssertLaunchPersistedBeforeTerminal {
+            store_path: store_path.clone(),
+            opened: opened.clone(),
+        }),
+    );
+    let handoff = HandoffService::open(
+        HandoffPaths {
+            task_store: temp.path().join("tasks.db"),
+            artifact_root: temp.path().join("artifacts"),
+        },
+        executables,
+        NeverLaunchHandoff,
+    )
+    .unwrap();
+    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions)
+        .with_directory_picker(Box::new(FakeDirectoryPicker {
+            selected: VecDeque::from([None, Some(broken), Some(replacement.clone())]),
+        }));
+    let snapshot = Snapshot {
+        sessions: vec![session_in_project(&selected)],
+        ready: true,
+        ..Snapshot::default()
+    };
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    let mut ui = Ui::default();
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    for character in "Retain launch form".chars() {
+        ui.handle_key(key(KeyCode::Char(character)), &snapshot)
+            .unwrap();
+    }
+    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
+    let target_focused = render_ui(&ui, &snapshot);
+    assert!(
+        target_focused.contains("› Worktree"),
+        "target row was not focused:\n{target_focused}"
+    );
+
+    let (rescan_tx, mut rescan_rx) = tokio::sync::mpsc::unbounded_channel();
+    let cancel = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    assert_eq!(cancel, UiAction::ChooseManagedNewDirectory);
+    assert!(!controller.handle(cancel, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    let after_cancel = render_ui(&ui, &snapshot);
+    assert!(after_cancel.contains("Retain launch form"));
+    assert!(after_cancel.contains("Create in  project"));
+
+    let reject = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    assert!(!controller.handle(reject, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    let after_rejection = render_ui(&ui, &snapshot);
+    assert!(after_rejection.contains("Retain launch form"));
+    assert!(after_rejection.contains("ambiguous Git identity"));
+    assert!(after_rejection.contains("Choose Directory"));
+    assert!(launched.lock().unwrap().is_empty());
+    assert!(rescan_rx.try_recv().is_err());
+
+    let replace = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    assert!(!controller.handle(replace, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+    let after_replacement = render_ui(&ui, &snapshot);
+    assert!(after_replacement.contains("Retain launch form"));
+    assert!(after_replacement.contains("replacement-project"));
+
+    let start = ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap();
+    assert!(matches!(start, UiAction::StartManagedNew { .. }));
+    assert!(!controller.handle(start, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
+
+    assert!(rescan_rx.try_recv().is_ok());
+    let registration_id = launched.lock().unwrap().first().unwrap().clone();
+    assert_eq!(*opened.lock().unwrap(), vec![registration_id.clone()]);
+    let registration = ManagedLaunchStore::open(&store_path)
+        .unwrap()
+        .get(&registration_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        registration.target.working_directory,
+        fs::canonicalize(replacement).unwrap()
+    );
+    assert_eq!(registration.session_alias, "Retain launch form");
 }
 
 #[test]
