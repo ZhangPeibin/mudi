@@ -24,6 +24,8 @@ not change an accepted version scope on their own.
 
 ## Engineering Conventions
 
+- [`source-map.md`](./source-map.md) - module-by-module map of `src/`, for onboarding
+  readers.
 - [`agents/`](./agents/) - issue-tracker, domain-document, triage-label, and feature-doc
   conventions used by engineering skills.
 
