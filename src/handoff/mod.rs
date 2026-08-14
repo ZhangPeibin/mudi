@@ -230,7 +230,7 @@ impl CompletionNotifier for MacosCompletionNotifier {
                 "-e",
                 "end run",
                 "--",
-                "SessionMesh",
+                "Mudi",
                 message.as_str(),
             ])
             .stdin(Stdio::null())

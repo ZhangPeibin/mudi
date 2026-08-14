@@ -288,7 +288,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "sessionmesh-model-catalog-{}-{nonce}.json",
+            "mudi-model-catalog-{}-{nonce}.json",
             std::process::id()
         ));
         std::fs::write(

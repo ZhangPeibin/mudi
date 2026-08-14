@@ -1,11 +1,11 @@
-# SessionMesh
+# Mudi
 
 A fully local **macOS TUI** for observing **Claude Code** and **Codex CLI** coding
 sessions in one terminal — current context pressure, live Busy/Idle/exited state,
 meaningful recent transitions, Current Run and Transcript Lifetime Usage with API-rate
 dollar estimates, compaction history, and explicitly authorized Assisted Handoff.
 
-> The Session index and Task Store contain metadata only. SessionMesh never stores Prompt,
+> The Session index and Task Store contain metadata only. Mudi never stores Prompt,
 > raw Provider output, Transcript, tool, or source-file content in either database. A validated
 > Handoff Artifact is stored separately only after explicit user authorization.
 
@@ -14,7 +14,7 @@ dollar estimates, compaction history, and explicitly authorized Assisted Handoff
 - **Three numeric pages:** `[1]` All, `[2]` Claude Code, `[3]` Codex CLI.
 - **Contextual Guide:** opens once on first use and remains globally available through
   `?`, with Overview, Navigation, Sessions, Signals, and Theme references.
-- **Six semantic Themes:** `sessionmesh`, `catppuccin`, `dracula`, `gruvbox`, `light`, and
+- **Six semantic Themes:** `mudi`, `catppuccin`, `dracula`, `gruvbox`, `light`, and
   `high-contrast`, loaded from the local Profile or overridden for one process.
 - **Accurate context semantics** per provider (see `CONTEXT.md`).
 - **Live lifecycle:** Busy / Idle / exited, with PID-reuse-safe detection on macOS.
@@ -45,10 +45,10 @@ dollar estimates, compaction history, and explicitly authorized Assisted Handoff
   has a 30-minute deadline. TUI and Worker startup reconcile exact process identities and the
   declared Artifact path without accepting partial/newest output, resending a Prompt, or starting
   a Retry automatically.
-- **Managed Handoff Skill:** the first explicitly authorized Handoff installs SessionMesh's
-  versioned `sessionmesh-handoff` Skill at `~/.agents/skills/sessionmesh-handoff/SKILL.md`
-  for Codex CLI and `~/.claude/skills/sessionmesh-handoff/SKILL.md` for Claude Code. Only a
-  SessionMesh-marked copy is updated; an unrelated same-name Skill makes Handoff ineligible
+- **Managed Handoff Skill:** the first explicitly authorized Handoff installs Mudi's
+  versioned `mudi-handoff` Skill at `~/.agents/skills/mudi-handoff/SKILL.md`
+  for Codex CLI and `~/.claude/skills/mudi-handoff/SKILL.md` for Claude Code. Only a
+  Mudi-marked copy is updated; an unrelated same-name Skill makes Handoff ineligible
   without being overwritten.
 
 ## Build & run
@@ -57,6 +57,10 @@ dollar estimates, compaction history, and explicitly authorized Assisted Handoff
 cargo run --release        # opens the TUI
 cargo run --release -- --theme dracula  # one-process Theme override
 ```
+
+The primary installed command is `mudi`. A transitional `sessionmesh` executable is
+built from the same entry point so previously copied `sessionmesh attach <opaque-ref>`
+commands continue to work.
 
 Keys: `1-3` open pages · `Tab`/`Shift+Tab` move focus within a page · `Up/Down` or `j/k`
 move selection or scroll Detail · `Enter` inspects a Session or Operation Task, or toggles
@@ -88,8 +92,8 @@ Right to enter its content, and `Shift+Tab` or Left to return to the sidebar.
 
 ```sh
 cargo test                                   # unit + render smoke tests
-SESSIONMESH_DATA_DIR=$(mktemp -d) cargo run --example scan     # pipeline summary
-SESSIONMESH_DATA_DIR=$(mktemp -d) cargo run --example render   # off-screen TUI render
+MUDI_DATA_DIR=$(mktemp -d) cargo run --example scan     # pipeline summary
+MUDI_DATA_DIR=$(mktemp -d) cargo run --example render   # off-screen TUI render
 ```
 
 ## Configuration
@@ -98,15 +102,41 @@ Standard paths with environment overrides:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SESSIONMESH_CLAUDE_DIR` | `~/.claude` | Claude data root |
-| `SESSIONMESH_CODEX_DIR` | `~/.codex` | Codex data root |
-| `SESSIONMESH_DATA_DIR` | `~/Library/Application Support/sessionmesh` | index, Task Store, Handoff Artifacts, Profile, and model override files |
-| `SESSIONMESH_EXTRA_DIRS` | — | colon-separated extra log dirs |
-| `SESSIONMESH_CLAUDE_EXECUTABLE` | discovered from `PATH` | Claude CLI used by Handoff Workers |
-| `SESSIONMESH_CODEX_EXECUTABLE` | discovered from `PATH` | Codex CLI used by Handoff Workers |
+| `MUDI_CLAUDE_DIR` | `~/.claude` | Claude data root |
+| `MUDI_CODEX_DIR` | `~/.codex` | Codex data root |
+| `MUDI_DATA_DIR` | `~/Library/Application Support/mudi` | index, Task Store, Handoff Artifacts, Profile, and model override files |
+| `MUDI_EXTRA_DIRS` | — | colon-separated extra log dirs |
+| `MUDI_CLAUDE_EXECUTABLE` | discovered from `PATH` | Claude CLI used by Handoff Workers |
+| `MUDI_CODEX_EXECUTABLE` | discovered from `PATH` | Codex CLI used by Handoff Workers |
+| `MUDI_TMUX_EXECUTABLE` | discovered from `PATH` | tmux used for Managed Current Runs |
+
+### Rename compatibility
+
+Mudi reads each deprecated `SESSIONMESH_*` variable when its `MUDI_*` replacement is
+unset. The older `TOKENPLAY_*` directory variables remain a final fallback. When more
+than one form has different values, the newest form wins and Mudi prints a warning.
+
+Without `MUDI_DATA_DIR` or `SESSIONMESH_DATA_DIR`, storage selection is deterministic:
+
+- A clean install uses `~/Library/Application Support/mudi`.
+- A legacy-only install continues using `~/Library/Application Support/sessionmesh` in
+  place, preserving its index, authoritative stores, labels, Profile, model overrides,
+  Handoff Artifacts, Managed Sessions, and Binding evidence without rewriting embedded
+  absolute paths.
+- A new-only install uses the existing `mudi` directory.
+- If both default directories exist, Mudi stops before opening either store and requires
+  `MUDI_DATA_DIR` to identify the authoritative location. It never merges or overwrites
+  the two directories.
+
+Existing private tmux socket names are read from durable Binding evidence and remain
+attachable; new environments use `mudi-*`. The default Theme accepts saved `sessionmesh`
+and `tokenplay` names as aliases for `mudi`. New Handoffs install `mudi-handoff`; an
+owner-only, Mudi-managed `sessionmesh-handoff` installation remains a valid Worker
+fallback and is not deleted. See [the rename release notes](docs/releases/mudi-rename.md)
+for the compatibility period and removal policy.
 
 Local Model Catalog override: drop a `models.json` (same shape as `models/catalog.json`) in
-`SESSIONMESH_DATA_DIR`. Entries are scoped by exact Model Provider and model identifier. The
+`MUDI_DATA_DIR`. Entries are scoped by exact Model Provider and model identifier. The
 bundled catalog currently includes 80 model identifiers across 9 Model Providers; its 65
 mainstream source records come from the structured table at `llmcalcs.com/pricing-comparison`
 (source data last updated 2026-06-11). The catalog records direct and batch API prices plus
@@ -115,9 +145,9 @@ Context Window; batch prices are metadata and are not used for interactive Sessi
 The disposable Session index is `index.db`. The authoritative Operation Task Store is the
 separate owner-only `tasks.db`; validated Handoff Artifacts are published under the owner-only
 `handoff-artifacts/` directory. Local Profile preferences are stored separately in
-`profile.json`; deleting that file restores first-use Guide and the default `sessionmesh`
+`profile.json`; deleting that file restores first-use Guide and the default `mudi`
 Theme. `--theme <name>` overrides the saved Theme for one process without changing the
-Profile; unknown names fall back to `sessionmesh`. Runtime Theme switching is deferred to a
+Profile; unknown names fall back to `mudi`. Runtime Theme switching is deferred to a
 future Settings feature.
 
 ## Layout

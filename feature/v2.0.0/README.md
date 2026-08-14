@@ -5,13 +5,13 @@
 | Status | Accepted scope baseline |
 | Accepted | 2026-08-07 |
 | Renumbered | 2026-08-09 from `v2.0.1` |
-| Role | First deliverable increment for SessionMesh 2.0 |
+| Role | First deliverable increment for Mudi 2.0 |
 
 This record fixes the product boundary for `v2.0.0`. It is not a PRD; implementation PRDs
 and delivery tickets remain in GitHub Issues.
 
 The scope was accepted on 2026-08-07 and renumbered from `v2.0.1` on 2026-08-09 to make
-Managed Session Core the first SessionMesh 2.0 increment. The renumbering changes no
+Managed Session Core the first Mudi 2.0 increment. The renumbering changes no
 product or architecture decision.
 
 The complete design is split across five editable
@@ -22,7 +22,7 @@ components, Managed Session lifecycle, and capability boundary.
 
 Give a developer one reliable control surface for starting, recognizing, revisiting, and
 directly accessing many provider-native Sessions across Projects. This version establishes
-the managed execution foundation before SessionMesh attempts Action or Flow orchestration.
+the managed execution foundation before Mudi attempts Action or Flow orchestration.
 
 ## Included
 
@@ -39,11 +39,11 @@ the managed execution foundation before SessionMesh attempts Action or Flow orch
 - Conclusively bind the Project, Worktree, Session Provider, native Session ID, Current Run,
   provider process, and tmux session/pane using launch and process evidence.
 - List and inspect Managed Sessions without hiding externally started Sessions already
-  observable by SessionMesh.
+  observable by Mudi.
 - Attach to and detach from a Managed Session through an external terminal.
 - Precisely resume the same provider-native Session in a new Managed Current Run.
-- Keep managed tmux sessions alive when the SessionMesh TUI exits normally.
-- Reconcile Session identity, Current Run identity, and live process state when SessionMesh
+- Keep managed tmux sessions alive when the Mudi TUI exits normally.
+- Reconcile Session identity, Current Run identity, and live process state when Mudi
   restarts. Ambiguous evidence must remain unlinked rather than being guessed.
 - Continue to observe Externally Started Current Runs without silently assuming control.
 
@@ -77,8 +77,8 @@ the managed execution foundation before SessionMesh attempts Action or Flow orch
 - Structured Action Result contracts and `needs_input` handling.
 - Automatic successor Action scheduling.
 - MCP or another Agent callback channel.
-- A long-lived SessionMesh daemon.
-- An embedded terminal emulator in the SessionMesh TUI.
+- A long-lived Mudi daemon.
+- An embedded terminal emulator in the Mudi TUI.
 
 The intended layering is:
 

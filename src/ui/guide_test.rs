@@ -7,7 +7,7 @@ fn each_guide_category_starts_with_its_visible_label() {
     let theme = ThemeName::default().palette();
 
     for category in GuideCategory::ALL {
-        let lines = guide_content(category, theme, "sessionmesh");
+        let lines = guide_content(category, theme, "mudi");
         assert_eq!(lines[0].spans[0].content, category.label());
     }
 }
@@ -15,7 +15,7 @@ fn each_guide_category_starts_with_its_visible_label() {
 #[test]
 fn provider_marks_use_their_brand_colors_in_guide_examples() {
     let theme = ThemeName::default().palette();
-    let lines = guide_content(GuideCategory::Sessions, theme, "sessionmesh");
+    let lines = guide_content(GuideCategory::Sessions, theme, "mudi");
     let spans = lines
         .iter()
         .flat_map(|line| &line.spans)

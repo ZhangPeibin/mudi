@@ -6,7 +6,7 @@ work, and known architectural prerequisites for that increment.
 
 These records are scope baselines, not PRDs or architectural decisions:
 
-- GitHub Issues in `ZhangPeibin/SessionMesh` remain authoritative for PRDs and delivery
+- GitHub Issues in `ZhangPeibin/mudi` remain authoritative for PRDs and delivery
   tickets.
 - `CONTEXT.md` remains authoritative for shared domain vocabulary.
 - Accepted architectural decisions and superseding decisions live under `docs/adr/`.

@@ -108,18 +108,21 @@ fn every_theme_preserves_semantic_contrast() {
 }
 
 #[test]
-fn legacy_default_theme_name_loads_as_sessionmesh() {
+fn legacy_default_theme_names_load_as_mudi_while_new_profiles_save_mudi() {
+    assert_eq!(ThemeName::from_name("mudi"), Some(ThemeName::Mudi));
+    assert_eq!(ThemeName::from_name("sessionmesh"), Some(ThemeName::Mudi));
+    assert_eq!(ThemeName::from_name("tokenplay"), Some(ThemeName::Mudi));
     assert_eq!(
-        ThemeName::from_name("tokenplay"),
-        Some(ThemeName::SessionMesh)
+        serde_json::from_str::<ThemeName>(r#""sessionmesh""#).unwrap(),
+        ThemeName::Mudi
     );
     assert_eq!(
         serde_json::from_str::<ThemeName>(r#""tokenplay""#).unwrap(),
-        ThemeName::SessionMesh
+        ThemeName::Mudi
     );
     assert_eq!(
-        serde_json::to_string(&ThemeName::SessionMesh).unwrap(),
-        r#""sessionmesh""#
+        serde_json::to_string(&ThemeName::Mudi).unwrap(),
+        r#""mudi""#
     );
 }
 

@@ -1,14 +1,14 @@
-┌ SessionMesh | v0.1.0 ────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ Mudi | v0.1.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
         ┌ Session Detail ──────────────────────────────────────────────┐       │
         │Provider        Claude Code -> claude-opus-4-8                │       │
-        │Project         sessionmesh                                   │       │
-        │Worktree        /Users/fixture/code/sessionmesh               │       │
+        │Project         mudi                                          │       │
+        │Worktree        /Users/fixture/code/mudi                      │       │
         │Branch          main                                          │       │
-        │cwd             /Users/fixture/code/sessionmesh               │       │
+        │cwd             /Users/fixture/code/mudi                      │       │
         │Source log                                                    │───────┘
- PROJECT│/Users/fixture/.claude/projects/-Users-fixture-code-sessionmes│────────
- ▾ sessi│h/claude-critical.jsonl                                       │n select
+ PROJECT│/Users/fixture/.claude/projects/-Users-fixture-code-mudi/claud│────────
+ ▾ mudi │e-critical.jsonl                                              │n select
    ▾ mai│Source format   JSONL                                         │
     > ✳ │Title           critical                                      │
       ⬡ │Session ID      claude-critical                               │

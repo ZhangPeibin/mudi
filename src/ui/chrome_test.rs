@@ -30,7 +30,7 @@ fn global_chrome_shows_product_navigation_inventory_and_status() {
 
     let rendered = render(&snapshot, &Ui::default());
 
-    assert!(rendered.contains("SessionMesh"));
+    assert!(rendered.contains("Mudi"));
     assert!(rendered.contains("0 Projects"));
     assert!(rendered.contains("watching · 0 sessions · 0 parsed / 0 skipped"));
 }

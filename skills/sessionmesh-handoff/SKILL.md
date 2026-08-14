@@ -1,6 +1,6 @@
 ---
 name: sessionmesh-handoff
-description: Generate only a SessionMesh Handoff Artifact candidate from the resumed source Session.
+description: Deprecated compatibility entry point for generating a Mudi Handoff Artifact candidate.
 ---
 <!-- sessionmesh-managed-skill: sessionmesh-handoff -->
 <!-- sessionmesh-managed-version: 1 -->
@@ -30,4 +30,4 @@ evidence, risks and blockers when that context exists.
 
 Do not call tools, edit or create files, install dependencies, commit, launch
 tools or agents, or run tests. Do not include a complete Transcript, secrets,
-or unrelated tool output. SessionMesh is the only Handoff Artifact writer.
+or unrelated tool output. Mudi is the only Handoff Artifact writer.

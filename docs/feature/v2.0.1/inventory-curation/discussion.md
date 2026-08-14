@@ -37,21 +37,21 @@ was hidden by mistake.
 
 - A developer-controlled way to reduce irrelevant Project and Session rows in the default
   inventory.
-- Durable visibility choices that survive SessionMesh restart and disposable-index rebuild.
+- Durable visibility choices that survive Mudi restart and disposable-index rebuild.
 - A recoverable way to inspect and restore hidden inventory.
 - Consistent visibility semantics across the normal Overview inventory.
 
 ### Out of Scope
 
 - Deleting or modifying Claude Code or Codex CLI source logs.
-- Treating deletion of the disposable SessionMesh index as a visibility preference.
+- Treating deletion of the disposable Mudi index as a visibility preference.
 - Inferring that Provider-native history is safe to delete.
 - Changing Project identity, Session identity, or Project ordering rules.
 
 ## Required Behaviour
 
 - Existing system-temporary directory exclusions remain automatic.
-- All other curation is developer-directed through an explicit Hide action. SessionMesh does
+- All other curation is developer-directed through an explicit Hide action. Mudi does
   not infer irrelevance from a path name, Session count, activity age, or similar heuristic.
 - Both Project-level and Session-level Hide actions are available. Session Hide targets one
   native Session identity. Project Hide is a snapshot bulk action over the currently
@@ -74,7 +74,7 @@ was hidden by mistake.
   hidden Sessions using a Project Tree hierarchy rather than a flat list.
 - Hidden Tree does not reproduce Recent or Older disclosures. Within each Project and
   Worktree, hidden Sessions are direct rows sorted by latest activity, newest first.
-- Hidden Tree opens with every Project collapsed after SessionMesh startup. Up and Down move
+- Hidden Tree opens with every Project collapsed after Mudi startup. Up and Down move
   selection; Enter toggles the selected Project open or closed. Left and Right are not part
   of this view. Expansion state may persist only for the current application run and resets
   to collapsed after restart.
@@ -94,7 +94,7 @@ was hidden by mistake.
 - The Hidden List supports restoring an item by removing it from Hide and has a distinct
   Delete action.
 - `Remove from Hide` restores the item to the normal inventory. `Delete` permanently
-  excludes the item from SessionMesh inventory and removes its Session Alias and
+  excludes the item from Mudi inventory and removes its Session Alias and
   Description, while retaining only the minimum durable exclusion identity needed to
   prevent a later source scan from importing it again.
 - Delete never deletes or modifies Claude Code or Codex CLI source logs.
@@ -102,7 +102,7 @@ was hidden by mistake.
   Handoff Artifacts, or Task/Successor relationships. Those records keep their independent
   lifecycle and deletion rules.
 - In the Hidden Tree, `u` removes the selected Session from Hide and `d` requests confirmed
-  permanent deletion from SessionMesh inventory. On a Project row these actions apply in
+  permanent deletion from Mudi inventory. On a Project row these actions apply in
   bulk to every currently hidden Session in that Project and disclose the affected count.
   Worktree rows remain structural and expose neither action.
 - Esc closes the Hidden Tree and restores the exact originating Overview selection.
@@ -160,7 +160,7 @@ was hidden by mistake.
 - The discussion belongs to release `v2.0.1` under feature slug `inventory-curation`.
 - The problem is inventory relevance, not Project ordering or deletion of Provider history.
 - Apart from the existing narrow system-temporary exclusions, hiding is explicit and
-  developer-controlled; SessionMesh will not automatically classify ordinary work as
+  developer-controlled; Mudi will not automatically classify ordinary work as
   temporary.
 - Rejected a collapsed Hidden section in the Project Tree. Hidden inventory is managed from
   a dedicated Hidden Tree reached from full Session Detail or a global shortcut.
@@ -175,7 +175,7 @@ was hidden by mistake.
 - Open Sessions cannot be hidden. Project bulk Hide skips Open Sessions and discloses both
   affected Exited and retained Open counts before authorization.
 - Hidden Tree uses `u` for Remove from Hide and `d` for confirmation-gated permanent
-  SessionMesh deletion. Project selection applies either operation to its current hidden
+  Mudi deletion. Project selection applies either operation to its current hidden
   Sessions as a disclosed bulk action; Worktree remains structural.
 - Esc from Hidden Tree restores the originating Overview selection.
 - Hide applies consistently to the normal Overview inventory. Hidden Exited Sessions appear
@@ -189,7 +189,7 @@ was hidden by mistake.
 - Hidden Tree uses Up/Down navigation and Enter-only Project expansion. Projects start
   collapsed after restart; expansion state is process-lifetime only.
 - The Hidden List offers both Delete and Remove from Hide as distinct actions.
-- Delete means permanently ignore within SessionMesh, not delete Provider-native history.
+- Delete means permanently ignore within Mudi, not delete Provider-native history.
   Remove from Hide means restore the item to normal inventory.
 - Permanent inventory Delete removes Alias and Description but preserves managed-control
   evidence, Operation Tasks, Handoff Artifacts, and Successor relationships.
@@ -240,7 +240,7 @@ None at the current product boundary.
 - Rejected a Hidden Tree section. Hidden inventory will be managed through a Hidden List
   entry in Details, with Delete and Remove from Hide actions whose exact deletion boundary
   remains to be defined.
-- Defined Delete as a SessionMesh-local permanent exclusion that removes SessionMesh-owned
+- Defined Delete as a Mudi-local permanent exclusion that removes Mudi-owned
   metadata and keeps only a minimal exclusion identity. Provider-native source logs remain
   untouched; Remove from Hide restores normal visibility.
 - Confirmed that both Projects and individual Sessions expose Hide. Project Hide may be a

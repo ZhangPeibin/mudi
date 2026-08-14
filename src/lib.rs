@@ -1,4 +1,4 @@
-//! SessionMesh — local, read-only observability for Claude Code and Codex CLI sessions.
+//! Mudi - local observability and explicitly authorized control for coding Sessions.
 
 pub mod alerts;
 pub mod app;

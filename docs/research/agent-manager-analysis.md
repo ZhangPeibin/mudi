@@ -5,7 +5,7 @@
 - 调研对象：[YoanWai/agent-manager](https://github.com/YoanWai/agent-manager)
 - 固定版本：[a575982](https://github.com/YoanWai/agent-manager/commit/a57598200a4ec59dea937b67af5ff067062ddabc)
 - 调研日期：2026-08-05
-- 目的：说明该项目如何实现 Agent 管理能力，并判断哪些设计适合 SessionMesh 借鉴。
+- 目的：说明该项目如何实现 Agent 管理能力，并判断哪些设计适合 Mudi 借鉴。
 
 ## 结论摘要
 
@@ -258,28 +258,28 @@ README 也明确把 agent-to-agent communication 列为尚未实现的能力。
    明确处理授权、升级和撤销语义。
 6. **状态是启发式组合。** Hook、pane 和进程证据可能互相冲突，需要持续维护协调规则。
 
-## 对 SessionMesh 的判断
+## 对 Mudi 的判断
 
-SessionMesh 当前的权威模型规定：provider JSONL 是观察状态的 source of truth，SQLite 索引
+Mudi 当前的权威模型规定：provider JSONL 是观察状态的 source of truth，SQLite 索引
 可重建；被动观察是默认行为，任何 Control Operation 都必须由用户显式授权。现有 ADR 还
 决定 Operation Task 使用非交互式 detached worker，并明确拒绝把 tmux 和终端按键注入作为
 该执行路径。
 
 因此，适合借鉴的是概念和边界，而不是直接复制其 tmux 控制架构。
 
-| agent-manager 设计 | SessionMesh 判断 |
+| agent-manager 设计 | Mudi 判断 |
 |---|---|
-| 保存 manager ID 与 provider-native ID 的映射 | 值得采用；SessionMesh 已以 native Session ID 作为身份核心 |
+| 保存 manager ID 与 provider-native ID 的映射 | 值得采用；Mudi 已以 native Session ID 作为身份核心 |
 | OS liveness 与 provider 状态共同判断 | 值得采用；与 `ProviderAdapter::live_state` 方向一致 |
 | provider-specific command/resume/fork 配置 | 可抽象为 Provider Adapter 或 Launch Plan，不应泄漏到 UI |
-| 私有 tmux server 承载所有 Agent | 不适合作为 SessionMesh 的默认观察模型 |
+| 私有 tmux server 承载所有 Agent | 不适合作为 Mudi 的默认观察模型 |
 | 向 pane 粘贴 Prompt 并按 Enter | 不适合 Operation Task；与 ADR 0003 的非交互 worker 决策冲突 |
 | 终端正则作为主状态源 | 可作为低置信度 fallback，不应替代 JSONL 和进程证据 |
 | Agent 调用 MCP 写入窄 mailbox | 可以借鉴，但必须限定能力并服从显式授权模型 |
 | 自动写入用户级 MCP 配置 | 不应静默执行；需要独立、明确且可撤销的用户授权 |
 | tmux session 在 TUI 退出后继续运行 | Operation Task 已由 detached worker 解决，不需要引入 tmux 依赖 |
 
-相关 SessionMesh 决策：
+相关 Mudi 决策：
 
 - [`ADR 0001`](../adr/0001-provider-adapter-seam.md)：provider-specific discovery、解析和 live state
   必须收进 `ProviderAdapter`。
@@ -292,17 +292,17 @@ SessionMesh 当前的权威模型规定：provider JSONL 是观察状态的 sour
 
 ## 建议
 
-如果 SessionMesh 后续扩展更多会话管理能力，建议吸收以下做法：
+如果 Mudi 后续扩展更多会话管理能力，建议吸收以下做法：
 
 1. 在 Provider Adapter 内统一 native Session ID 发现、恢复命令和活跃状态证据。
 2. 始终使用明确的 native Session ID 恢复，不依赖 `--last` 或 cwd 最近会话。
 3. 保持 OS liveness 与 provider-native 日志状态的组合判断，任何一方都不单独代表真实状态。
-4. 若需要 Agent 向 SessionMesh 回报信息，只提供很窄的声明式接口，并采用 mailbox 或类似的
+4. 若需要 Agent 向 Mudi 回报信息，只提供很窄的声明式接口，并采用 mailbox 或类似的
    可审计边界。
 5. 将 pane scraping 仅视为兼容旧 provider 的低置信度补充，不进入权威索引。
 6. 保持 Control Operation 的显式授权、detached worker 和结构化 Launch Plan，不因为参考
    项目使用 tmux 就改变现有 ADR。
 
 最终判断：`agent-manager` 是一个完成度较高的“交互式 Agent CLI 进程管理器”，它对
-SessionMesh 最有价值的部分是会话身份、生命周期和 provider 差异处理经验；它不是可直接
-移植的 Agent runtime，也不应成为 SessionMesh Control Operation 的执行架构模板。
+Mudi 最有价值的部分是会话身份、生命周期和 provider 差异处理经验；它不是可直接
+移植的 Agent runtime，也不应成为 Mudi Control Operation 的执行架构模板。

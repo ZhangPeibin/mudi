@@ -121,7 +121,7 @@ impl RuntimeControlPort for ClaudeAdapter {
 
 impl SkillTransportPort for ClaudeAdapter {
     fn handoff_skill_invocation(&self) -> &'static str {
-        "/sessionmesh-handoff"
+        "/mudi-handoff"
     }
 }
 
@@ -508,7 +508,7 @@ mod tests {
     fn conflicting_pid_state_records_do_not_identify_a_successor_session() {
         let process = super::super::state::process_identity(std::process::id()).unwrap();
         let root = std::env::temp_dir().join(format!(
-            "sessionmesh-claude-link-conflict-{}-{}",
+            "mudi-claude-link-conflict-{}-{}",
             process.pid,
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -543,7 +543,7 @@ mod tests {
     fn stale_pid_state_record_does_not_identify_a_successor_session() {
         let process = super::super::state::process_identity(std::process::id()).unwrap();
         let root = std::env::temp_dir().join(format!(
-            "sessionmesh-claude-link-stale-{}-{}",
+            "mudi-claude-link-stale-{}-{}",
             process.pid,
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));

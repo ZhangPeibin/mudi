@@ -1,6 +1,6 @@
 # ADR 0007 - Link successors through launched-process evidence
 
-SessionMesh must associate a Handoff Task with the Successor Session that actually starts,
+Mudi must associate a Handoff Task with the Successor Session that actually starts,
 but Claude can accept a preassigned Session ID while Codex cannot, and selecting the newest
 Session in a working directory is ambiguous under concurrency. Both Providers will instead
 use one foreground launch helper and one linkage interface: the relevant Provider adapter

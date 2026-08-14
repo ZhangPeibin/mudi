@@ -12,7 +12,7 @@ fn provider_marks_are_distinct_single_cell_glyphs() {
 
 #[test]
 fn provider_marks_use_the_brand_palette_without_losing_row_state() {
-    let theme = ThemeName::SessionMesh.palette();
+    let theme = ThemeName::Mudi.palette();
     let base = Style::default()
         .bg(theme.selected_background)
         .add_modifier(Modifier::BOLD);

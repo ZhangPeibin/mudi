@@ -63,6 +63,6 @@ fn signal_provider_mark_uses_its_brand_color() {
 
     assert_eq!(
         mark.style().fg,
-        Some(ThemeName::SessionMesh.palette().provider_codex)
+        Some(ThemeName::Mudi.palette().provider_codex)
     );
 }

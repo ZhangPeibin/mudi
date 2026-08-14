@@ -6,7 +6,7 @@
 
 ## Problem
 
-Handoff Operations currently run in a detached SessionMesh worker which starts the source
+Handoff Operations currently run in a detached Mudi worker which starts the source
 Provider through its non-interactive CLI. This execution path is separate from the private
 tmux environment used by Managed Current Runs. The requested change is to make Handoff run
 through tmux, but the intended relationship between that tmux execution and the source
@@ -15,7 +15,7 @@ Session's existing Managed Current Run is not yet decided.
 ## Users and Outcomes
 
 - A developer can authorize Handoff and have its Provider work execute through a durable,
-  SessionMesh-owned tmux environment.
+  Mudi-owned tmux environment.
 - The operation remains inspectable and recoverable across TUI exit or restart without
   weakening source Session identity, explicit authorization, or result validation.
 - Provider-specific limitations remain visible rather than being hidden behind a claim of
@@ -24,14 +24,14 @@ Session's existing Managed Current Run is not yet decided.
 ## Current Experience
 
 - The TUI records an authorized Handoff Operation as an Operation Task and launches a
-  detached SessionMesh worker.
+  detached Mudi worker.
 - The worker resumes the source native Session through a Provider-specific non-interactive
   command, invokes the managed Handoff Skill, validates the candidate Handoff Artifact, and
-  publishes a valid result into the private SessionMesh artifact directory.
+  publishes a valid result into the private Mudi artifact directory.
 - For an Open source Session, the authorized workflow may first wait for the exact Current
   Run to become Idle and request its graceful exit. Handoff generation then starts as a
   separate non-interactive Provider invocation.
-- Managed Current Runs already execute inside SessionMesh-owned private tmux environments,
+- Managed Current Runs already execute inside Mudi-owned private tmux environments,
   but existing Handoff Operation Tasks do not.
 
 ## Scope
@@ -58,7 +58,7 @@ Session's existing Managed Current Run is not yet decided.
 ## Required Behaviour
 
 - A Handoff Operation requires one explicit authorization for one selected source Session.
-- The Handoff execution must continue independently when the SessionMesh TUI exits.
+- The Handoff execution must continue independently when the Mudi TUI exits.
 - tmux remains transport and containment only; it does not establish Session identity,
   control authority, or successful completion.
 - A successful Task still requires a valid Handoff Artifact published under the existing
@@ -73,7 +73,7 @@ Session's existing Managed Current Run is not yet decided.
 - The tmux server, session, window, or pane disappears while the Task is non-terminal.
 - The Provider process exits without producing a valid Artifact.
 - A valid Artifact exists even though worker, tmux, or Provider liveness is later lost.
-- SessionMesh restarts while Handoff is waiting, running, cancelling, or publishing.
+- Mudi restarts while Handoff is waiting, running, cancelling, or publishing.
 - The source Current Run changes identity or becomes Busy during an authorized transition.
 - Existing detached-worker Tasks remain non-terminal during an application upgrade.
 - Terminal attachment or user input interferes with the Handoff execution.
@@ -124,7 +124,7 @@ Session's existing Managed Current Run is not yet decided.
   Current Runs while preserving the existing Operation Task model.
 - `src/handoff/worker.rs` currently runs Provider-native non-interactive Handoff commands
   and validates candidate Artifacts.
-- `src/handoff/mod.rs` launches the detached SessionMesh worker independently of the TUI.
+- `src/handoff/mod.rs` launches the detached Mudi worker independently of the TUI.
 - `src/providers/claude.rs` and `src/providers/codex.rs` define separate non-interactive
   Handoff resume commands and managed Skill invocations.
 

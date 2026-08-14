@@ -1,17 +1,17 @@
-use sessionmesh::config::Config;
-use sessionmesh::domain::{ProjectIdentity, Provider, SourceFormat, SourceMetadata};
-use sessionmesh::managed_sessions::{
+use mudi::config::Config;
+use mudi::domain::{ProjectIdentity, Provider, SourceFormat, SourceMetadata};
+use mudi::managed_sessions::{
     BindingOutcome, BindingReceipt, EvidenceBinder, ManagedCurrentRunEvidence,
     ManagedCurrentRunRecord, ManagedLaunchCleanup, ManagedLaunchEvidence,
     ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget,
     ManagedSessionRecord, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
     ProcessEvidence, ProviderNewCommand, ProviderProcessObservation,
 };
-use sessionmesh::providers::state::ProcessIdentity;
-use sessionmesh::providers::{ProviderBindingEvidence, ProviderExecutables};
-use sessionmesh::read_model::RefreshHealth;
-use sessionmesh::refresh::RefreshService;
-use sessionmesh::session_labels::SessionLabels;
+use mudi::providers::state::ProcessIdentity;
+use mudi::providers::{ProviderBindingEvidence, ProviderExecutables};
+use mudi::read_model::RefreshHealth;
+use mudi::refresh::RefreshService;
+use mudi::session_labels::SessionLabels;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -108,7 +108,7 @@ fn legacy_store_migration_preserves_management_but_erases_persisted_commands() {
                 binding_initializer, provider_executable, provider_arguments_json
              ) VALUES (?1, 'needs_review', 'codex', 'canonical_cwd', ?2, 'legacy', ?2,
                        'Legacy pending alias', 'Legacy pending description',
-                       'sessionmesh-legacy-pending', 'managed', 60000, 1, ?3, ?4)",
+                       'mudi-legacy-pending', 'managed', 60000, 1, ?3, ?4)",
             rusqlite::params![
                 "launch-legacy-pending",
                 temp.path().as_os_str().as_encoded_bytes(),
@@ -284,7 +284,7 @@ fn verified_managed_relationship_and_local_metadata_survive_restart() {
     let temp = TempDir::new("verified-recovery");
     let config = temp.config();
     let worktree = temp.directory("worktree");
-    let source_dir = config.claude_dir.join("projects/sessionmesh");
+    let source_dir = config.claude_dir.join("projects/mudi");
     fs::create_dir_all(&source_dir).unwrap();
     let source = source_dir.join("native-session.jsonl");
     let provider_content =
@@ -506,7 +506,7 @@ struct RecordingLaunchBroker {
     cancelled: Arc<Mutex<Vec<String>>>,
 }
 
-impl sessionmesh::managed_sessions::ManagedLaunchBroker for RecordingLaunchBroker {
+impl mudi::managed_sessions::ManagedLaunchBroker for RecordingLaunchBroker {
     fn launch(
         &mut self,
         registration: &ManagedLaunchRegistration,
@@ -657,7 +657,7 @@ fn registration(id: &str, working_directory: &Path) -> ManagedLaunchRegistration
         provider: Provider::CodexCli,
         target: ManagedLaunchTarget {
             project: ProjectIdentity::CanonicalCwd(working_directory.to_path_buf()),
-            project_label: "sessionMesh".into(),
+            project_label: "mudi".into(),
             worktree_root: None,
             working_directory: working_directory.to_path_buf(),
         },
@@ -669,7 +669,7 @@ fn registration(id: &str, working_directory: &Path) -> ManagedLaunchRegistration
             arguments: Vec::new(),
         },
         tmux: PrivateTmuxEnvironment {
-            socket_name: format!("sessionmesh-{id}"),
+            socket_name: format!("mudi-{id}"),
             session_name: "managed".into(),
         },
         created_at_ms: 40_000,
@@ -696,7 +696,7 @@ impl TempDir {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "sessionmesh-managed-restart-{name}-{}-{nonce}",
+            "mudi-managed-restart-{name}-{}-{nonce}",
             std::process::id()
         ));
         fs::create_dir_all(&path).unwrap();

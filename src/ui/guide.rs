@@ -134,7 +134,7 @@ fn guide_content(
     let lines = match category {
         GuideCategory::Overview => vec![
             heading(category.label()),
-            Line::from("SessionMesh is local to this Mac."),
+            Line::from("Mudi is local to this Mac."),
             Line::from("Passive observation is the default."),
             Line::from("Control Operations require explicit authorization."),
             heading("Current and recent"),
@@ -166,9 +166,9 @@ fn guide_content(
         GuideCategory::Sessions => vec![
             heading(category.label()),
             heading("Session Titles"),
-            Line::from("Title  The name SessionMesh displays for a Session."),
+            Line::from("Title  The name Mudi displays for a Session."),
             Line::from("Alias  A local user-authored Title."),
-            Line::from("It changes only SessionMesh; Provider data is unchanged."),
+            Line::from("It changes only Mudi; Provider data is unchanged."),
             Line::from("Short Session ID  The last eight characters used when no Alias exists."),
             Line::from("Duplicate Titles include their Short Session ID."),
             Line::from("e Edit session  Set or clear its local Title and Description."),
@@ -199,7 +199,7 @@ fn guide_content(
             heading(category.label()),
             Line::from(format!("Active Theme  {active_theme_name}")),
             heading("Built-in Themes"),
-            Line::from("sessionmesh  catppuccin  dracula"),
+            Line::from("mudi  catppuccin  dracula"),
             Line::from("gruvbox  light  high-contrast"),
             heading("Command-line override"),
             Line::from("--theme <name>"),

@@ -1,4 +1,4 @@
-use sessionmesh::read_model::{
+use mudi::read_model::{
     InMemoryReadModelCache, ReadModelCache, RefreshDiagnostic, RefreshHealth, RefreshSnapshot,
 };
 

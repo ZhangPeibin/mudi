@@ -9,7 +9,7 @@ not expand the accepted Work Continuity boundary until the user confirms that am
 ## 核心价值
 
 当 Source Session 因 Current Context 超限、压缩失败、Provider CLI 卡死、Skill
-无法解析或其他原因而不能正常交互时，SessionMesh 仍可从本地证据恢复其有效工作
+无法解析或其他原因而不能正常交互时，Mudi 仍可从本地证据恢复其有效工作
 上下文，生成 Handoff Artifact，并让用户启动一个新的 Successor Session 继续工作。
 
 该能力不依赖 Source Session 再回答一次问题。它提供的是故障恢复，而不只是正常交接。
@@ -93,7 +93,7 @@ Successor Launch Plan -> 用户显式启动 -> 进程证据关联 Successor Sess
 
 - Worker 校验固定标题、必填内容、UTF-8 和秘密材料规则。
 - 额外检查 Artifact 是否包含可执行的 `Next Action` 和 Source Worktree 的实际状态。
-- 只有校验成功后，才能由 Worker 在 SessionMesh 私有数据目录原子发布 Artifact。
+- 只有校验成功后，才能由 Worker 在 Mudi 私有数据目录原子发布 Artifact。
 - Task Store 只保存结果元数据和 Artifact 路径，不保存正文。
 
 ### 5. 启动与接手确认
@@ -142,7 +142,7 @@ Provider stdout、stderr 和完整 Transcript 不进入 Task Store；但 Task �
 - 遵守 ADR 0003：使用 detached Operation Task Worker，并进行进程和结果协调。
 - 遵守 ADR 0004：如果需要结束 Open Current Run，必须单独披露授权并安全结束；读取
   JSONL 本身不构成结束 Current Run 的授权。
-- 遵守 ADR 0005：Artifact 保存在 SessionMesh 私有数据目录，不写入 Source Project。
+- 遵守 ADR 0005：Artifact 保存在 Mudi 私有数据目录，不写入 Source Project。
 - 遵守 ADR 0006：Artifact Ready 与终端启动解耦。
 - 遵守 ADR 0007：人工案例使用了预分配 Claude Session ID，但产品实现不能照搬；必须
   使用实际启动进程证据关联 Successor Session。
@@ -157,7 +157,7 @@ Provider stdout、stderr 和完整 Transcript 不进入 Task Store；但 Task �
 6. Source JSONL 不完整或没有足够上下文时，Task 明确失败，不伪造恢复成功。
 7. Successor 读取 Artifact 后能复述 Objective、Current State 和 Next Action。
 8. 旧 Session JSONL 保持不变，新旧 Session 不共享 Provider-native Session ID。
-9. SessionMesh 重启后仍能从 Task Store、进程证据和 Artifact 结果协调任务状态。
+9. Mudi 重启后仍能从 Task Store、进程证据和 Artifact 结果协调任务状态。
 
 ## 待设计问题
 

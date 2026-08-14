@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs live in GitHub Issues for `ZhangPeibin/SessionMesh`.
+Issues and PRDs live in GitHub Issues for `ZhangPeibin/mudi`.
 Use the `gh` CLI for all operations.
 
 ## Conventions

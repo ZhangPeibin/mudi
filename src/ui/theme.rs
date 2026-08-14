@@ -30,14 +30,14 @@ pub(super) enum ThemeName {
     Gruvbox,
     Light,
     HighContrast,
-    #[serde(rename = "sessionmesh", alias = "tokenplay", other)]
+    #[serde(rename = "mudi", alias = "sessionmesh", alias = "tokenplay", other)]
     #[default]
-    SessionMesh,
+    Mudi,
 }
 
 impl ThemeName {
     const ALL: [Self; 6] = [
-        Self::SessionMesh,
+        Self::Mudi,
         Self::Catppuccin,
         Self::Dracula,
         Self::Gruvbox,
@@ -47,7 +47,7 @@ impl ThemeName {
 
     pub(super) fn as_str(self) -> &'static str {
         match self {
-            Self::SessionMesh => "sessionmesh",
+            Self::Mudi => "mudi",
             Self::Catppuccin => "catppuccin",
             Self::Dracula => "dracula",
             Self::Gruvbox => "gruvbox",
@@ -57,15 +57,15 @@ impl ThemeName {
     }
 
     pub(super) fn from_name(name: &str) -> Option<Self> {
-        if name == "tokenplay" {
-            return Some(Self::SessionMesh);
+        if matches!(name, "sessionmesh" | "tokenplay") {
+            return Some(Self::Mudi);
         }
         Self::ALL.into_iter().find(|theme| theme.as_str() == name)
     }
 
     pub(super) fn palette(self) -> Theme {
         match self {
-            Self::SessionMesh => Theme {
+            Self::Mudi => Theme {
                 background: Color::Rgb(20, 22, 24),
                 foreground: Color::Rgb(224, 220, 210),
                 muted: Color::Rgb(132, 136, 141),

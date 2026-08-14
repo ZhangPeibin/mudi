@@ -1,14 +1,14 @@
-┌ SessionMesh | v0.1.0 ────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ Mudi | v0.1.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
                           │WT /Use...  Risk detected││                         │
         ┌ Guide ───────────────────────────────────────────────────────┐       │
         │> Overview    │Overview                                       │       │
-        │  Navigation  │SessionMesh is local to this Mac.              │       │
+        │  Navigation  │Mudi is local to this Mac.                     │       │
         │  Sessions    │Passive observation is the default.            │       │
         │  Signals     │Control Operations require explicit            │       │
         │  Theme       │authorization.                                 │───────┘
  PROJECT│              │Current and recent                             │────────
- ▾ sessi│              │NOW shows current conditions.                  │
+ ▾ mudi │              │NOW shows current conditions.                  │
    ▾ mai│              │Recent Signals show transitions.               │
     > ✳ │              │                                               │
       ⬡ │              │                                               │
@@ -19,6 +19,6 @@
  Context│              │                                               │
  Attenti│              │                                               │
  Provide└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘
- Worktree    ...sionmesh @ main│
+ Worktree    ...ode/mudi @ main│
 ───────────────────────────────┴────────────────────────────────────────────────
 j/k | Left/Right | Enter | e Edit | ? | q Quit watching · 0 sessions · 0 parsed

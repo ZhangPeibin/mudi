@@ -1,4 +1,4 @@
-# SessionMesh — product specification (v1)
+# Mudi — product specification (v1)
 
 ## What it is
 
@@ -73,7 +73,7 @@ content pane, and `Shift+Tab` or Left returns to categories. The content pane us
 vertical movement keys to scroll. Each opening starts at its contextual category and the
 top of its content.
 
-Built-in Themes are `sessionmesh`, `catppuccin`, `dracula`, `gruvbox`, `light`, and
-`high-contrast`; `sessionmesh` is the default. The saved local Profile Theme is loaded at
+Built-in Themes are `mudi`, `catppuccin`, `dracula`, `gruvbox`, `light`, and
+`high-contrast`; `mudi` is the default. The saved local Profile Theme is loaded at
 startup. `--theme <name>` applies a process-local override without changing that Profile;
-unknown names fall back to `sessionmesh` without preventing startup.
+unknown names fall back to `mudi` without preventing startup.

@@ -662,7 +662,7 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
         let dir = std::env::temp_dir().join(format!(
-            "sessionmesh-claude-live-boundary-{}-{now_ms}",
+            "mudi-claude-live-boundary-{}-{now_ms}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -690,7 +690,7 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
         let dir = std::env::temp_dir().join(format!(
-            "sessionmesh-claude-missing-boundary-{}-{now_ms}",
+            "mudi-claude-missing-boundary-{}-{now_ms}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -718,7 +718,7 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
         let dir = std::env::temp_dir().join(format!(
-            "sessionmesh-claude-stale-state-{}-{now_ms}",
+            "mudi-claude-stale-state-{}-{now_ms}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();

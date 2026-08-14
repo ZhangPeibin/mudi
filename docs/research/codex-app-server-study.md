@@ -7,7 +7,7 @@
 - 调研日期：2026-08-05
 - 主要依据：版本化官方源码、官方 app-server README，以及由本机相同版本生成的 JSON Schema
 - 目的：说明 app-server 是什么、如何承载 Agent 能力、Skills 如何接入，并判断它与
-  `agent-manager`、Codex UI 和 SessionMesh 的关系
+  `agent-manager`、Codex UI 和 Mudi 的关系
 
 固定版本很重要。app-server 命令和部分协议仍标记为 experimental，不同 Codex 版本生成的
 协议 Schema 可能不同。本文描述的是 `0.146.0`，不是对未来版本的兼容性承诺。
@@ -370,11 +370,11 @@ Codex 版本严格对应，因此正确的客户端策略是：
 因此，`agent-manager` 中“把 Skill 名称随 Prompt 粘贴到 tmux”只描述了它驱动现有 Codex
 CLI 的外层方式，不能用来解释 Codex app-server 内部怎样发现和加载 Skill。
 
-## 对 SessionMesh 的判断
+## 对 Mudi 的判断
 
-SessionMesh 当前以 provider JSONL 为观察事实源，以可重建 SQLite 为索引，并要求所有控制
+Mudi 当前以 provider JSONL 为观察事实源，以可重建 SQLite 为索引，并要求所有控制
 操作由用户显式授权。app-server 对 Codex 集成很有价值，但它改变的不只是数据格式，还会
-改变 SessionMesh 的职责边界。
+改变 Mudi 的职责边界。
 
 ### 可以获得的能力
 
@@ -382,11 +382,11 @@ SessionMesh 当前以 provider JSONL 为观察事实源，以可重建 SQLite �
 - 可靠接收流式消息、命令、文件变更、diff、plan、token usage 和失败原因。
 - 使用 native `thread/resume/fork/interrupt`，不再拼接部分 Codex CLI 命令。
 - 使用 `skills/list` 构建准确的 cwd-scoped Skill picker。
-- 在 SessionMesh UI 中承载 Codex 的审批和补充提问。
+- 在 Mudi UI 中承载 Codex 的审批和补充提问。
 
 ### 新增的责任和风险
 
-- SessionMesh 会从被动 observer 变成 Codex 的控制客户端，需要管理连接、重连、订阅、
+- Mudi 会从被动 observer 变成 Codex 的控制客户端，需要管理连接、重连、订阅、
   反向请求、审批超时、背压和 app-server 生命周期。
 - app-server 只解决 Codex，不会自动给 Claude Code 提供同构协议。
 - 顶层命令和 WebSocket transport 仍是 experimental，需要版本锁定和兼容性测试。
@@ -405,7 +405,7 @@ CodexAppServerClient (optional, opt-in control plane)
   |-- connection + initialize + version capability
   |-- Thread / Turn / Item event projection
   |-- Skills query
-  `-- approval requests -> explicit SessionMesh authorization UI
+  `-- approval requests -> explicit Mudi authorization UI
 
 OperationTask / SuccessorLauncher
   `-- keep existing ownership until a dedicated ADR changes it
@@ -460,7 +460,7 @@ app-server 的核心价值不是“让 Codex 在后台运行”，而是给 UI �
    `skill` item，由 backend 定位并注入完整 Skill 指令。
 4. “Codex = UI + app-server”只适合描述部分部署拓扑。更准确的是
    `client surface -> app-server -> Codex Core -> model/tools`。
-5. SessionMesh 可以利用这条协议减少 Codex 的状态推断，但应先作为可选控制通道接入，
+5. Mudi 可以利用这条协议减少 Codex 的状态推断，但应先作为可选控制通道接入，
    不应破坏被动观察、显式授权和现有 worker ownership。
 
 ## 官方资料与可复现依据

@@ -6,7 +6,7 @@
 - **Partially supersedes:** ADR 0003
 
 Every Managed Current Run will execute inside a private tmux environment created by
-SessionMesh. The environment belongs to the Managed Session, while each provider process
+Mudi. The environment belongs to the Managed Session, while each provider process
 belongs to one Current Run and is linked to the native Session ID using conclusive launch,
 process, and provider-source evidence; a tmux name or pane is never Session identity.
 Normal TUI exit detaches without terminating that environment, and restart reconciliation

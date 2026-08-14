@@ -1,4 +1,4 @@
-┌ SessionMesh | v0.1.0 ────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ Mudi | v0.1.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
                           │WT /Use...  Risk detected││                         │
                           │✳ Ctx +Critical 160.0k...││                         │
@@ -8,7 +8,7 @@
                           │                         ││                         │
                           └─────────────────────────┘└─────────────────────────┘
  PROJECT 1 ─────────── 5 OPEN  │ Session Workspace ─────────────────────────────
- ▾ sessionmesh (7)             │Session Claude Code / critical
+ ▾ mudi (7)                    │Session Claude Code / critical
    ▾ main !2                   │Conversation unavailable.
     > ✳ critical ↗     ! •  90%│
       ⬡ x-shared ↗     ! •  40%│
@@ -19,6 +19,6 @@
  Context     [#########-] 90.0%│
  Attention   Crit Ctx · 90% +1 │
  Provider    Claude Code -> ...│
- Worktree    ...sionmesh @ main│
+ Worktree    ...ode/mudi @ main│
 ───────────────────────────────┴────────────────────────────────────────────────
 j/k | Left/Right | Enter | e Edit | ? | q Quit watching · 0 sessions · 0 parsed

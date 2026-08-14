@@ -1,14 +1,18 @@
 [package]
-name = "sessionmesh"
+name = "mudi"
 version = "0.1.0"
 edition = "2021"
 description = "Local, read-only TUI for observing Claude Code and Codex CLI sessions"
 license = "MIT"
-default-run = "sessionmesh"
+default-run = "mudi"
+
+[[bin]]
+name = "mudi"
+path = "src/main.rs"
 
 [[bin]]
 name = "sessionmesh"
-path = "src/main.rs"
+path = "src/bin/sessionmesh.rs"
 
 [dependencies]
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }

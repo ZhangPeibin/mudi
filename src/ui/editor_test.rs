@@ -13,8 +13,8 @@ fn session() -> Session {
         provenance: crate::domain::SessionProvenance::Observed,
         source: SourceMetadata::default(),
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/test/sessionmesh")),
-            label: "sessionmesh".into(),
+            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/test/mudi")),
+            label: "mudi".into(),
         }),
         worktree: None,
         cwd: None,

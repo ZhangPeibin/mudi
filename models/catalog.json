@@ -2,7 +2,7 @@
   "version": "2026-08-03",
   "currency": "USD",
   "unit": "per_million_tokens",
-  "note": "Public API-equivalent rates for estimates, not subscription billing. Batch rates are metadata and are not used for interactive Session estimates. Runtime model IDs absent from the imported source are preserved as SessionMesh supplements.",
+  "note": "Public API-equivalent rates for estimates, not subscription billing. Batch rates are metadata and are not used for interactive Session estimates. Runtime model IDs absent from the imported source are preserved as Mudi supplements.",
   "source": {
     "url": "https://www.llmcalcs.com/pricing-comparison",
     "data_last_updated": "2026-06-11",

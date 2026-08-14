@@ -1,6 +1,6 @@
 # Domain Docs
 
-SessionMesh is a single-context repository.
+Mudi is a single-context repository.
 
 ## Before exploring
 

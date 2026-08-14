@@ -1,25 +1,25 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::backend::TestBackend;
-use ratatui::Terminal;
-use sessionmesh::app::Snapshot;
-use sessionmesh::application::ApplicationController;
-use sessionmesh::clipboard::Clipboard;
-use sessionmesh::domain::{
+use mudi::app::Snapshot;
+use mudi::application::ApplicationController;
+use mudi::clipboard::Clipboard;
+use mudi::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceMetadata, Usage,
 };
-use sessionmesh::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
-use sessionmesh::managed_sessions::{
+use mudi::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
+use mudi::managed_sessions::{
     MacosManagedTerminalAccess, ManagedLaunchBroker, ManagedLaunchEvidence,
     ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget,
     ManagedNewRequest, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
     ProviderNewCommand, TmuxLaunchBroker,
 };
-use sessionmesh::providers::state::ProcessIdentity;
-use sessionmesh::providers::ProviderExecutables;
-use sessionmesh::providers::{registry, BINDING_INITIALIZER};
-use sessionmesh::successor::TerminalLauncher;
-use sessionmesh::ui::{draw, Ui, UiAction};
+use mudi::providers::state::ProcessIdentity;
+use mudi::providers::ProviderExecutables;
+use mudi::providers::{registry, BINDING_INITIALIZER};
+use mudi::successor::TerminalLauncher;
+use mudi::ui::{draw, Ui, UiAction};
+use ratatui::backend::TestBackend;
+use ratatui::Terminal;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -141,6 +141,7 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
     let outcome = service.start_new(request, 42_000).unwrap();
 
     assert!(outcome.terminal_opened);
+    assert!(outcome.registration.tmux.socket_name.starts_with("mudi-"));
     assert_eq!(
         *launched.lock().unwrap(),
         vec![outcome.registration.id.clone()]
@@ -1021,7 +1022,7 @@ fn session_in_project(project_root: &Path) -> Session {
     Session {
         provider: Provider::ClaudeCode,
         id: "observed-session".into(),
-        provenance: sessionmesh::domain::SessionProvenance::Observed,
+        provenance: mudi::domain::SessionProvenance::Observed,
         source: SourceMetadata::default(),
         project: Some(Project {
             identity: ProjectIdentity::CanonicalCwd(project_root.to_path_buf()),
@@ -1053,7 +1054,7 @@ fn recovery_registration(
         provider: Provider::CodexCli,
         target: ManagedLaunchTarget {
             project: ProjectIdentity::CanonicalCwd(working_directory.to_path_buf()),
-            project_label: "sessionMesh".into(),
+            project_label: "mudi".into(),
             worktree_root: None,
             working_directory: working_directory.to_path_buf(),
         },
@@ -1065,7 +1066,7 @@ fn recovery_registration(
             arguments: vec!["private initializer".into()],
         },
         tmux: PrivateTmuxEnvironment {
-            socket_name: format!("sessionmesh-{id}"),
+            socket_name: format!("mudi-{id}"),
             session_name: "managed".into(),
         },
         created_at_ms: 40_000,
@@ -1101,7 +1102,7 @@ impl TempDir {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "sessionmesh-managed-new-{name}-{}-{nonce}",
+            "mudi-managed-new-{name}-{}-{nonce}",
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();

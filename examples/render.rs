@@ -1,18 +1,18 @@
 //! Render the TUI to an off-screen buffer against real logs and print it as text.
-//! Lets us eyeball the layout without a TTY. Respects SESSIONMESH_* overrides.
+//! Lets us eyeball the layout without a TTY. Respects MUDI_* overrides.
 
+use mudi::alerts;
+use mudi::app::Snapshot;
+use mudi::collector;
+use mudi::config::Config;
+use mudi::index::Index;
+use mudi::models::ModelCatalog;
+use mudi::ui::{draw, Ui};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
-use sessionmesh::alerts;
-use sessionmesh::app::Snapshot;
-use sessionmesh::collector;
-use sessionmesh::config::Config;
-use sessionmesh::index::Index;
-use sessionmesh::models::ModelCatalog;
-use sessionmesh::ui::{draw, Ui};
 
 fn main() -> anyhow::Result<()> {
-    let cfg = Config::load();
+    let cfg = Config::load()?;
     let mut index = Index::open(&cfg.index_path())?;
     let models = ModelCatalog::load(Some(&cfg.model_catalog_override_path()));
     collector::refresh(&cfg, &mut index);
@@ -37,7 +37,7 @@ fn print_frame(snap: &Snapshot, ui: &Ui) -> anyhow::Result<()> {
     terminal.draw(|f| draw(f, snap, ui))?;
     let buf = terminal.backend().buffer().clone();
 
-    println!("\n┌── SessionMesh {}", "─".repeat(40));
+    println!("\n┌── Mudi {}", "─".repeat(40));
     for y in 0..h {
         let mut line = String::new();
         for x in 0..w {

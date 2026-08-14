@@ -1,17 +1,17 @@
 //! Non-interactive verification harness: run the real collector pipeline against
 //! local logs and print a summary. Used to validate parsing/state/pricing without the
-//! TUI. Respects SESSIONMESH_* env overrides (point SESSIONMESH_DATA_DIR at a temp dir to
+//! TUI. Respects MUDI_* env overrides (point MUDI_DATA_DIR at a temp dir to
 //! keep the real index untouched).
 
-use sessionmesh::app::{fmt_context, fmt_cost, fmt_tokens};
-use sessionmesh::collector;
-use sessionmesh::config::Config;
-use sessionmesh::domain::{Provider, SessionState};
-use sessionmesh::index::Index;
-use sessionmesh::models::ModelCatalog;
+use mudi::app::{fmt_context, fmt_cost, fmt_tokens};
+use mudi::collector;
+use mudi::config::Config;
+use mudi::domain::{Provider, SessionState};
+use mudi::index::Index;
+use mudi::models::ModelCatalog;
 
 fn main() -> anyhow::Result<()> {
-    let cfg = Config::load();
+    let cfg = Config::load()?;
     println!("claude_dir: {}", cfg.claude_dir.display());
     println!("codex_dir:  {}", cfg.codex_dir.display());
     println!("index:      {}", cfg.index_path().display());

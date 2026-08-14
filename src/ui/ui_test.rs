@@ -34,7 +34,7 @@ fn unused_profile_path(name: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "sessionmesh-{name}-{}-{nonce}-profile.json",
+        "mudi-{name}-{}-{nonce}-profile.json",
         std::process::id(),
     ))
 }
@@ -630,17 +630,15 @@ fn demo_snapshot() -> Snapshot {
         provenance: crate::domain::SessionProvenance::Observed,
         source: Default::default(),
         project: Some(Project {
-            identity: ProjectIdentity::GitCommonDir(PathBuf::from(
-                "/Users/x/code/sessionmesh/.git",
-            )),
-            label: "sessionmesh".into(),
+            identity: ProjectIdentity::GitCommonDir(PathBuf::from("/Users/x/code/mudi/.git")),
+            label: "mudi".into(),
         }),
         worktree: Some(Worktree {
-            root: PathBuf::from("/Users/x/code/sessionmesh"),
+            root: PathBuf::from("/Users/x/code/mudi"),
             branch: Some("main".into()),
             writable: true,
         }),
-        cwd: Some("/Users/x/code/sessionmesh".into()),
+        cwd: Some("/Users/x/code/mudi".into()),
         latest_model: Some("claude-opus-4-8".into()),
         state: SessionState::Busy,
         context: ContextState {
@@ -685,11 +683,11 @@ fn managed_new_snapshot() -> Snapshot {
     let mut feature = snapshot.sessions[0].clone();
     feature.id = "feature-session".into();
     feature.worktree = Some(Worktree {
-        root: PathBuf::from("/Users/x/code/sessionmesh-feature"),
+        root: PathBuf::from("/Users/x/code/mudi-feature"),
         branch: Some("feature".into()),
         writable: true,
     });
-    feature.cwd = Some("/Users/x/code/sessionmesh-feature".into());
+    feature.cwd = Some("/Users/x/code/mudi-feature".into());
     feature.last_activity_ms = 1_000;
     snapshot.sessions.push(feature);
     snapshot
@@ -710,7 +708,7 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
     );
     let initial = rendered_rows_at(&ui, &snapshot, 120, 36);
     assert!(initial.contains("New Session"));
-    assert!(initial.contains("/Users/x/code/sessionmesh"));
+    assert!(initial.contains("/Users/x/code/mudi"));
     assert!(initial.contains("◦ Claude Code    ◦ Codex CLI"));
     assert!(initial.contains("1 of 2"));
     assert!(!initial.contains("1/2"));
@@ -802,9 +800,9 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
                         .unwrap()
                         .identity
                         .clone(),
-                    project_label: "sessionmesh".into(),
-                    worktree_root: Some(PathBuf::from("/Users/x/code/sessionmesh-feature")),
-                    working_directory: PathBuf::from("/Users/x/code/sessionmesh-feature"),
+                    project_label: "mudi".into(),
+                    worktree_root: Some(PathBuf::from("/Users/x/code/mudi-feature")),
+                    working_directory: PathBuf::from("/Users/x/code/mudi-feature"),
                 },
                 title: "Investigate startup".into(),
                 description: Some("Trace launch".into()),
@@ -825,7 +823,7 @@ fn single_worktree_new_omits_a_meaningless_count() {
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
 
     let rendered = rendered_rows_at(&ui, &snapshot, 120, 36);
-    assert!(rendered.contains("/Users/x/code/sessionmesh"));
+    assert!(rendered.contains("/Users/x/code/mudi"));
     assert!(!rendered.contains("1/1"));
     assert!(!rendered.contains("1 of 1"));
 }
@@ -875,7 +873,7 @@ fn selected_session_new_inherits_its_worktree_context() {
     assert!(!form.directory_context);
     assert_eq!(
         form.targets[form.target_index].working_directory,
-        PathBuf::from("/Users/x/code/sessionmesh")
+        PathBuf::from("/Users/x/code/mudi")
     );
 }
 
@@ -890,7 +888,7 @@ fn inherited_new_target_opens_an_in_tui_directory_browser() {
             source: Default::default(),
             project: Some(Project {
                 identity: ProjectIdentity::CanonicalCwd(project_root.clone()),
-                label: "sessionMesh".into(),
+                label: "mudi".into(),
             }),
             worktree: None,
             cwd: Some(project_root.to_string_lossy().into_owned()),
@@ -938,7 +936,7 @@ fn confirming_the_directory_browser_requests_resolution_of_its_current_directory
             source: Default::default(),
             project: Some(Project {
                 identity: ProjectIdentity::CanonicalCwd(project_root.clone()),
-                label: "sessionMesh".into(),
+                label: "mudi".into(),
             }),
             worktree: None,
             cwd: Some(project_root.to_string_lossy().into_owned()),
@@ -985,7 +983,7 @@ fn directory_browser_navigates_with_arrow_and_vim_keys_and_cancel_preserves_the_
             source: Default::default(),
             project: Some(Project {
                 identity: ProjectIdentity::CanonicalCwd(project_root.clone()),
-                label: "sessionMesh".into(),
+                label: "mudi".into(),
             }),
             worktree: None,
             cwd: Some(project_root.to_string_lossy().into_owned()),
@@ -1050,7 +1048,7 @@ fn directory_browser_navigates_with_arrow_and_vim_keys_and_cancel_preserves_the_
 }
 
 #[test]
-fn empty_target_directory_browser_starts_from_sessionmesh_working_directory() {
+fn empty_target_directory_browser_starts_from_mudi_working_directory() {
     let snapshot = Snapshot {
         ready: true,
         ..Snapshot::default()
@@ -1277,7 +1275,7 @@ fn directory_context_can_be_reselected_before_new_is_confirmed() {
     ui.finish_managed_new_directory_selection(Ok(Some(
         crate::managed_sessions::ManagedLaunchTarget {
             project: ProjectIdentity::CanonicalCwd(directory.clone()),
-            project_label: "sessionMesh".into(),
+            project_label: "mudi".into(),
             worktree_root: None,
             working_directory: directory.clone(),
         },
@@ -1314,7 +1312,7 @@ fn selected_worktree_new_requires_title_and_does_not_remember_provider() {
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
 
     let selected = rendered_rows_at(&ui, &snapshot, 120, 36);
-    assert!(selected.contains("/Users/x/code/sessionmesh-feature"));
+    assert!(selected.contains("/Users/x/code/mudi-feature"));
     assert!(selected.contains("◦ Claude Code    ◦ Codex CLI"));
     ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
     for _ in 0..4 {
@@ -1366,14 +1364,14 @@ fn t_key_does_not_change_the_active_theme_or_show_a_notice() {
         ..Snapshot::default()
     };
 
-    assert_eq!(ui.active_theme_name(), "sessionmesh");
+    assert_eq!(ui.active_theme_name(), "mudi");
     ui.handle_key(
         KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
         &snapshot,
     )
     .unwrap();
 
-    assert_eq!(ui.active_theme_name(), "sessionmesh");
+    assert_eq!(ui.active_theme_name(), "mudi");
     assert!(!rendered_with_snapshot(&ui, &snapshot).contains("Theme:"));
 }
 
@@ -1390,7 +1388,7 @@ fn light_theme_supplies_background_border_accent_and_muted_roles() {
     assert_eq!(top_left.style().bg, Some(Color::Rgb(250, 249, 246)));
     assert_eq!(top_left.style().fg, Some(Color::Rgb(126, 130, 133)));
     assert_eq!(
-        rendered_style_at(&terminal, "SessionMesh").fg,
+        rendered_style_at(&terminal, "Mudi").fg,
         Some(Color::Rgb(25, 91, 130))
     );
     assert_eq!(
@@ -1419,15 +1417,13 @@ fn now_groups_open_sessions_across_providers_and_omits_exited_sessions() {
     snapshot.sessions.extend([codex, exited]);
 
     let page = rendered_rows_at(&ui, &snapshot, 120, 30);
-    let project = page.find("▾ sessionmesh").unwrap();
+    let project = page.find("▾ mudi").unwrap();
     let claude = page.find("✳ -session").unwrap();
     let codex = page.find("⬡ dex-open").unwrap();
 
     assert!(project < claude && claude < codex);
     assert_eq!(
-        page.lines()
-            .filter(|line| line.contains("▾ sessionmesh"))
-            .count(),
+        page.lines().filter(|line| line.contains("▾ mudi")).count(),
         1
     );
     let session_ids = project_tree::open_sessions(&snapshot)
@@ -1682,7 +1678,7 @@ fn session_tree_keyboard_traverses_visible_nodes_and_never_hidden_sessions() {
     ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     let collapsed_project = rendered_rows_at(&ui, &snapshot, 120, 30);
-    assert!(collapsed_project.contains(">▸ sessionmesh (2)"));
+    assert!(collapsed_project.contains(">▸ mudi (2)"));
     assert!(!collapsed_project.contains("✳ -session"));
     assert!(!collapsed_project.contains("⬡ ond-open"));
     assert!(ui.selected_session(&snapshot).is_none());
@@ -1694,8 +1690,8 @@ fn session_tree_keyboard_traverses_visible_nodes_and_never_hidden_sessions() {
     ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
     let collapsed_again = rendered_rows_at(&ui, &snapshot, 120, 30);
-    assert!(collapsed_again.contains(">▸ sessionmesh (2)"));
-    assert!(!collapsed_again.contains("/Users/x/code/sessionmesh"));
+    assert!(collapsed_again.contains(">▸ mudi (2)"));
+    assert!(!collapsed_again.contains("/Users/x/code/mudi"));
 }
 
 #[test]
@@ -1875,10 +1871,7 @@ fn now_flattens_a_single_worktree_and_moves_its_location_to_details() {
     let ui = Ui::default();
 
     let page = rendered_rows_at(&ui, &snapshot, 120, 30);
-    let project = page
-        .lines()
-        .find(|line| line.contains("▾ sessionmesh"))
-        .unwrap();
+    let project = page.lines().find(|line| line.contains("▾ mudi")).unwrap();
 
     assert!(project.contains("(1)"));
     assert!(!page.contains("▾ feature/shared"));
@@ -1893,16 +1886,16 @@ fn now_keeps_multiple_worktrees_below_the_project_without_context() {
     let mut feature = snapshot.sessions[0].clone();
     feature.id = "feature-session".into();
     feature.worktree = Some(Worktree {
-        root: PathBuf::from("/Users/x/worktrees/sessionmesh-feature"),
+        root: PathBuf::from("/Users/x/worktrees/mudi-feature"),
         branch: Some("feature".into()),
         writable: true,
     });
-    feature.cwd = Some("/Users/x/worktrees/sessionmesh-feature".into());
+    feature.cwd = Some("/Users/x/worktrees/mudi-feature".into());
     snapshot.sessions.push(feature);
 
     let page = rendered_rows_at(&Ui::default(), &snapshot, 120, 30);
     let mut lines = page.lines();
-    let project = lines.find(|line| line.contains("▾ sessionmesh")).unwrap();
+    let project = lines.find(|line| line.contains("▾ mudi")).unwrap();
     let main = lines.find(|line| line.contains("▾ main")).unwrap();
     let feature = lines.find(|line| line.contains("▾ feature")).unwrap();
 
@@ -2108,7 +2101,7 @@ fn worktree_signal_locates_the_recommended_now_session_not_its_first_member() {
     assert_eq!(now_cursor_style_at(&located, "ry-first"), None);
     assert_eq!(
         rendered_style_at(&located, "Risk detected").bg,
-        Some(ThemeName::SessionMesh.palette().selected_background)
+        Some(ThemeName::Mudi.palette().selected_background)
     );
 }
 
@@ -2134,7 +2127,7 @@ fn cleared_worktree_signal_stays_selected_when_the_worktree_is_no_longer_open() 
         ],
         after: vec![],
     }];
-    let selected_background = Some(ThemeName::SessionMesh.palette().selected_background);
+    let selected_background = Some(ThemeName::Mudi.palette().selected_background);
     let mut ui = Ui::default();
 
     ui.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &snapshot)
@@ -2180,7 +2173,7 @@ fn all_page_focus_moves_between_independently_selected_regions() {
             },
         },
     ];
-    let selected_background = Some(ThemeName::SessionMesh.palette().selected_background);
+    let selected_background = Some(ThemeName::Mudi.palette().selected_background);
     let mut ui = Ui::default();
 
     ui.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &snapshot)
@@ -2244,7 +2237,7 @@ fn signal_detail_returns_to_the_signal_and_preserves_now_selection() {
         },
     ];
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
-    let selected_background = Some(ThemeName::SessionMesh.palette().selected_background);
+    let selected_background = Some(ThemeName::Mudi.palette().selected_background);
     let mut ui = Ui::default();
 
     ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
@@ -2378,7 +2371,7 @@ fn now_keeps_healthy_busy_sessions_visible_without_manufacturing_attention() {
 fn compact_now_shortens_long_identity_before_operational_evidence() {
     let mut snapshot = demo_snapshot();
     snapshot.sessions[0].worktree = Some(Worktree {
-        root: PathBuf::from("/Users/x/code/sessionmesh-worktrees/attention-layout-prototype"),
+        root: PathBuf::from("/Users/x/code/mudi-worktrees/attention-layout-prototype"),
         branch: Some("prototype/q-007-responsive-terminal-layout".into()),
         writable: true,
     });
@@ -2405,15 +2398,11 @@ fn compact_now_shortens_long_identity_before_operational_evidence() {
 
 #[test]
 fn changing_theme_does_not_change_rendered_product_semantics() {
-    let sessionmesh_path = unused_profile_path("sessionmesh-semantics");
+    let mudi_path = unused_profile_path("mudi-semantics");
     let light_path = unused_profile_path("light-semantics");
-    std::fs::write(
-        &sessionmesh_path,
-        br#"{"help_seen":true,"theme":"sessionmesh"}"#,
-    )
-    .unwrap();
+    std::fs::write(&mudi_path, br#"{"help_seen":true,"theme":"mudi"}"#).unwrap();
     std::fs::write(&light_path, br#"{"help_seen":true,"theme":"light"}"#).unwrap();
-    let sessionmesh = Ui::load(&sessionmesh_path, None).unwrap();
+    let mudi = Ui::load(&mudi_path, None).unwrap();
     let light = Ui::load(&light_path, None).unwrap();
     let mut snapshot = demo_snapshot();
     snapshot.sessions[0].last_activity_ms = Local::now().timestamp_millis();
@@ -2423,11 +2412,11 @@ fn changing_theme_does_not_change_rendered_product_semantics() {
     };
 
     assert_eq!(
-        rendered_with_snapshot(&sessionmesh, &snapshot),
+        rendered_with_snapshot(&mudi, &snapshot),
         rendered_with_snapshot(&light, &snapshot)
     );
 
-    let _ = std::fs::remove_file(sessionmesh_path);
+    let _ = std::fs::remove_file(mudi_path);
     let _ = std::fs::remove_file(light_path);
 }
 
@@ -2512,7 +2501,7 @@ fn unknown_process_theme_falls_back_without_changing_the_profile() {
     std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"catppuccin"}"#).unwrap();
 
     let overridden = Ui::load(&profile_path, Some("neon")).unwrap();
-    assert_eq!(overridden.active_theme_name(), "sessionmesh");
+    assert_eq!(overridden.active_theme_name(), "mudi");
 
     let reloaded = Ui::load(&profile_path, None).unwrap();
     assert_eq!(reloaded.active_theme_name(), "catppuccin");
@@ -2521,13 +2510,13 @@ fn unknown_process_theme_falls_back_without_changing_the_profile() {
 }
 
 #[test]
-fn unknown_profile_theme_falls_back_to_sessionmesh_without_blocking_startup() {
+fn unknown_profile_theme_falls_back_to_mudi_without_blocking_startup() {
     let profile_path = unused_profile_path("unknown-profile-theme");
     std::fs::write(&profile_path, br#"{"help_seen":true,"theme":"neon"}"#).unwrap();
 
     let ui = Ui::load(&profile_path, None).unwrap();
 
-    assert_eq!(ui.active_theme_name(), "sessionmesh");
+    assert_eq!(ui.active_theme_name(), "mudi");
     let _ = std::fs::remove_file(profile_path);
 }
 
@@ -2863,9 +2852,9 @@ fn detail_keeps_required_session_evidence_without_reading_source_content() {
         "Provider",
         "Claude Code -> claude-opus-4-8",
         "Project",
-        "sessionmesh",
+        "mudi",
         "Worktree",
-        "/Users/x/code/sessionmesh",
+        "/Users/x/code/mudi",
         "Branch",
         "main",
         "cwd",
@@ -3150,7 +3139,7 @@ fn detached_worktree_detail_marks_only_the_branch_unavailable() {
     let detail = rendered_with_snapshot(&ui, &snapshot);
 
     assert!(detail.contains("N/A (detached HEAD)"));
-    assert!(detail.contains("/Users/x/code/sessionmesh"));
+    assert!(detail.contains("/Users/x/code/mudi"));
 }
 
 #[test]

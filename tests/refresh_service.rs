@@ -1,6 +1,6 @@
-use sessionmesh::config::Config;
-use sessionmesh::read_model::RefreshHealth;
-use sessionmesh::refresh::RefreshService;
+use mudi::config::Config;
+use mudi::read_model::RefreshHealth;
+use mudi::refresh::RefreshService;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -12,7 +12,7 @@ impl TempDir {
     fn new() -> Self {
         let suffix = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "sessionmesh-refresh-service-{}-{suffix}",
+            "mudi-refresh-service-{}-{suffix}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&path);

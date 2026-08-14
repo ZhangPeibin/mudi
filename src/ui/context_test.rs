@@ -11,7 +11,7 @@ fn role_uses_the_configured_warning_and_critical_thresholds() {
 
 #[test]
 fn progress_uses_shared_thresholds_and_clamps_the_bar_without_clamping_percentage() {
-    let theme = ThemeName::SessionMesh.palette();
+    let theme = ThemeName::Mudi.palette();
     let cases = [
         (699, "69.9%", Role::Normal, theme.context_normal),
         (700, "70.0%", Role::Warning, theme.context_warning),
@@ -49,7 +49,7 @@ fn progress_uses_shared_thresholds_and_clamps_the_bar_without_clamping_percentag
 
 #[test]
 fn progress_uses_neutral_empty_bar_for_unknown_window_and_exited_session() {
-    let theme = ThemeName::SessionMesh.palette();
+    let theme = ThemeName::Mudi.palette();
     let unknown = Progress::new(
         ContextState {
             tokens: 123_456,
@@ -97,7 +97,7 @@ fn progress_uses_neutral_empty_bar_for_unknown_window_and_exited_session() {
 
 #[test]
 fn progress_drops_the_bar_before_percentage_or_na_on_narrow_surfaces() {
-    let theme = ThemeName::SessionMesh.palette();
+    let theme = ThemeName::Mudi.palette();
     let known = Progress::new(
         ContextState {
             tokens: 500,

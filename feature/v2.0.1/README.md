@@ -30,10 +30,10 @@ The primary question answered is: **what can the next Session safely do now?**
   This is separate from the Session Description, which continues to explain why the Session
   exists rather than its transient work state.
 - Display observed evidence separately from user-authored or Agent-proposed statements.
-  Missing evidence must remain missing; SessionMesh never infers a passed check or completed
+  Missing evidence must remain missing; Mudi never infers a passed check or completed
   task from terminal prose.
 - Let the developer explicitly hide Exited Sessions, restore them from a dedicated Hidden
-  Tree, or permanently exclude them from SessionMesh inventory. Project Hide is a snapshot
+  Tree, or permanently exclude them from Mudi inventory. Project Hide is a snapshot
   bulk action over currently observed Session identities and never suppresses future Sessions.
 - Reopen a checkpoint to show whether its source Session can be precisely resumed, is still
   Open, is Exited, or has unlinked evidence.
@@ -48,7 +48,7 @@ The primary question answered is: **what can the next Session safely do now?**
 
 ## Product rules
 
-- A checkpoint is developer-directed. SessionMesh never creates one from elapsed time,
+- A checkpoint is developer-directed. Mudi never creates one from elapsed time,
   context pressure, or a provider observation alone.
 - The native Session ID remains Session identity. Work may continue across a Handoff, but a
   Successor is never merged with its source Session.
@@ -74,7 +74,7 @@ The primary question answered is: **what can the next Session safely do now?**
 - Automatic provider or model switching.
 - Action dispatch, structured Action Results, `needs_input`, Execution Plans, Workflow Runs,
   dependency scheduling, and automatic Flow advancement.
-- Embedded terminal emulation, a SessionMesh daemon, and a second project or issue tracker.
+- Embedded terminal emulation, a Mudi daemon, and a second project or issue tracker.
 
 ## Open design decisions within the scope
 
@@ -101,7 +101,7 @@ v2.0.0  Managed Session Core
 - [`v2.0.0 Managed Session Core`](../v2.0.0/README.md)
 - [`Work Continuity requirements discussion`](../../docs/feature/v2.0.1/work-continuity/discussion.md)
 - [`Inventory Curation requirements discussion`](../../docs/feature/v2.0.1/inventory-curation/discussion.md)
-- [`Inventory Curation PRD`](https://github.com/ZhangPeibin/SessionMesh/issues/55)
+- [`Inventory Curation PRD`](https://github.com/ZhangPeibin/mudi/issues/55)
 - [`legacy Assisted Handoff record`](../../docs/legacy/v1/assisted-handoff-prd.md)
 - [`docs/adr/0005-keep-handoff-artifacts-outside-projects.md`](../../docs/adr/0005-keep-handoff-artifacts-outside-projects.md)
 - [`docs/adr/0007-link-successors-through-launched-process-evidence.md`](../../docs/adr/0007-link-successors-through-launched-process-evidence.md)

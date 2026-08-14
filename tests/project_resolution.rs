@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use sessionmesh::collector::{build_sessions, build_sessions_with_resolver, ProjectResolverCache};
-use sessionmesh::config::Config;
-use sessionmesh::domain::{ContextState, ProjectIdentity, Provider, Usage};
-use sessionmesh::index::{Fingerprint, Index};
-use sessionmesh::models::ModelCatalog;
-use sessionmesh::project::{resolve, resolve_selected_directory};
-use sessionmesh::providers::ParsedSession;
+use mudi::collector::{build_sessions, build_sessions_with_resolver, ProjectResolverCache};
+use mudi::config::Config;
+use mudi::domain::{ContextState, ProjectIdentity, Provider, Usage};
+use mudi::index::{Fingerprint, Index};
+use mudi::models::ModelCatalog;
+use mudi::project::{resolve, resolve_selected_directory};
+use mudi::providers::ParsedSession;
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -22,7 +22,7 @@ impl TempDir {
     fn new() -> Self {
         let suffix = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "sessionmesh-project-resolution-{}-{suffix}",
+            "mudi-project-resolution-{}-{suffix}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&path);
@@ -64,9 +64,9 @@ fn repository_with_commit(path: &Path) {
         path,
         &[
             "-c",
-            "user.name=SessionMesh Tests",
+            "user.name=Mudi Tests",
             "-c",
-            "user.email=sessionmesh@example.invalid",
+            "user.email=mudi@example.invalid",
             "commit",
             "-m",
             "fixture",
@@ -91,8 +91,8 @@ fn parsed_session(id: &str, cwd: &Path) -> ParsedSession {
 #[test]
 fn linked_worktrees_share_project_identity_and_keep_worktree_metadata() {
     let temp = TempDir::new();
-    let repository = temp.path().join("sessionmesh");
-    let linked = temp.path().join("sessionmesh-feature");
+    let repository = temp.path().join("mudi");
+    let linked = temp.path().join("mudi-feature");
     repository_with_commit(&repository);
     git(
         &repository,
@@ -125,7 +125,7 @@ fn linked_worktrees_share_project_identity_and_keep_worktree_metadata() {
 #[test]
 fn selected_git_subdirectory_resolves_to_canonical_project_and_worktree() {
     let temp = TempDir::new();
-    let repository = temp.path().join("sessionmesh");
+    let repository = temp.path().join("mudi");
     let nested = repository.join("src/domain");
     repository_with_commit(&repository);
     fs::create_dir_all(&nested).unwrap();
@@ -226,8 +226,8 @@ fn independent_clones_remain_distinct_projects_with_the_same_remote() {
     let origin = temp.path().join("origin");
     let first_parent = temp.path().join("first");
     let second_parent = temp.path().join("second");
-    let first = first_parent.join("sessionmesh");
-    let second = second_parent.join("sessionmesh");
+    let first = first_parent.join("mudi");
+    let second = second_parent.join("mudi");
     repository_with_commit(&origin);
     fs::create_dir_all(&first_parent).unwrap();
     fs::create_dir_all(&second_parent).unwrap();
@@ -244,8 +244,8 @@ fn independent_clones_remain_distinct_projects_with_the_same_remote() {
     let second = resolve(Some(&second)).project.unwrap();
 
     assert_ne!(first.identity, second.identity);
-    assert_eq!(first.label, "sessionmesh");
-    assert_eq!(second.label, "sessionmesh");
+    assert_eq!(first.label, "mudi");
+    assert_eq!(second.label, "mudi");
 }
 
 #[test]
@@ -262,9 +262,9 @@ fn unavailable_cwd_does_not_invent_project_or_worktree_identity() {
 #[test]
 fn symlink_and_nested_path_spellings_resolve_to_the_same_identities() {
     let temp = TempDir::new();
-    let repository = temp.path().join("sessionmesh");
+    let repository = temp.path().join("mudi");
     let nested = repository.join("src/domain");
-    let alias = temp.path().join("sessionmesh-alias");
+    let alias = temp.path().join("mudi-alias");
     repository_with_commit(&repository);
     fs::create_dir_all(&nested).unwrap();
     std::os::unix::fs::symlink(&repository, &alias).unwrap();
@@ -288,8 +288,8 @@ fn snapshot_carries_resolved_identity_and_disambiguates_distinct_projects() {
     let origin = temp.path().join("origin");
     let first_parent = temp.path().join("first");
     let second_parent = temp.path().join("second");
-    let first = first_parent.join("sessionmesh");
-    let second = second_parent.join("sessionmesh");
+    let first = first_parent.join("mudi");
+    let second = second_parent.join("mudi");
     repository_with_commit(&origin);
     fs::create_dir_all(&first_parent).unwrap();
     fs::create_dir_all(&second_parent).unwrap();
@@ -348,9 +348,9 @@ fn snapshot_carries_resolved_identity_and_disambiguates_distinct_projects() {
         first_a.project.as_ref().unwrap().identity,
         second.project.as_ref().unwrap().identity
     );
-    assert_eq!(first_a.project.as_ref().unwrap().label, "first/sessionmesh");
-    assert_eq!(first_b.project.as_ref().unwrap().label, "first/sessionmesh");
-    assert_eq!(second.project.as_ref().unwrap().label, "second/sessionmesh");
+    assert_eq!(first_a.project.as_ref().unwrap().label, "first/mudi");
+    assert_eq!(first_b.project.as_ref().unwrap().label, "first/mudi");
+    assert_eq!(second.project.as_ref().unwrap().label, "second/mudi");
     assert_eq!(
         first_a.worktree.as_ref().unwrap().root,
         fs::canonicalize(&first).unwrap()

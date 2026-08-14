@@ -1,16 +1,16 @@
-use rusqlite::Connection;
-use sessionmesh::config::Config;
-use sessionmesh::domain::{
+use mudi::config::Config;
+use mudi::domain::{
     ContextState, Provider, Session, SessionState, SourceFormat, SourceMetadata, Usage,
 };
-use sessionmesh::handoff::{
+use mudi::handoff::{
     CompletionNotice, CompletionNotifier, CurrentRunControl, CurrentRunObservation,
     DetachedWorkerLauncher, HandoffPaths, HandoffService, HandoffWorker, MacosCurrentRunControl,
     ProviderExecutables, WorkerLaunch, WorkerLauncher,
 };
-use sessionmesh::handoff_skill::ManagedHandoffSkills;
-use sessionmesh::providers::state::ProcessIdentity;
-use sessionmesh::tasks::{OperationTaskState, TaskStore};
+use mudi::handoff_skill::ManagedHandoffSkills;
+use mudi::providers::state::ProcessIdentity;
+use mudi::tasks::{OperationTaskState, TaskStore};
+use rusqlite::Connection;
 use std::collections::VecDeque;
 use std::fs;
 use std::io::Write as IoWrite;
@@ -31,7 +31,7 @@ impl TempDir {
     fn new(test_name: &str) -> Self {
         let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "sessionmesh-handoff-{test_name}-{}-{sequence}",
+            "mudi-handoff-{test_name}-{}-{sequence}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&path);
@@ -467,7 +467,7 @@ fn exited_session(source_path: PathBuf, cwd: PathBuf) -> Session {
     Session {
         provider: Provider::ClaudeCode,
         id: "claude-native-session".into(),
-        provenance: sessionmesh::domain::SessionProvenance::Observed,
+        provenance: mudi::domain::SessionProvenance::Observed,
         source: SourceMetadata {
             path: source_path,
             format: SourceFormat::JsonLines,
@@ -1492,7 +1492,7 @@ fn worker_publishes_a_valid_artifact_before_the_task_becomes_ready() {
     );
     assert_eq!(
         fs::read_to_string(claude.with_extension("prompt")).unwrap(),
-        "/sessionmesh-handoff\n"
+        "/mudi-handoff\n"
     );
     assert_eq!(
         fs::read_to_string(claude.with_extension("args")).unwrap(),
@@ -1501,7 +1501,7 @@ fn worker_publishes_a_valid_artifact_before_the_task_becomes_ready() {
 }
 
 #[test]
-fn restarting_sessionmesh_preserves_the_ready_task_and_handoff_result() {
+fn restarting_mudi_preserves_the_ready_task_and_handoff_result() {
     let temp = TempDir::new("ready-restart");
     let source_path = temp.path().join("source.jsonl");
     let cwd = temp.path().join("project");
@@ -1580,7 +1580,7 @@ fn codex_worker_uses_the_same_artifact_contract_inside_a_read_only_sandbox() {
     );
     assert_eq!(
         fs::read_to_string(codex.with_extension("prompt")).unwrap(),
-        "$sessionmesh-handoff\n"
+        "$mudi-handoff\n"
     );
     assert_eq!(
         fs::read_to_string(cwd.join("unchanged.txt")).unwrap(),
@@ -1665,13 +1665,13 @@ fn first_codex_handoff_installs_managed_skills_and_invokes_the_named_skill() {
     assert_eq!(ready.state, OperationTaskState::Ready);
     assert_eq!(
         fs::read_to_string(codex.with_extension("prompt")).unwrap(),
-        "$sessionmesh-handoff\n"
+        "$mudi-handoff\n"
     );
-    let codex_skill = codex_skills.join("sessionmesh-handoff/SKILL.md");
-    let claude_skill = claude_skills.join("sessionmesh-handoff/SKILL.md");
+    let codex_skill = codex_skills.join("mudi-handoff/SKILL.md");
+    let claude_skill = claude_skills.join("mudi-handoff/SKILL.md");
     let installed = fs::read_to_string(&codex_skill).unwrap();
     assert_eq!(fs::read_to_string(&claude_skill).unwrap(), installed);
-    assert!(installed.contains("sessionmesh-managed-version: 1"));
+    assert!(installed.contains("mudi-managed-version: 1"));
     assert!(installed.contains("## Risks And Blockers"));
     assert_eq!(
         fs::metadata(&codex_skill).unwrap().permissions().mode() & 0o777,
@@ -1697,8 +1697,8 @@ fn provider_standard_user_skill_directories_receive_the_managed_copies() {
 
     skills.install_for_first_use().unwrap();
 
-    let codex_skill = home.join(".agents/skills/sessionmesh-handoff/SKILL.md");
-    let claude_skill = home.join(".claude/skills/sessionmesh-handoff/SKILL.md");
+    let codex_skill = home.join(".agents/skills/mudi-handoff/SKILL.md");
+    let claude_skill = home.join(".claude/skills/mudi-handoff/SKILL.md");
     assert!(codex_skill.is_file());
     assert!(claude_skill.is_file());
     assert_eq!(
@@ -1715,7 +1715,7 @@ fn installing_the_current_managed_skill_twice_is_idempotent_and_owner_only() {
     let claude_skills = temp.path().join("claude/skills");
     let skills = ManagedHandoffSkills::new(codex_skills.clone(), claude_skills.clone());
     skills.install_for_first_use().unwrap();
-    let codex_skill = codex_skills.join("sessionmesh-handoff/SKILL.md");
+    let codex_skill = codex_skills.join("mudi-handoff/SKILL.md");
     let before = fs::metadata(&codex_skill).unwrap();
 
     skills.install_for_first_use().unwrap();
@@ -1723,10 +1723,7 @@ fn installing_the_current_managed_skill_twice_is_idempotent_and_owner_only() {
     let after = fs::metadata(&codex_skill).unwrap();
     assert_eq!(after.ino(), before.ino());
     assert_eq!(after.modified().unwrap(), before.modified().unwrap());
-    for skill in [
-        codex_skill,
-        claude_skills.join("sessionmesh-handoff/SKILL.md"),
-    ] {
+    for skill in [codex_skill, claude_skills.join("mudi-handoff/SKILL.md")] {
         assert_eq!(
             fs::metadata(&skill).unwrap().permissions().mode() & 0o777,
             0o600
@@ -1784,7 +1781,7 @@ fn claude_handoff_invokes_the_managed_skill_without_other_customizations_or_tool
     assert_eq!(ready.state, OperationTaskState::Ready);
     assert_eq!(
         fs::read_to_string(claude.with_extension("prompt")).unwrap(),
-        "/sessionmesh-handoff\n"
+        "/mudi-handoff\n"
     );
     let arguments = fs::read_to_string(claude.with_extension("args")).unwrap();
     assert_eq!(
@@ -1796,22 +1793,22 @@ fn claude_handoff_invokes_the_managed_skill_without_other_customizations_or_tool
 
 #[cfg(unix)]
 #[test]
-fn first_use_updates_an_older_sessionmesh_managed_skill_before_task_creation() {
+fn first_use_updates_an_older_mudi_managed_skill_before_task_creation() {
     let temp = TempDir::new("update-managed-handoff-skill");
     let source_path = temp.path().join("rollout.jsonl");
     let cwd = temp.path().join("project");
     let claude = temp.path().join("claude");
     let codex = temp.path().join("codex");
     let codex_skills = temp.path().join("agents/skills");
-    let stale_skill = codex_skills.join("sessionmesh-handoff/SKILL.md");
+    let stale_skill = codex_skills.join("mudi-handoff/SKILL.md");
     fs::write(&source_path, "{}\n").unwrap();
     fs::create_dir(&cwd).unwrap();
     fs::create_dir_all(stale_skill.parent().unwrap()).unwrap();
     fs::write(
         &stale_skill,
-        "---\nname: sessionmesh-handoff\ndescription: Old managed copy.\n---\n\
-<!-- sessionmesh-managed-skill: sessionmesh-handoff -->\n\
-<!-- sessionmesh-managed-version: 0 -->\n\nOld contract.\n",
+        "---\nname: mudi-handoff\ndescription: Old managed copy.\n---\n\
+<!-- mudi-managed-skill: mudi-handoff -->\n\
+<!-- mudi-managed-version: 0 -->\n\nOld contract.\n",
     )
     .unwrap();
     fs::set_permissions(&stale_skill, fs::Permissions::from_mode(0o644)).unwrap();
@@ -1836,7 +1833,7 @@ fn first_use_updates_an_older_sessionmesh_managed_skill_before_task_creation() {
 
     let installed = fs::read_to_string(&stale_skill).unwrap();
     assert_eq!(task.state, OperationTaskState::Queued);
-    assert!(installed.contains("sessionmesh-managed-version: 1"));
+    assert!(installed.contains("mudi-managed-version: 1"));
     assert!(!installed.contains("Old contract."));
     assert_eq!(
         fs::metadata(stale_skill).unwrap().permissions().mode() & 0o777,
@@ -1852,10 +1849,10 @@ fn preflight_reports_a_newer_managed_skill_as_out_of_date_without_downgrading_it
     let claude = temp.path().join("claude");
     let codex = temp.path().join("codex");
     let codex_skills = temp.path().join("agents/skills");
-    let newer_skill = codex_skills.join("sessionmesh-handoff/SKILL.md");
-    let newer_content = "---\nname: sessionmesh-handoff\ndescription: Future managed copy.\n---\n\
-<!-- sessionmesh-managed-skill: sessionmesh-handoff -->\n\
-<!-- sessionmesh-managed-version: 2 -->\n\nFuture contract.\n";
+    let newer_skill = codex_skills.join("mudi-handoff/SKILL.md");
+    let newer_content = "---\nname: mudi-handoff\ndescription: Future managed copy.\n---\n\
+<!-- mudi-managed-skill: mudi-handoff -->\n\
+<!-- mudi-managed-version: 2 -->\n\nFuture contract.\n";
     fs::write(&source_path, "{}\n").unwrap();
     fs::create_dir(&cwd).unwrap();
     fs::create_dir_all(newer_skill.parent().unwrap()).unwrap();
@@ -1898,9 +1895,8 @@ fn preflight_refuses_to_overwrite_an_unrelated_same_name_skill() {
     let claude = temp.path().join("claude");
     let codex = temp.path().join("codex");
     let codex_skills = temp.path().join("agents/skills");
-    let user_skill = codex_skills.join("sessionmesh-handoff/SKILL.md");
-    let user_content =
-        "---\nname: sessionmesh-handoff\ndescription: My own Skill.\n---\n\nKeep this.\n";
+    let user_skill = codex_skills.join("mudi-handoff/SKILL.md");
+    let user_content = "---\nname: mudi-handoff\ndescription: My own Skill.\n---\n\nKeep this.\n";
     fs::write(&source_path, "{}\n").unwrap();
     fs::create_dir(&cwd).unwrap();
     fs::create_dir_all(user_skill.parent().unwrap()).unwrap();
@@ -1941,7 +1937,7 @@ fn preflight_refuses_to_overwrite_an_unrelated_same_name_skill() {
     assert_eq!(fs::read_to_string(user_skill).unwrap(), user_content);
     #[cfg(unix)]
     assert_eq!(
-        fs::metadata(temp.path().join("agents/skills/sessionmesh-handoff"))
+        fs::metadata(temp.path().join("agents/skills/mudi-handoff"))
             .unwrap()
             .permissions()
             .mode()
@@ -1958,7 +1954,7 @@ fn preflight_reports_an_unreadable_managed_skill_before_task_creation() {
     let claude = temp.path().join("claude");
     let codex = temp.path().join("codex");
     let codex_skills = temp.path().join("agents/skills");
-    let unreadable_skill = codex_skills.join("sessionmesh-handoff/SKILL.md");
+    let unreadable_skill = codex_skills.join("mudi-handoff/SKILL.md");
     fs::write(&source_path, "{}\n").unwrap();
     fs::create_dir(&cwd).unwrap();
     fs::create_dir_all(unreadable_skill.parent().unwrap()).unwrap();
@@ -2002,16 +1998,12 @@ fn preflight_rejects_a_same_name_skill_file_symlink_before_task_creation() {
     let claude = temp.path().join("claude");
     let codex = temp.path().join("codex");
     let codex_skills = temp.path().join("agents/skills");
-    let skill_path = codex_skills.join("sessionmesh-handoff/SKILL.md");
+    let skill_path = codex_skills.join("mudi-handoff/SKILL.md");
     let outside = temp.path().join("outside-skill.md");
     fs::write(&source_path, "{}\n").unwrap();
     fs::create_dir(&cwd).unwrap();
     fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
-    fs::write(
-        &outside,
-        include_str!("../skills/sessionmesh-handoff/SKILL.md"),
-    )
-    .unwrap();
+    fs::write(&outside, include_str!("../skills/mudi-handoff/SKILL.md")).unwrap();
     std::os::unix::fs::symlink(&outside, &skill_path).unwrap();
     executable(&claude);
     executable(&codex);
@@ -2046,7 +2038,7 @@ fn preflight_rejects_a_same_name_skill_file_symlink_before_task_creation() {
         .is_symlink());
     assert_eq!(
         fs::read_to_string(outside).unwrap(),
-        include_str!("../skills/sessionmesh-handoff/SKILL.md")
+        include_str!("../skills/mudi-handoff/SKILL.md")
     );
 }
 
@@ -2080,7 +2072,7 @@ fn worker_records_a_bounded_failure_if_the_managed_skill_disappears_after_prefli
     .unwrap()
     .with_managed_handoff_skills(skills.clone());
     let task = handoff.authorize_exited(&session, 10_000).unwrap();
-    fs::remove_file(codex_skills.join("sessionmesh-handoff/SKILL.md")).unwrap();
+    fs::remove_file(codex_skills.join("mudi-handoff/SKILL.md")).unwrap();
 
     let failed = HandoffWorker::new(paths, executables)
         .with_managed_handoff_skills(skills)
@@ -2094,6 +2086,63 @@ fn worker_records_a_bounded_failure_if_the_managed_skill_disappears_after_prefli
     );
     assert!(failed.artifact_path.is_none());
     assert!(!codex.with_extension("prompt").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn worker_uses_an_existing_legacy_managed_skill_during_the_transition() {
+    let temp = TempDir::new("legacy-managed-skill-worker");
+    let source_path = temp.path().join("rollout.jsonl");
+    let cwd = temp.path().join("project");
+    let claude = temp.path().join("claude");
+    let codex = temp.path().join("codex");
+    let codex_skills = temp.path().join("agents/skills");
+    let legacy_skill = codex_skills.join("sessionmesh-handoff/SKILL.md");
+    fs::write(&source_path, "{}\n").unwrap();
+    fs::create_dir(&cwd).unwrap();
+    fs::create_dir_all(legacy_skill.parent().unwrap()).unwrap();
+    fs::write(
+        &legacy_skill,
+        include_str!("../skills/sessionmesh-handoff/SKILL.md"),
+    )
+    .unwrap();
+    fs::set_permissions(
+        legacy_skill.parent().unwrap(),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    fs::set_permissions(&legacy_skill, fs::Permissions::from_mode(0o600)).unwrap();
+    executable(&claude);
+    provider_that_returns_and_records_full_input(&codex, valid_handoff());
+    let paths = HandoffPaths {
+        task_store: temp.path().join("tasks.db"),
+        artifact_root: temp.path().join("artifacts"),
+    };
+    let executables = ProviderExecutables::new(claude, codex.clone());
+    let mut session = exited_session(source_path, cwd);
+    session.provider = Provider::CodexCli;
+    session.id = "codex-legacy-skill-session".into();
+    let mut handoff = HandoffService::open(
+        paths.clone(),
+        executables.clone(),
+        RecordingWorkerLauncher::default(),
+    )
+    .unwrap();
+    let task = handoff.authorize_exited(&session, 10_000).unwrap();
+
+    let ready = HandoffWorker::new(paths, executables)
+        .with_managed_handoff_skills(ManagedHandoffSkills::new(
+            codex_skills,
+            temp.path().join("claude-home/skills"),
+        ))
+        .run(&task.id, 20_000)
+        .unwrap();
+
+    assert_eq!(ready.state, OperationTaskState::Ready);
+    assert_eq!(
+        fs::read_to_string(codex.with_extension("prompt")).unwrap(),
+        "$sessionmesh-handoff\n"
+    );
 }
 
 #[test]
@@ -2221,7 +2270,7 @@ fn copied_successor_command_preserves_adversarial_paths_and_arguments_exactly() 
         .run(&task.id, 20_000)
         .unwrap();
 
-    let command = sessionmesh::successor::render_successor_command(&ready).unwrap();
+    let command = mudi::successor::render_successor_command(&ready).unwrap();
     let status = Command::new("/bin/sh")
         .args(["-c", &command])
         .status()
@@ -2276,7 +2325,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
     let mut missing = ready.clone();
     missing.successor_launch_plan = None;
     assert_eq!(
-        sessionmesh::successor::render_successor_command(&missing)
+        mudi::successor::render_successor_command(&missing)
             .unwrap_err()
             .to_string(),
         "Ready Task has no Successor Launch Plan"
@@ -2289,7 +2338,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
         .unwrap()
         .artifact_path = temp.path().join("different.md");
     assert_eq!(
-        sessionmesh::successor::render_successor_command(&mismatched)
+        mudi::successor::render_successor_command(&mismatched)
             .unwrap_err()
             .to_string(),
         "Successor Launch Plan does not match its Operation Task"
@@ -2303,7 +2352,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
         .arguments
         .push("; touch injected".into());
     assert_eq!(
-        sessionmesh::successor::render_successor_command(&tampered)
+        mudi::successor::render_successor_command(&tampered)
             .unwrap_err()
             .to_string(),
         "Successor arguments do not match the Handoff Artifact"
@@ -2317,7 +2366,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
     plan.arguments.pop();
     plan.executable = PathBuf::from("/bin/sh");
     assert_eq!(
-        sessionmesh::successor::render_successor_command(&substituted_executable)
+        mudi::successor::render_successor_command(&substituted_executable)
             .unwrap_err()
             .to_string(),
         "Successor Launch Plan does not match its Operation Task"
@@ -2344,7 +2393,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
 #[cfg(unix)]
 #[test]
 fn terminal_app_launches_the_foreground_helper_and_failure_preserves_the_ready_result() {
-    use sessionmesh::successor::{MacosTerminalLauncher, TerminalLauncher};
+    use mudi::successor::{MacosTerminalLauncher, TerminalLauncher};
 
     let temp = TempDir::new("terminal-app-launcher");
     let source_path = temp.path().join("source.jsonl");
@@ -2374,7 +2423,7 @@ fn terminal_app_launches_the_foreground_helper_and_failure_preserves_the_ready_r
     let ready = HandoffWorker::new(paths.clone(), executables)
         .run(&task.id, 20_000)
         .unwrap();
-    let helper = temp.path().join("SessionMesh helper 'quoted' $value");
+    let helper = temp.path().join("Mudi helper 'quoted' $value");
     fs::write(
         &helper,
         "#!/bin/sh\npwd > \"$0.cwd\"\nprintf '%s\\n' \"$@\" > \"$0.args\"\n",
@@ -2441,7 +2490,7 @@ fn terminal_app_launches_the_foreground_helper_and_failure_preserves_the_ready_r
         metadata.failure_code.as_deref(),
         Some("terminal_app_launch_failed")
     );
-    assert!(sessionmesh::successor::render_successor_command(&retained).is_ok());
+    assert!(mudi::successor::render_successor_command(&retained).is_ok());
 }
 
 #[cfg(unix)]
@@ -2488,7 +2537,7 @@ fn foreground_helper_inherits_interactive_streams_waits_and_persists_no_conversa
         .run(&task.id, 20_000)
         .unwrap();
     let started = Instant::now();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sessionmesh"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mudi"))
         .arg("--launch-successor")
         .arg("--task-store")
         .arg(&paths.task_store)
@@ -2627,9 +2676,9 @@ fn foreground_helper_links_claude_after_exact_pid_state_evidence_appears() {
         extra_dirs: Vec::new(),
     };
 
-    assert!(sessionmesh::successor::run_successor_from_args_with_config(
+    assert!(mudi::successor::run_successor_from_args_with_config(
         [
-            "sessionmesh".into(),
+            "mudi".into(),
             "--launch-successor".into(),
             "--task-store".into(),
             paths.task_store.as_os_str().to_owned(),
@@ -2722,9 +2771,9 @@ fn foreground_helper_links_codex_only_to_the_rollout_held_by_the_exact_process()
         extra_dirs: Vec::new(),
     };
 
-    assert!(sessionmesh::successor::run_successor_from_args_with_config(
+    assert!(mudi::successor::run_successor_from_args_with_config(
         [
-            "sessionmesh".into(),
+            "mudi".into(),
             "--launch-successor".into(),
             "--task-store".into(),
             paths.task_store.as_os_str().to_owned(),
@@ -2831,9 +2880,9 @@ fn concurrent_same_directory_claude_launches_link_each_task_by_its_own_process()
     };
     let launch = |task_id: String, config: Config, task_store: PathBuf| {
         std::thread::spawn(move || {
-            sessionmesh::successor::run_successor_from_args_with_config(
+            mudi::successor::run_successor_from_args_with_config(
                 [
-                    "sessionmesh".into(),
+                    "mudi".into(),
                     "--launch-successor".into(),
                     "--task-store".into(),
                     task_store.into_os_string(),
@@ -2927,9 +2976,9 @@ fn concurrent_same_directory_codex_launches_link_each_task_by_its_held_rollout()
     };
     let launch = |task_id: String, config: Config, task_store: PathBuf| {
         std::thread::spawn(move || {
-            sessionmesh::successor::run_successor_from_args_with_config(
+            mudi::successor::run_successor_from_args_with_config(
                 [
-                    "sessionmesh".into(),
+                    "mudi".into(),
                     "--launch-successor".into(),
                     "--task-store".into(),
                     task_store.into_os_string(),
@@ -3007,7 +3056,7 @@ fn foreground_helper_launch_failure_is_bounded_and_preserves_the_ready_result() 
         .run(&task.id, 20_000)
         .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sessionmesh"))
+    let output = Command::new(env!("CARGO_BIN_EXE_mudi"))
         .arg("--launch-successor")
         .arg("--task-store")
         .arg(&paths.task_store)
@@ -3031,7 +3080,7 @@ fn foreground_helper_launch_failure_is_bounded_and_preserves_the_ready_result() 
         metadata.failure_code.as_deref(),
         Some("successor_provider_start_failed")
     );
-    assert!(sessionmesh::successor::render_successor_command(&retained).is_ok());
+    assert!(mudi::successor::render_successor_command(&retained).is_ok());
 }
 
 #[test]
@@ -3215,7 +3264,7 @@ fn task_store_never_contains_prompt_or_artifact_content() {
         }
         let contents = fs::read(entry.path()).unwrap();
         for prohibited in [
-            b"/sessionmesh-handoff\n".as_slice(),
+            b"/mudi-handoff\n".as_slice(),
             b"Ship Assisted Handoff.".as_slice(),
             b"Task execution is implemented.".as_slice(),
         ] {
@@ -3837,7 +3886,7 @@ fn detached_worker_completes_after_the_launching_service_is_dropped() {
     let claude_sessions_dir = temp.path().join("claude-sessions");
     fs::create_dir(&claude_sessions_dir).unwrap();
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         claude_sessions_dir,
@@ -3893,7 +3942,7 @@ fn detached_worker_receives_managed_skill_roots_and_revalidates_the_installation
     let claude_sessions_dir = temp.path().join("claude-sessions");
     fs::create_dir(&claude_sessions_dir).unwrap();
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         claude_sessions_dir,
@@ -3919,7 +3968,7 @@ fn detached_worker_receives_managed_skill_roots_and_revalidates_the_installation
     assert_eq!(completed.state, OperationTaskState::Ready);
     assert_eq!(
         fs::read_to_string(claude.with_extension("prompt")).unwrap(),
-        "/sessionmesh-handoff\n"
+        "/mudi-handoff\n"
     );
 }
 
@@ -3940,7 +3989,7 @@ fn running_task_persists_revalidatable_worker_and_provider_evidence() {
     };
     let executables = ProviderExecutables::new(claude, codex);
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         temp.path().join("claude-sessions"),
@@ -3997,7 +4046,7 @@ fn reconciliation_promotes_only_the_declared_final_artifact_after_publication_cr
     };
     let executables = ProviderExecutables::new(claude, codex);
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         temp.path().join("claude-sessions"),
@@ -4059,7 +4108,7 @@ fn reconciliation_keeps_the_successor_executable_selected_at_authorization() {
     };
     let executables = ProviderExecutables::new(claude.clone(), selected_codex.clone());
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables,
         temp.path().join("claude-sessions"),
@@ -4113,7 +4162,7 @@ fn reconciliation_keeps_the_successor_executable_selected_at_authorization() {
             .map(|plan| &plan.executable),
         Some(&selected_codex)
     );
-    assert!(sessionmesh::successor::render_successor_command(&ready).is_ok());
+    assert!(mudi::successor::render_successor_command(&ready).is_ok());
     std::thread::sleep(Duration::from_millis(1_100));
 }
 
@@ -4134,7 +4183,7 @@ fn confirmed_cancellation_after_prompt_gracefully_stops_the_owned_provider() {
     };
     let executables = ProviderExecutables::new(claude, codex);
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         temp.path().join("claude-sessions"),
@@ -4196,7 +4245,7 @@ fn valid_result_completed_during_cancellation_becomes_ready() {
     let candidate_complete = claude.with_extension("candidate-complete");
     let executables = ProviderExecutables::new(claude, codex);
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         temp.path().join("claude-sessions"),
@@ -4249,7 +4298,7 @@ fn running_deadline_gracefully_stops_provider_and_resolves_known_failure() {
     };
     let executables = ProviderExecutables::new(claude, codex);
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         temp.path().join("claude-sessions"),
@@ -4314,7 +4363,7 @@ fn crash_after_prompt_becomes_interrupted_without_accepting_partial_output_or_re
     };
     let executables = ProviderExecutables::new(claude, codex.clone());
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         temp.path().join("claude-sessions"),
@@ -4352,10 +4401,7 @@ fn crash_after_prompt_becomes_interrupted_without_accepting_partial_output_or_re
         );
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert_eq!(
-        fs::read_to_string(&prompt_path).unwrap(),
-        "$sessionmesh-handoff\n"
-    );
+    assert_eq!(fs::read_to_string(&prompt_path).unwrap(), "$mudi-handoff\n");
 
     let observer_launches = RecordingWorkerLauncher::default();
     let launches = observer_launches.launches.clone();
@@ -4402,7 +4448,7 @@ fn crash_after_prompt_becomes_interrupted_without_accepting_partial_output_or_re
     assert!(launches.lock().unwrap().is_empty());
     assert_eq!(
         fs::read_to_string(codex.with_extension("prompt")).unwrap(),
-        "$sessionmesh-handoff\n"
+        "$mudi-handoff\n"
     );
 }
 
@@ -4527,7 +4573,7 @@ fn interrupted_task_retries_only_after_reconciliation_proves_process_absence() {
     };
     let executables = ProviderExecutables::new(claude, codex.clone());
     let launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         temp.path().join("claude-sessions"),
@@ -4569,7 +4615,7 @@ fn interrupted_task_retries_only_after_reconciliation_proves_process_absence() {
     fs::write(codex.with_extension("retry"), "").unwrap();
     drop(handoff);
     let retry_launcher = DetachedWorkerLauncher::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_sessionmesh")),
+        PathBuf::from(env!("CARGO_BIN_EXE_mudi")),
         paths.clone(),
         executables.clone(),
         temp.path().join("claude-sessions"),
@@ -5694,7 +5740,7 @@ fn deletion_requires_owner_only_artifact_root_and_task_directory() {
     assert!(root_error.to_string().contains("Artifact root"));
     assert!(artifact_path.is_file());
     let deleting = handoff.task(&task.id).unwrap().unwrap();
-    assert!(sessionmesh::successor::render_successor_command(&deleting)
+    assert!(mudi::successor::render_successor_command(&deleting)
         .unwrap_err()
         .to_string()
         .contains("being deleted"));

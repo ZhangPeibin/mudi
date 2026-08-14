@@ -34,9 +34,9 @@ The candidate product direction is a local **continuity layer** for coding work:
 > The work should remain understandable and recoverable while provider-native Sessions
 > remain distinct, replaceable workers.
 
-SessionMesh would not become a model, a transcript archive, an issue tracker, or the
+Mudi would not become a model, a transcript archive, an issue tracker, or the
 authority for product requirements. Claude Code and Codex CLI continue to own reasoning,
-tool execution, and their native Sessions. SessionMesh owns only local execution evidence,
+tool execution, and their native Sessions. Mudi owns only local execution evidence,
 explicitly authorized control, and the developer-facing continuity surface.
 
 ## The developer outcome
@@ -52,7 +52,7 @@ the developer can inspect a small, evidence-backed account of:
 - decisions, unresolved risks, and the next useful action; and
 - whether continuation is the same native Session or a distinct Successor Session.
 
-The important promise is not that SessionMesh produces a cleverer summary. It is that a
+The important promise is not that Mudi produces a cleverer summary. It is that a
 developer can quickly determine what is known, what is an Agent claim, and what has
 verifiable local evidence.
 
@@ -78,7 +78,7 @@ The following invariants stay in force:
 - Starting, attaching, detaching, and resuming are explicit control operations; observation
   does not grant authority.
 - Ambiguous identity or process evidence stays unlinked rather than being guessed.
-- SessionMesh stores no prompt bodies, generated summaries, tool arguments, tool output, or
+- Mudi stores no prompt bodies, generated summaries, tool arguments, tool output, or
   repository file contents in its local stores.
 
 ## Accepted v2.0.1 direction and open design
@@ -160,7 +160,7 @@ The continuity surface should make it difficult to accidentally continue the sam
 two conflicting places. At minimum it must surface:
 
 - whether the source Session has a validated Open Current Run;
-- Shared Worktree Risk already observed by SessionMesh; and
+- Shared Worktree Risk already observed by Mudi; and
 - whether the requested continuation is a same-Session resume or a separate Successor.
 
 It must not silently resume a Session alongside a validated Open Current Run, overwrite a
@@ -186,15 +186,15 @@ a second project-management hierarchy.
 
 1. The developer chooses a Project and Worktree, then explicitly starts a Managed Session
    through the v2.0.0 flow.
-2. SessionMesh records only the metadata and conclusive launch evidence allowed by the
+2. Mudi records only the metadata and conclusive launch evidence allowed by the
    current privacy and control rules. The developer works in the Provider terminal.
 3. Before a context limit, a model change, or a break, the developer explicitly requests a
-   checkpoint. SessionMesh gathers allowed local evidence and presents any Agent-proposed
+   checkpoint. Mudi gathers allowed local evidence and presents any Agent-proposed
    statements separately for confirmation or correction.
 4. To continue with the same provider-native Session, the developer authorizes precise
    resume once its prior Current Run has exited.
 5. To continue through a different Provider or a new conversation, the developer uses the
-   existing explicit Handoff path. SessionMesh creates and later links a distinct Successor
+   existing explicit Handoff path. Mudi creates and later links a distinct Successor
    Session only through conclusive launched-process evidence.
 6. The next Session opens with the approved, evidence-backed continuity material, while
    the developer can still inspect the exact source Session, repository evidence, and
@@ -203,12 +203,12 @@ a second project-management hierarchy.
 ## Explicit non-goals for this discussion slice
 
 - Replacing GitHub Issues, PRDs, or ADRs with an internal work-item tracker.
-- Treating SessionMesh as an Agent runtime or interpreting transcripts as product truth.
+- Treating Mudi as an Agent runtime or interpreting transcripts as product truth.
 - Automatically deciding that a Session is complete from terminal text or a final response.
 - Unattended switching, delegation, or cross-provider Session control.
 - Automatically advancing an Execution Plan or Flow.
 - Uploading coding context, source code, or provider conversation content to a remote
-  SessionMesh service.
+  Mudi service.
 - An embedded terminal emulator.
 
 ## Product measures to validate the direction
@@ -232,7 +232,7 @@ These are discussion targets, not launch criteria yet:
    Artifact or remain a rendered view over other evidence?
 2. Which fields must be developer-authored, which may be Agent-proposed, and which are
    mechanically observed facts?
-3. May SessionMesh generate the Agent-proposed portion from a provider conversation without
+3. May Mudi generate the Agent-proposed portion from a provider conversation without
    retaining that conversation? If so, what exact authorization and privacy boundary applies?
 4. What is the smallest checkpoint interaction that is fast enough for repeat use while
    keeping Handoff, resume, and provider launch explicit?

@@ -4,15 +4,15 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug SessionMesh TUI",
+      "name": "Debug Mudi TUI",
       "cargo": {
         "args": [
           "build",
           "--bin",
-          "sessionmesh"
+          "mudi"
         ],
         "filter": {
-          "name": "sessionmesh",
+          "name": "mudi",
           "kind": "bin"
         }
       },
@@ -20,7 +20,7 @@
       "cwd": "${workspaceFolder}",
       "env": {
         "RUST_BACKTRACE": "1",
-        "SESSIONMESH_DATA_DIR": "/tmp/sessionmesh-vscode-debug"
+        "MUDI_DATA_DIR": "/tmp/mudi-vscode-debug"
       },
       "initCommands": [
         "breakpoint set --file ${workspaceFolder}/src/main.rs --line 230"

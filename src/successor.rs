@@ -91,7 +91,12 @@ where
     I: IntoIterator<Item = S>,
     S: Into<OsString>,
 {
-    run_successor_from_args_with_config(args, &crate::config::Config::load())
+    let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    if args.get(1).map(OsString::as_os_str) != Some(OsStr::new("--launch-successor")) {
+        return Ok(false);
+    }
+    let config = crate::config::Config::load()?;
+    run_successor_from_args_with_config(args, &config)
 }
 
 pub fn run_successor_from_args_with_config<I, S>(
@@ -220,7 +225,7 @@ impl TerminalLauncher for MacosTerminalLauncher {
             .ok_or_else(|| anyhow!("Operation Task is unavailable"))?;
         validate_successor_launch_plan(&task)?;
         if !self.helper_executable.is_absolute() || !is_executable(&self.helper_executable) {
-            return Err(anyhow!("SessionMesh launch helper is invalid"));
+            return Err(anyhow!("Mudi launch helper is invalid"));
         }
         let task_store = path_text(&self.task_store_path, "Task Store path")?;
         let command = render_process_command(

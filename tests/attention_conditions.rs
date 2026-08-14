@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 
-use sessionmesh::attention::{
-    AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity,
-};
-use sessionmesh::domain::{
+use mudi::attention::{AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity};
+use mudi::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, Worktree,
 };
 
@@ -18,7 +16,7 @@ fn session(
     Session {
         provider,
         id: id.into(),
-        provenance: sessionmesh::domain::SessionProvenance::Observed,
+        provenance: mudi::domain::SessionProvenance::Observed,
         source: Default::default(),
         project: Some(Project {
             identity: ProjectIdentity::GitCommonDir(PathBuf::from(project_path).join(".git")),

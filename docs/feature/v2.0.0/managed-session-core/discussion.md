@@ -8,7 +8,7 @@ discussion refines a later PRD and must not silently expand that boundary.
 
 ## 问题
 
-SessionMesh 已能被动观察 Claude Code 与 Codex CLI 的 provider-native Session，但仅凭
+Mudi 已能被动观察 Claude Code 与 Codex CLI 的 provider-native Session，但仅凭
 JSONL、PID 或终端名称，无法安全地把一个正在运行的 Provider 进程当作可控制对象。开发者
 缺少一个可靠入口来启动、辨认、重新访问并精确恢复自己的本地 Coding Session；TUI 重启、
 PID 重用或外部终端启动都会使“我是否仍有控制权”变得不确定。
@@ -23,19 +23,19 @@ PID 重用或外部终端启动都会使“我是否仍有控制权”变得不�
 - 始终区分 Provider-native Session、Current Run 与 tmux 运行环境；
 - 确认创建后，自动在独立原生终端中进入该 Session，并在前一个 Run 已退出时精确恢复同一原生
   Session；
-- 在 SessionMesh 正常退出或重启后，看见已验证的受管状态，而不是由名称、时间或目录猜测；
-- 继续观察外部启动的 Session，但不会误以为它们已受 SessionMesh 控制。
+- 在 Mudi 正常退出或重启后，看见已验证的受管状态，而不是由名称、时间或目录猜测；
+- 继续观察外部启动的 Session，但不会误以为它们已受 Mudi 控制。
 
 ## 当前体验
 
 当前代码已具备 Provider JSONL 观察、Project/Worktree 解析、live-process 证据，以及
-Handoff Operation Task 的部分基础。它尚未建立由 SessionMesh 启动并持有的 Managed
+Handoff Operation Task 的部分基础。它尚未建立由 Mudi 启动并持有的 Managed
 Current Run、私有 tmux 环境或这三者的启动绑定证据。
 
 因此，观察到一个 Session 不等于能控制它；在 TUI 重启后，也不能通过“最新的进程”或
-目录位置安全地重新取得控制权。创建流程中的首条 Prompt 也不属于 SessionMesh；它由开发者
+目录位置安全地重新取得控制权。创建流程中的首条 Prompt 也不属于 Mudi；它由开发者
 进入原生 Provider CLI 后输入。该 Prompt 让 Provider 创建 native Session 与其 source JSONL；
-在它发生前，SessionMesh 没有可用于绑定的 Provider source record。
+在它发生前，Mudi 没有可用于绑定的 Provider source record。
 
 ## 范围
 
@@ -64,9 +64,9 @@ Current Run、私有 tmux 环境或这三者的启动绑定证据。
 - Execution Plan、Workflow Run、依赖调度与自动 Session-to-Session 协作。
 - Skill-backed Action dispatch、结构化 Action Result、`needs_input` 与自动后继 Action。
 - 把外部启动的 Current Run 变为可控对象，或通过 tmux 名称、目录、时间戳猜测身份。
-- 由 SessionMesh 接收、存储或投递开发者的首条 Prompt，或提供对已有 Managed Session 的通用 Prompt
+- 由 Mudi 接收、存储或投递开发者的首条 Prompt，或提供对已有 Managed Session 的通用 Prompt
   发送接口。仅 New 时、由开发者显式启用的 Binding Initializer 是受限例外。
-- 长驻 SessionMesh daemon、内嵌终端模拟器、MCP/Agent 回调通道。
+- 长驻 Mudi daemon、内嵌终端模拟器、MCP/Agent 回调通道。
 - 依赖 Codex app-server 作为共同的 Managed Session 基础。
 
 ## 所需行为
@@ -82,7 +82,7 @@ Current Run、私有 tmux 环境或这三者的启动绑定证据。
    路径、Session ID 或其他动态数据：
 
    ```text
-   SessionMesh initialization only.
+   Mudi initialization only.
    Do not inspect files, run commands, or make changes.
    Reply with exactly: READY.
    ```
@@ -102,18 +102,18 @@ Current Run、私有 tmux 环境或这三者的启动绑定证据。
    不能直接升级为 Managed。
 3. **访问**：确认创建后，首个 Terminal Access Adapter 自动打开独立的 macOS `Terminal.app`
    窗口，并 attach 到本次 Managed Launch Registration 所创建的私有 tmux。开发者在该窗口直接使用
-   Codex/Claude；SessionMesh TUI 留在原窗口。终端在 tmux 与 Provider CLI 启动后立即打开，
+   Codex/Claude；Mudi TUI 留在原窗口。终端在 tmux 与 Provider CLI 启动后立即打开，
    不等待 Binding Receipt；绑定在后台继续。该终端不是内嵌终端，detach 或正常关闭 TUI 不会
    终止 tmux 环境或 Provider 进程。若 Terminal.app 打开或 attach 失败，开发者可显式执行
    `Retry Open Terminal`；它只重试终端访问，不重启 Provider、不重建 tmux，也不重复绑定。对于
    已验证且仍 Open 的 Managed Current Run，开发者还可使用 `Copy Attach Command`，复制
-   `sessionmesh attach <opaque-run-ref>` 后在自己已有的终端执行。该命令由 SessionMesh 解析并重新
+   `mudi attach <opaque-run-ref>` 后在自己已有的终端执行。该命令由 Mudi 解析并重新
    验证目标后才 attach；它不暴露 tmux 名称或 socket 路径，不接管当前终端，也不启动 Provider。
 4. **精确恢复**：用户可见的 `Resume` 直接调用对应 Provider 的原生恢复命令，并以指定 native Session
    ID 启动新的 Managed Current Run。已验证为 Open 的 Managed Current Run 只能重新打开终端进入，不能
    Resume 或被自动结束。只有已验证为 Exited 的同一 native Session 才显示 Resume；开发者再次显式授权后，
    Launch Broker 执行该 Provider 的原生 `Resume`，并保持同一 native Session ID。
-5. **重启协调**：重启后的 SessionMesh 必须能找回它自己创建且已验证的 Managed Session 与
+5. **重启协调**：重启后的 Mudi 必须能找回它自己创建且已验证的 Managed Session 与
    Managed Current Run。它只根据本机持久的最小管理元数据和实时证据重建关联；任何不确定的结果保持
    未关联，而不是自动接管或重试。
 6. **Tree 识别**：Project Tree 的每个已验证 Session 行都显示紧凑的控制权图形标识，区分
@@ -148,7 +148,7 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   Current Run 的唯一依据。
 - **Registry and reconciler** 持久化最小管理元数据，并在重启后依据实时证据恢复已验证关系。
 - **Terminal Access Adapter** 的首个实现打开独立的 macOS `Terminal.app` 窗口并 attach/detach；
-  对已验证的 Open Managed Current Run，它还提供由 `sessionmesh attach <opaque-run-ref>` 使用的
+  对已验证的 Open Managed Current Run，它还提供由 `mudi attach <opaque-run-ref>` 使用的
   受验证 attach 路径。它不取得 Provider 对话控制权，也不向 Provider 投递 Prompt。其他终端
   适配器不属于 v2.0.0。
 - 用户所见的 `New` 与 `Resume` 只对应 Provider-native 操作；为提供终端访问而新开、复用或关闭多少
@@ -176,25 +176,25 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   Diagnostics`。前者仅访问已知 tmux 现场；后者只含 Provider、Project/Worktree、进程/证据状态和错误，
   不含 Prompt 或 Provider 对话。它不提供 Resume、Cancel Start 或接管为 Managed 的操作。
 - Terminal.app 打开或 attach 失败不改变 Provider、tmux、Managed Launch Registration 或 Binding
-  Receipt 的状态。SessionMesh 保留具体错误并提供显式 `Retry Open Terminal`；该 Retry 不自动执行，也不
+  Receipt 的状态。Mudi 保留具体错误并提供显式 `Retry Open Terminal`；该 Retry 不自动执行，也不
   重试任何 Provider 启动或绑定步骤。
 - 已复制的 attach 命令在执行时若其 opaque Run reference 已失效、Run 不再 Open 或证据无法重新验证，
   必须失败且不启动、终止或修改 Provider/tmux。它不能回退为直接暴露 tmux 名称或 socket 路径。
 - PID 重用、tmux pane 重用或重启后的模糊证据不能恢复管理关系。
 - 发现一个已存在的 Externally Started Current Run 只更新观察状态，不能赋予控制能力。
 - 对仍为 Open 的 Current Run 不发起同一 Session 的精确恢复；恢复前必须得到其已退出的验证。
-- 已验证为 Open 的 Managed Current Run 只能执行终端访问；SessionMesh 不会为了 Resume 自动
+- 已验证为 Open 的 Managed Current Run 只能执行终端访问；Mudi 不会为了 Resume 自动
   结束 Provider 进程或并行启动第二个受管 Run。
 - 正常 TUI 退出只 detach；异常退出后的状态必须通过下一次协调确定，不能假定仍然运行或已经
   结束。
 
 ## 约束与依赖
 
-- 遵守 ADR 0009：每个 Managed Current Run 必须运行在 SessionMesh 创建的私有 tmux 环境中。
+- 遵守 ADR 0009：每个 Managed Current Run 必须运行在 Mudi 创建的私有 tmux 环境中。
 - 遵守 ADR 0002：启动与恢复都需要一次明确、目标明确的授权；观察、Alert 与阈值不构成授权。
 - 遵守 ADR 0001：Provider 差异封装在 adapter 内，产品层不依赖 Provider 私有字段。
 - Source JSONL 是观察状态的权威来源；衍生索引可重建。控制权还必须有启动和进程证据。
-- 为使 SessionMesh 重启后找回它自己创建的已验证运行，本机持久化最小管理元数据：
+- 为使 Mudi 重启后找回它自己创建的已验证运行，本机持久化最小管理元数据：
   Project/Worktree、Provider、native Session ID、Title/Description、Managed Current Run 与 tmux
   受管标识、Binding Receipt 和必要时间戳。不得持久化 Prompt、终端正文、Provider 对话、工具
   输入输出或项目文件内容。
@@ -206,9 +206,9 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   现有 Session、Managed Current Run 或 Operation Task State 词汇。
 - Binding Initializer 默认关闭，只能在 `New` 的显式授权中使用。Provider adapter 应优先使用该 Provider
   已文档化的非对话初始化能力；若没有该能力，只能在本次显式选择后投递固定、系统拥有的初始化消息。
-  无论哪种方式，SessionMesh 都不得保存该消息或 Provider 回复；消息若被采用，仍会保留在 Provider
+  无论哪种方式，Mudi 都不得保存该消息或 Provider 回复；消息若被采用，仍会保留在 Provider
   自己的原生对话与 source JSONL 中。
-- 当前固定 Binding Initializer 消息为：`SessionMesh initialization only. Do not inspect files, run
+- 当前固定 Binding Initializer 消息为：`Mudi initialization only. Do not inspect files, run
   commands, or make changes. Reply with exactly: READY.` 它不得携带动态用户、Project、Worktree、Title
   或 Session 数据。`READY` 或任意 Provider 回复均不构成 Binding Receipt 的证据。
 - 没有 Tree 选择上下文时的目录选择必须采用成熟、公开的第三方库；具体库由后续技术方案依据 Rust
@@ -222,7 +222,7 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   推断。
 - Handoff 创建的是不同的 Successor Session，不继承源 Session 的身份或本地元数据。
 - 模糊证据保持未关联，外部启动的 Run 保持只读观察。
-- 创建表单不接收首条 Prompt；SessionMesh 只启动并绑定原生 Provider CLI，开发者在该 CLI
+- 创建表单不接收首条 Prompt；Mudi 只启动并绑定原生 Provider CLI，开发者在该 CLI
   中输入 Prompt。
 - 用户可见的 `New` 和 `Resume` 分别直接执行所选 Provider 的原生新建与原生恢复；`Managed` 是绑定
   验证后的管理状态，不是用户需要额外理解或选择的第二套 New/Resume。终端窗口数量不改变该语义。
@@ -231,26 +231,26 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
 - Binding Initializer 每次 New 最多执行一次；它失败时不自动或手动重试，以免向原生对话重复写入系统
   初始化消息。开发者可以输入真实任务，后续仍按正常证据绑定。
 - 只有 `Binding` 中的 Managed Launch Registration 可执行 `Cancel Start`。取消会停止这次启动并清理
-  SessionMesh 的登记与 tmux；任何已写出的 Provider source 继续按只读观察处理。`Needs Review` 没有
+  Mudi 的登记与 tmux；任何已写出的 Provider source 继续按只读观察处理。`Needs Review` 没有
   快捷取消或自动终止。
 - `Needs Review` 仅允许终端现场检查与无内容的诊断复制：`Open Terminal`/`Retry Open Terminal` 和
   `Copy Diagnostics`。它没有 Resume、Cancel Start、自动重试或接管为 Managed 的入口。
 - 创建 Managed Session 必须有开发者提供的 Title；它立即成为 Session Alias，不能回退为
   Short Session ID 或自动生成的名称。
 - Description 在创建时可选；它不是 Prompt、当前任务状态或 Provider-native 元数据。
-- Description 可在创建后补充或编辑；修改只更新 SessionMesh 本地元数据。
+- Description 可在创建后补充或编辑；修改只更新 Mudi 本地元数据。
 - Prompt Control/Manager 是后续独立能力。Managed Session 的启动边界应允许将来接入该 seam，
   但 v2.0.0 不暴露 Prompt 投递或控制接口。
 - 整个 Managed Session 生命周期采用明确的模块边界：授权、启动、Provider adapter、证据绑定、
   登记/协调与终端访问各自负责自己的输入、允许副作用和可验证输出；后续能力只能通过这些边界
   接入。
-- 确认创建后，SessionMesh 自动打开独立的原生终端并 attach 到私有 tmux；这是进入 Managed
-  Session 的主路径，SessionMesh TUI 保留在原终端。
+- 确认创建后，Mudi 自动打开独立的原生终端并 attach 到私有 tmux；这是进入 Managed
+  Session 的主路径，Mudi TUI 保留在原终端。
 - v2.0.0 的首个自动终端入口固定为 macOS `Terminal.app`，不引入用户终端偏好设置。
 - 终端访问失败与 Provider 启动失败分离：前者可由开发者显式 `Retry Open Terminal`，且 Retry
   只重试终端访问。
 - 对已验证且仍 Open 的 Managed Current Run，除 `Open Terminal` 外还提供 `Copy Attach Command`。
-  它复制 `sessionmesh attach <opaque-run-ref>`，供开发者在自己已有的终端显式执行；SessionMesh 必须
+  它复制 `mudi attach <opaque-run-ref>`，供开发者在自己已有的终端显式执行；Mudi 必须
   在执行时重新验证目标，且不得把 tmux 内部标识暴露为稳定的对外接口。
 - 使用持久的 Managed Launch Registration 记录启动意图；只有 Evidence Binder 签发 Binding Receipt
   后，才原子升级为 Managed Session 与 Managed Current Run。
@@ -258,7 +258,7 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   未关联 Session；它不自动接管、终止或重试。
 - 同一 native Session 存在 Open Managed Current Run 时只提供终端访问；Resume 仅在该 Run
   已验证 Exited 后出现，并需新的显式授权。
-- SessionMesh 重启后应找回它自己创建且已验证的 Managed Session 与 Managed Current Run；这依赖
+- Mudi 重启后应找回它自己创建且已验证的 Managed Session 与 Managed Current Run；这依赖
   仅存于本机的最小管理元数据和实时证据重新验证，绝不通过名称、时间或目录猜测。
 - Project Tree 中每个已验证 Session 行使用非文字的图形加颜色标识其 Managed 或 Observed
   来源；图形本身必须可区分，颜色只用于强化快速扫描。
@@ -300,7 +300,7 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   current code facts, `CONTEXT.md`, and ADR 0001/0002/0003/0009.
 - Recorded that Managed Session identity and control evidence are the central gap; no version
   scope, PRD, issue, or implementation was changed.
-- Confirmed launch option A: SessionMesh starts and binds the native CLI, while the developer
+- Confirmed launch option A: Mudi starts and binds the native CLI, while the developer
   enters the first Prompt inside that CLI. A future Prompt Control/Manager may integrate at
   the startup seam, but Prompt transport remains outside v2.0.0.
 - Confirmed that the full Managed Session lifecycle is modularized at explicit boundaries,
@@ -309,15 +309,15 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
 - Confirmed that Title is mandatory at creation and immediately becomes the Session Alias;
   no automatic or Short Session ID fallback is allowed for a newly created Managed Session.
 - Confirmed that Description is optional at creation.
-- Confirmed that Description may be added or edited after creation as SessionMesh-owned local
+- Confirmed that Description may be added or edited after creation as Mudi-owned local
   metadata; it never changes the Provider-native Session.
 - Replaced the provisional launch-attempt model with a durable Managed Launch Registration and
   Binding Receipt: only a Receipt upgrades a Managed Launch Registration atomically to a
   Managed Session and Managed Current Run. A potentially live but unprovable launch remains
   `Needs Review`, not an unlinked Session.
-- Confirmed the primary access flow: after the developer confirms creation, SessionMesh opens
+- Confirmed the primary access flow: after the developer confirms creation, Mudi opens
   a separate native terminal window and attaches it to the Managed Launch Registration's
-  private tmux, while leaving the SessionMesh TUI visible in its original terminal.
+  private tmux, while leaving the Mudi TUI visible in its original terminal.
 - Confirmed that the native terminal opens immediately after tmux and the Provider CLI start;
   Binding Receipt validation continues in the background and must not delay first Prompt entry.
 - Confirmed that v2.0.0 opens macOS Terminal.app as its first Terminal Access Adapter; terminal
@@ -337,7 +337,7 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   be supplied by a mature, public third-party library rather than custom-built.
 - Confirmed the Project-only default: pressing `n` with a Project selected pre-fills its main
   Worktree. The creation form keeps the Worktree visible and switchable before confirmation.
-- Confirmed restart recovery: after SessionMesh itself exits and reopens, it should find its
+- Confirmed restart recovery: after Mudi itself exits and reopens, it should find its
   own previously created, verified Managed Sessions and Current Runs. The local registry stores
   only the minimum identity, management, receipt, and timing metadata needed to revalidate that
   relationship; it never stores Prompt, terminal, Provider conversation, tool, or project-file
@@ -360,19 +360,19 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   binding evidence and is never used for Resume. Added the formal term to `CONTEXT.md`.
 - Confirmed the fixed Binding Initializer fallback text. It contains no dynamic user or Project
   data, forbids inspection, commands, and changes, and asks the Provider to reply only `READY`.
-  SessionMesh never treats that reply as proof; JSONL, process, and native Session-ID evidence
+  Mudi never treats that reply as proof; JSONL, process, and native Session-ID evidence
   remain mandatory.
-- Confirmed failure behavior for Binding Initializer: it is one-shot per New. SessionMesh neither
+- Confirmed failure behavior for Binding Initializer: it is one-shot per New. Mudi neither
   automatically resends it nor exposes a manual retry; the native terminal remains available for
   the developer's real task to produce the source record.
 - Confirmed `Cancel Start`: it is available only while a Registration is `Binding`, stops the
-  known launch and cleans its SessionMesh-owned tmux/registration state, while preserving any
+  known launch and cleans its Mudi-owned tmux/registration state, while preserving any
   Provider source as observation. It is intentionally unavailable in `Needs Review`.
 - Confirmed `Needs Review` inspection surface: it offers only terminal access and metadata-only
   diagnostics. Resume, cancel, automatic retry, and promotion to Managed remain unavailable
   until conclusive evidence exists.
 - Confirmed Provider selection: every New requires an explicit Codex CLI or Claude Code choice.
-  SessionMesh does not default to or remember the Provider used by a previous launch.
+  Mudi does not default to or remember the Provider used by a previous launch.
 - Confirmed directory selection resolution: any chosen Git subdirectory resolves to its canonical
   Worktree root and Project, while a non-Git directory is its own Project. An unresolvable path
   blocks New rather than guessing a parent directory or identity.
@@ -381,8 +381,8 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   text and remain distinguishable without color; routine visual refinement may change their
   appearance later without changing the underlying provenance semantics.
 - Confirmed re-entry access for a verified Open Managed Current Run: `Open Terminal` remains the
-  default Terminal.app path, while `Copy Attach Command` copies `sessionmesh attach <opaque-run-ref>`
-  for an explicitly chosen existing terminal. SessionMesh resolves and revalidates that reference
+  default Terminal.app path, while `Copy Attach Command` copies `mudi attach <opaque-run-ref>`
+  for an explicitly chosen existing terminal. Mudi resolves and revalidates that reference
   when the command runs; tmux names and socket paths are never a public command contract.
 - The user confirmed the analysis is ready for a formal PRD and invoked `$to-spec`. The PRD will
-  be published as a GitHub Issue for `ZhangPeibin/SessionMesh` with the `ready-for-agent` label.
+  be published as a GitHub Issue for `ZhangPeibin/mudi` with the `ready-for-agent` label.

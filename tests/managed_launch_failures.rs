@@ -1,14 +1,14 @@
 use anyhow::Result;
-use sessionmesh::domain::{ProjectIdentity, Provider, SourceFormat, SourceMetadata};
-use sessionmesh::managed_sessions::{
+use mudi::domain::{ProjectIdentity, Provider, SourceFormat, SourceMetadata};
+use mudi::managed_sessions::{
     BindingOutcome, EvidenceBinder, ManagedLaunchAction, ManagedLaunchBroker, ManagedLaunchCleanup,
     ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore,
     ManagedLaunchTarget, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
     ProcessEvidence, ProviderNewCommand, ProviderProcessObservation, TmuxLaunchBroker,
     TmuxManagedLaunchCleanup,
 };
-use sessionmesh::providers::state::ProcessIdentity;
-use sessionmesh::providers::{ProviderBindingEvidence, ProviderExecutables};
+use mudi::providers::state::ProcessIdentity;
+use mudi::providers::{ProviderBindingEvidence, ProviderExecutables};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -576,7 +576,7 @@ fn registration(id: &str, working_directory: &Path) -> ManagedLaunchRegistration
             arguments: Vec::new(),
         },
         tmux: PrivateTmuxEnvironment {
-            socket_name: format!("sessionmesh-{id}"),
+            socket_name: format!("mudi-{id}"),
             session_name: "managed".into(),
         },
         created_at_ms: 40_000,
@@ -620,7 +620,7 @@ impl TempDir {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "sessionmesh-managed-launch-failures-{name}-{}-{nonce}",
+            "mudi-managed-launch-failures-{name}-{}-{nonce}",
             std::process::id()
         ));
         fs::create_dir_all(&path).unwrap();

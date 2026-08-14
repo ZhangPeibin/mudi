@@ -196,12 +196,17 @@ impl HandoffWorker {
             store.mark_running(task_id, transition_now_ms(), worker_process)?;
         }
 
-        if let Some(skill_installer) = self.skill_installer.as_ref() {
-            if let Err(failure_code) = skill_installer.verify(task.source_provider) {
-                store.mark_failed(task_id, transition_now_ms(), &failure_code)?;
-                return completed_task(&store, task_id, notifier);
+        let skill_invocation = if let Some(skill_installer) = self.skill_installer.as_ref() {
+            match skill_installer.invocation(task.source_provider) {
+                Ok(invocation) => Some(invocation),
+                Err(failure_code) => {
+                    store.mark_failed(task_id, transition_now_ms(), &failure_code)?;
+                    return completed_task(&store, task_id, notifier);
+                }
             }
-        }
+        } else {
+            None
+        };
 
         if store
             .get(task_id)?
@@ -214,62 +219,63 @@ impl HandoffWorker {
             store.mark_failed(task_id, transition_now_ms(), "source_provider_unavailable")?;
             return completed_task(&store, task_id, notifier);
         };
-        let candidate =
-            match run_source_provider(source_executable, &task, &store, transition_now_ms()) {
-                Ok(candidate) => candidate,
-                Err(ProviderRunError::Failed(candidate)) => {
-                    if let Some(candidate) = candidate
-                        .filter(|candidate| crate::handoff_artifact::validate(candidate).is_ok())
-                    {
-                        return complete_valid_candidate(
-                            &store,
-                            &self.paths,
-                            &task,
-                            &candidate,
-                            transition_now_ms(),
-                            notifier,
-                        );
-                    }
-                    if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
-                        return completed_task(&store, task_id, notifier);
-                    }
-                    if finish_deadline_terminated_provider(&store, task_id, transition_now_ms())? {
-                        return completed_task(&store, task_id, notifier);
-                    }
-                    store.mark_failed(
-                        task_id,
+        let candidate = match run_source_provider(
+            source_executable,
+            &task,
+            &store,
+            transition_now_ms(),
+            skill_invocation.as_deref(),
+        ) {
+            Ok(candidate) => candidate,
+            Err(ProviderRunError::Failed(candidate)) => {
+                if let Some(candidate) = candidate
+                    .filter(|candidate| crate::handoff_artifact::validate(candidate).is_ok())
+                {
+                    return complete_valid_candidate(
+                        &store,
+                        &self.paths,
+                        &task,
+                        &candidate,
                         transition_now_ms(),
-                        "provider_invocation_failed",
-                    )?;
+                        notifier,
+                    );
+                }
+                if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
                     return completed_task(&store, task_id, notifier);
                 }
-                Err(ProviderRunError::Interrupted(candidate)) => {
-                    if let Some(candidate) = candidate
-                        .filter(|candidate| crate::handoff_artifact::validate(candidate).is_ok())
-                    {
-                        return complete_valid_candidate(
-                            &store,
-                            &self.paths,
-                            &task,
-                            &candidate,
-                            transition_now_ms(),
-                            notifier,
-                        );
-                    }
-                    if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
-                        return completed_task(&store, task_id, notifier);
-                    }
-                    if finish_deadline_terminated_provider(&store, task_id, transition_now_ms())? {
-                        return completed_task(&store, task_id, notifier);
-                    }
-                    store.mark_interrupted(
-                        task_id,
-                        transition_now_ms(),
-                        "provider_outcome_uncertain",
-                    )?;
+                if finish_deadline_terminated_provider(&store, task_id, transition_now_ms())? {
                     return completed_task(&store, task_id, notifier);
                 }
-            };
+                store.mark_failed(task_id, transition_now_ms(), "provider_invocation_failed")?;
+                return completed_task(&store, task_id, notifier);
+            }
+            Err(ProviderRunError::Interrupted(candidate)) => {
+                if let Some(candidate) = candidate
+                    .filter(|candidate| crate::handoff_artifact::validate(candidate).is_ok())
+                {
+                    return complete_valid_candidate(
+                        &store,
+                        &self.paths,
+                        &task,
+                        &candidate,
+                        transition_now_ms(),
+                        notifier,
+                    );
+                }
+                if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
+                    return completed_task(&store, task_id, notifier);
+                }
+                if finish_deadline_terminated_provider(&store, task_id, transition_now_ms())? {
+                    return completed_task(&store, task_id, notifier);
+                }
+                store.mark_interrupted(
+                    task_id,
+                    transition_now_ms(),
+                    "provider_outcome_uncertain",
+                )?;
+                return completed_task(&store, task_id, notifier);
+            }
+        };
         if crate::handoff_artifact::validate(&candidate).is_err() {
             if finish_cancelled_provider(&store, task_id, transition_now_ms())? {
                 return completed_task(&store, task_id, notifier);
@@ -498,6 +504,7 @@ fn run_source_provider(
     task: &OperationTask,
     store: &TaskStore,
     now_ms: i64,
+    managed_skill_invocation: Option<&str>,
 ) -> std::result::Result<String, ProviderRunError> {
     let mut command = Command::new(executable);
     let runtime = crate::providers::registry()
@@ -520,10 +527,13 @@ fn run_source_provider(
     store
         .mark_provider_started(&task.id, provider_process)
         .map_err(|_| ProviderRunError::Interrupted(None))?;
-    let invocation = crate::providers::registry()
-        .skill_transport(task.source_provider)
-        .map_err(|_| ProviderRunError::Failed(None))?
-        .handoff_skill_invocation();
+    let invocation = match managed_skill_invocation {
+        Some(invocation) => invocation,
+        None => crate::providers::registry()
+            .skill_transport(task.source_provider)
+            .map_err(|_| ProviderRunError::Failed(None))?
+            .handoff_skill_invocation(),
+    };
     let mut stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => return record_provider_exit_before_prompt(child, task, store, now_ms),

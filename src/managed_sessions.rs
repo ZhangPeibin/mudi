@@ -802,7 +802,7 @@ impl ManagedCurrentRunAccessService {
         opaque_ref: &str,
     ) -> Result<String> {
         let run = self.verify_identity(provider, native_session_id, opaque_ref)?;
-        Ok(format!("sessionmesh attach {}", run.opaque_ref))
+        Ok(format!("mudi attach {}", run.opaque_ref))
     }
 
     pub fn attach_foreground(&mut self, opaque_ref: &str) -> Result<()> {
@@ -826,7 +826,7 @@ impl ManagedCurrentRunAccessService {
     }
 }
 
-/// Handle the public `sessionmesh attach <opaque-run-ref>` contract with injected access.
+/// Handle the public `mudi attach <opaque-run-ref>` contract with injected access.
 /// Returns false when the arguments belong to the normal TUI or another helper mode.
 pub fn run_attach_from_args_with_access<I, S>(
     args: I,
@@ -862,7 +862,7 @@ where
     if args.get(1).map(OsString::as_os_str) != Some(OsStr::new("attach")) {
         return Ok(false);
     }
-    let config = crate::config::Config::load();
+    let config = crate::config::Config::load()?;
     let tmux_executable = discover_tmux_executable().unwrap_or_default();
     let mut access = ManagedCurrentRunAccessService::new(
         ManagedLaunchStore::open(config.managed_launch_store_path())?,
@@ -1008,7 +1008,7 @@ impl EvidenceBinder {
         self.bind_with_policy(store, registration_id, evidence, now_ms, true)
     }
 
-    /// Reconcile a launch retained across a SessionMesh restart without cleanup side effects.
+    /// Reconcile a launch retained across a Mudi restart without cleanup side effects.
     pub fn reconcile_after_restart(
         &self,
         store: &mut ManagedLaunchStore,
@@ -1289,7 +1289,7 @@ impl ManagedSessionService {
                     .new_session_args(request.binding_initializer),
             },
             tmux: PrivateTmuxEnvironment {
-                socket_name: format!("sessionmesh-{id}"),
+                socket_name: format!("mudi-{id}"),
                 session_name: "managed".to_string(),
             },
             created_at_ms: now_ms,
@@ -1365,7 +1365,7 @@ impl ManagedSessionService {
                     .resume_session_args(&verified.native_session_id),
             },
             tmux: PrivateTmuxEnvironment {
-                socket_name: format!("sessionmesh-{id}"),
+                socket_name: format!("mudi-{id}"),
                 session_name: "managed".to_string(),
             },
             created_at_ms: now_ms,
@@ -2849,8 +2849,7 @@ impl ManagedCurrentRunTerminalAccess for MacosManagedTerminalAccess {
 }
 
 pub fn discover_tmux_executable() -> Option<PathBuf> {
-    std::env::var_os("SESSIONMESH_TMUX_EXECUTABLE")
-        .map(PathBuf::from)
+    crate::config::configured_path(["MUDI_TMUX_EXECUTABLE", "SESSIONMESH_TMUX_EXECUTABLE"])
         .filter(|path| validate_executable(path, "tmux").is_ok())
         .or_else(|| {
             std::env::var_os("PATH")

@@ -5,7 +5,7 @@ job so the product boundary, internal architecture, runtime behavior, and deferr
 remain readable independently.
 
 1. [`01-system-context.excalidraw`](./01-system-context.excalidraw) - developer surfaces,
-   SessionMesh control plane, private tmux execution, Providers, and evidence boundaries.
+   Mudi control plane, private tmux execution, Providers, and evidence boundaries.
 2. [`02-logical-components.excalidraw`](./02-logical-components.excalidraw) - interaction,
    application, adapter, and local-system responsibilities and dependencies.
 3. [`03-managed-session-lifecycle.excalidraw`](./03-managed-session-lifecycle.excalidraw) -
@@ -18,7 +18,7 @@ remain readable independently.
    `n` shortcut starts creation from the selected Tree context, or opens directory selection
    when no Project/Worktree is selected.
 
-In diagram 05, the Project Tree uses a solid green square for a SessionMesh launch channel
+In diagram 05, the Project Tree uses a solid green square for a Mudi launch channel
 and a gray diamond for an external channel. The marker shape, as well as its color,
 communicates management provenance.
 

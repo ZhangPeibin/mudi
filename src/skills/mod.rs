@@ -1,4 +1,4 @@
-//! Generic boundary for SessionMesh-managed Skills.
+//! Generic boundary for Mudi-managed Skills.
 
 pub mod handoff;
 
@@ -7,7 +7,7 @@ use anyhow::Result;
 use handoff::ManagedHandoffSkills;
 use std::path::PathBuf;
 
-/// A declared, versioned Skill that SessionMesh may manage locally.
+/// A declared, versioned Skill that Mudi may manage locally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SkillDefinition {
     pub id: &'static str,
@@ -15,7 +15,7 @@ pub struct SkillDefinition {
 }
 
 pub const HANDOFF_SKILL: SkillDefinition = SkillDefinition {
-    id: "sessionmesh-handoff",
+    id: "mudi-handoff",
     version: 1,
 };
 
@@ -28,6 +28,7 @@ pub trait SkillCatalog {
 pub trait SkillInstaller: Send + Sync + std::fmt::Debug {
     fn install_for_first_use(&self) -> Result<()>;
     fn verify(&self, provider: Provider) -> std::result::Result<(), String>;
+    fn invocation(&self, provider: Provider) -> std::result::Result<String, String>;
     fn worker_roots(&self) -> Option<(PathBuf, PathBuf)>;
 }
 
@@ -60,6 +61,12 @@ impl SkillInstaller for ManagedSkillCatalog {
             .map_err(|status| status.failure_code().to_string())
     }
 
+    fn invocation(&self, provider: Provider) -> std::result::Result<String, String> {
+        self.handoff
+            .invocation_for(provider)
+            .map_err(|status| status.failure_code().to_string())
+    }
+
     fn worker_roots(&self) -> Option<(PathBuf, PathBuf)> {
         let (codex, claude) = self.handoff.roots();
         Some((codex.to_path_buf(), claude.to_path_buf()))
@@ -77,7 +84,7 @@ mod tests {
             PathBuf::from("/claude"),
         ));
 
-        assert_eq!(catalog.declared("sessionmesh-handoff"), Some(HANDOFF_SKILL));
+        assert_eq!(catalog.declared("mudi-handoff"), Some(HANDOFF_SKILL));
         assert_eq!(catalog.declared("not-managed"), None);
     }
 }

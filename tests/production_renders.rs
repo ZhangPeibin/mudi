@@ -1,24 +1,22 @@
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use mudi::app::Snapshot;
+use mudi::attention::{AttentionEngine, SessionIdentity};
+use mudi::domain::{
+    Compaction, ContextState, ModelUsage, Project, ProjectIdentity, Provider, Session,
+    SessionState, SourceFormat, SourceMetadata, Usage, UsageSummary, Worktree,
+};
+use mudi::providers::state::ProcessIdentity;
+use mudi::session_labels::{CurationDisposition, SessionLabels};
+use mudi::signals::{ContextAlertLevel, RecentSignal, RecentSignalKind, SharedWorktreeRiskChange};
+use mudi::tasks::{OperationTask, OperationTaskState, SuccessorLaunchPlan};
+use mudi::ui::{draw, Ui, UiAction};
 use ratatui::backend::{Backend, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::Terminal;
-use sessionmesh::app::Snapshot;
-use sessionmesh::attention::{AttentionEngine, SessionIdentity};
-use sessionmesh::domain::{
-    Compaction, ContextState, ModelUsage, Project, ProjectIdentity, Provider, Session,
-    SessionState, SourceFormat, SourceMetadata, Usage, UsageSummary, Worktree,
-};
-use sessionmesh::providers::state::ProcessIdentity;
-use sessionmesh::session_labels::{CurationDisposition, SessionLabels};
-use sessionmesh::signals::{
-    ContextAlertLevel, RecentSignal, RecentSignalKind, SharedWorktreeRiskChange,
-};
-use sessionmesh::tasks::{OperationTask, OperationTaskState, SuccessorLaunchPlan};
-use sessionmesh::ui::{draw, Ui, UiAction};
 
 use std::io;
 use std::path::PathBuf;
@@ -221,16 +219,14 @@ fn fixture_session(
     Session {
         provider,
         id: id.into(),
-        provenance: sessionmesh::domain::SessionProvenance::Observed,
+        provenance: mudi::domain::SessionProvenance::Observed,
         source: SourceMetadata {
             path: PathBuf::from(format!("/Users/fixture/.sessions/{id}.jsonl")),
             format: SourceFormat::JsonLines,
         },
         project: Some(Project {
-            identity: ProjectIdentity::GitCommonDir(PathBuf::from(
-                "/Users/fixture/code/sessionmesh/.git",
-            )),
-            label: "sessionmesh".into(),
+            identity: ProjectIdentity::GitCommonDir(PathBuf::from("/Users/fixture/code/mudi/.git")),
+            label: "mudi".into(),
         }),
         worktree: Some(Worktree {
             root: PathBuf::from(worktree_root),
@@ -278,7 +274,7 @@ fn fixture_session(
 fn production_snapshot() -> Snapshot {
     const NOW: i64 = 1_700_000_000_000;
     const DAY: i64 = 86_400_000;
-    let shared_root = "/Users/fixture/code/sessionmesh";
+    let shared_root = "/Users/fixture/code/mudi";
     let mut critical = fixture_session(
         Provider::ClaudeCode,
         "claude-critical",
@@ -301,7 +297,7 @@ fn production_snapshot() -> Snapshot {
         },
     ];
     critical.source.path = PathBuf::from(
-        "/Users/fixture/.claude/projects/-Users-fixture-code-sessionmesh/claude-critical.jsonl",
+        "/Users/fixture/.claude/projects/-Users-fixture-code-mudi/claude-critical.jsonl",
     );
     let shared = fixture_session(
         Provider::CodexCli,
@@ -319,7 +315,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         150_000,
         NOW - 120_000,
-        ("/Users/fixture/code/sessionmesh-warning", "warning"),
+        ("/Users/fixture/code/mudi-warning", "warning"),
     );
     let idle = fixture_session(
         Provider::CodexCli,
@@ -328,7 +324,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Idle,
         60_000,
         NOW - 180_000,
-        ("/Users/fixture/code/sessionmesh-idle", "idle"),
+        ("/Users/fixture/code/mudi-idle", "idle"),
     );
     let healthy = fixture_session(
         Provider::ClaudeCode,
@@ -337,7 +333,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         40_000,
         NOW - 240_000,
-        ("/Users/fixture/code/sessionmesh-healthy", "healthy"),
+        ("/Users/fixture/code/mudi-healthy", "healthy"),
     );
     let older = fixture_session(
         Provider::ClaudeCode,
@@ -346,7 +342,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Exited,
         50_000,
         NOW - 8 * DAY,
-        ("/Users/fixture/code/sessionmesh-older", "archive"),
+        ("/Users/fixture/code/mudi-older", "archive"),
     );
     let recent_exited = fixture_session(
         Provider::CodexCli,
@@ -355,7 +351,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Exited,
         70_000,
         NOW - DAY,
-        ("/Users/fixture/code/sessionmesh-exited", "done"),
+        ("/Users/fixture/code/mudi-exited", "done"),
     );
     let sessions = vec![
         critical,
@@ -465,7 +461,7 @@ fn focus_fixture_task(now_ms: i64) -> OperationTask {
         source_provider: Provider::ClaudeCode,
         source_session_id: "claude-critical".into(),
         source_record_path: PathBuf::from("/private/source.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::ClaudeCode,
         successor_executable: PathBuf::from("/usr/local/bin/claude"),
         created_at_ms: now_ms - 1_000,
@@ -582,7 +578,7 @@ fn press(ui: &mut Ui, snapshot: &Snapshot, code: KeyCode) {
 fn exited_session_hide_is_confirmed_persisted_and_removed_from_the_normal_tree() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hide-session-{}-{}",
+        "mudi-hide-session-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -662,7 +658,7 @@ fn open_session_cannot_be_hidden() {
 fn hide_confirmation_revalidates_that_the_session_is_still_exited() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hide-revalidation-{}-{}",
+        "mudi-hide-revalidation-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -717,7 +713,7 @@ fn hide_confirmation_revalidates_that_the_session_is_still_exited() {
 fn project_hide_is_a_snapshot_that_skips_and_reports_open_sessions() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hide-project-{}-{}",
+        "mudi-hide-project-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -811,7 +807,7 @@ fn global_hidden_tree_shortcut_reports_an_empty_state_without_opening_a_view() {
 fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hidden-tree-{}-{}",
+        "mudi-hidden-tree-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -827,9 +823,9 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
         .clone();
     first.project = Some(Project {
         identity: ProjectIdentity::GitCommonDir(PathBuf::from(
-            "/Users/fixture/code/sessionmesh-exited/.git",
+            "/Users/fixture/code/mudi-exited/.git",
         )),
-        label: "sessionmesh-exited".into(),
+        label: "mudi-exited".into(),
     });
     let mut second_project = snapshot
         .sessions
@@ -839,9 +835,9 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
         .clone();
     second_project.project = Some(Project {
         identity: ProjectIdentity::GitCommonDir(PathBuf::from(
-            "/Users/fixture/code/sessionmesh-older/.git",
+            "/Users/fixture/code/mudi-older/.git",
         )),
-        label: "sessionmesh-older".into(),
+        label: "mudi-older".into(),
     });
     let mut newer = first.clone();
     newer.provider = Provider::ClaudeCode;
@@ -870,8 +866,8 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
     assert!(collapsed.contains("HIDDEN SESSIONS"));
     assert!(collapsed.contains("2 Projects"), "{collapsed}");
     assert!(collapsed.contains("3 Sessions"));
-    assert!(collapsed.contains("sessionmesh-exited"));
-    assert!(collapsed.contains("sessionmesh-older"));
+    assert!(collapsed.contains("mudi-exited"));
+    assert!(collapsed.contains("mudi-older"));
     assert!(!collapsed.contains("Newest hidden"));
     assert!(!collapsed.contains("Older hidden"));
 
@@ -911,7 +907,7 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
 fn session_detail_hidden_list_entry_opens_the_same_tree_and_restores_its_origin() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-detail-hidden-list-{}-{}",
+        "mudi-detail-hidden-list-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -952,7 +948,7 @@ fn session_detail_hidden_list_entry_opens_the_same_tree_and_restores_its_origin(
 fn hidden_tree_u_restores_the_selected_session_to_its_origin_inventory() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hidden-restore-{}-{}",
+        "mudi-hidden-restore-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -1000,7 +996,7 @@ fn hidden_tree_u_restores_the_selected_session_to_its_origin_inventory() {
 fn hidden_tree_d_permanently_excludes_metadata_without_touching_provider_jsonl() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hidden-delete-{}-{}",
+        "mudi-hidden-delete-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -1080,7 +1076,7 @@ fn hidden_tree_d_permanently_excludes_metadata_without_touching_provider_jsonl()
 fn hidden_tree_project_delete_applies_to_all_current_hidden_sessions() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hidden-project-delete-{}-{}",
+        "mudi-hidden-project-delete-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -1135,7 +1131,7 @@ fn hidden_tree_project_delete_applies_to_all_current_hidden_sessions() {
 fn hidden_tree_project_restore_applies_to_all_current_hidden_sessions() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hidden-project-restore-{}-{}",
+        "mudi-hidden-project-restore-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -1185,7 +1181,7 @@ fn hidden_tree_project_restore_applies_to_all_current_hidden_sessions() {
 fn hidden_exited_visibility_is_consistent_and_only_validated_open_overrides_it() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hidden-projection-{}-{}",
+        "mudi-hidden-projection-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -1249,7 +1245,7 @@ fn hidden_exited_visibility_is_consistent_and_only_validated_open_overrides_it()
 fn hidden_curation_is_dormant_while_source_evidence_is_absent_and_resumes_on_return() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-hidden-source-return-{}-{}",
+        "mudi-hidden-source-return-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -1301,7 +1297,7 @@ fn hidden_curation_is_dormant_while_source_evidence_is_absent_and_resumes_on_ret
 fn ui_with_theme(theme: &str) -> Ui {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let profile_path = std::env::temp_dir().join(format!(
-        "sessionmesh-production-theme-{}-{}-{}.json",
+        "mudi-production-theme-{}-{}-{}.json",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed),
         theme,
@@ -1411,7 +1407,7 @@ fn retained_handoff_task_appears_in_the_minimal_upper_right_tasks_surface() {
         source_provider: Provider::ClaudeCode,
         source_session_id: "claude-critical".into(),
         source_record_path: PathBuf::from("/private/provider-output-must-not-render"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::ClaudeCode,
         successor_executable: PathBuf::from("/usr/local/bin/claude"),
         created_at_ms: snapshot.generated_ms - 1_000,
@@ -1495,7 +1491,7 @@ fn task_deletion_confirmation_progress_failure_removal_and_history_render_in_pro
         source_provider: Provider::ClaudeCode,
         source_session_id: "claude-critical".into(),
         source_record_path: PathBuf::from("/private/source.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::CodexCli,
         successor_executable: PathBuf::from("/usr/local/bin/codex"),
         created_at_ms: snapshot.generated_ms - 10_000,
@@ -1599,7 +1595,7 @@ fn wide_home_places_status_panels_side_by_side_in_the_upper_right() {
         source_provider: Provider::ClaudeCode,
         source_session_id: "claude-critical".into(),
         source_record_path: PathBuf::from("/private/source.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::ClaudeCode,
         successor_executable: PathBuf::from("/usr/local/bin/claude"),
         created_at_ms: snapshot.generated_ms - 1_000,
@@ -1681,7 +1677,7 @@ fn compact_tasks_can_receive_focus_and_scroll_to_every_retained_task() {
             source_provider: Provider::ClaudeCode,
             source_session_id: format!("source-{index:02}"),
             source_record_path: PathBuf::from("/private/source.jsonl"),
-            source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+            source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
             successor_provider: Provider::ClaudeCode,
             successor_executable: PathBuf::from("/usr/local/bin/claude"),
             created_at_ms: snapshot.generated_ms - index * 1_000,
@@ -1739,7 +1735,7 @@ fn task_rows_show_transition_time_and_unread_only_for_unacknowledged_terminal_ou
         source_provider: Provider::ClaudeCode,
         source_session_id: "ready-id".into(),
         source_record_path: PathBuf::from("/private/source.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::ClaudeCode,
         successor_executable: PathBuf::from("/usr/local/bin/claude"),
         created_at_ms: snapshot.generated_ms - 10_000,
@@ -1814,7 +1810,7 @@ fn task_rows_show_transition_time_and_unread_only_for_unacknowledged_terminal_ou
 fn task_rows_resolve_the_current_session_alias_without_changing_task_identity() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-task-title-{}-{}",
+        "mudi-task-title-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -1828,7 +1824,7 @@ fn task_rows_resolve_the_current_session_alias_without_changing_task_identity() 
         source_provider: Provider::ClaudeCode,
         source_session_id: "claude-critical".into(),
         source_record_path: PathBuf::from("/private/source.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::ClaudeCode,
         successor_executable: PathBuf::from("/usr/local/bin/claude"),
         created_at_ms: snapshot.generated_ms - 1_000,
@@ -1883,7 +1879,7 @@ fn task_rows_disambiguate_colliding_session_labels() {
         source_provider: Provider::CodexCli,
         source_session_id: "codex-Asame0000".into(),
         source_record_path: PathBuf::from("/private/source.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::CodexCli,
         successor_executable: PathBuf::from("/usr/local/bin/codex"),
         created_at_ms: snapshot.generated_ms - 1_000,
@@ -1938,7 +1934,7 @@ fn opening_task_detail_requests_deliberate_acknowledgement_for_an_unread_termina
         source_provider: Provider::ClaudeCode,
         source_session_id: "ready-id".into(),
         source_record_path: PathBuf::from("/private/source-must-not-render.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::ClaudeCode,
         successor_executable: PathBuf::from("/usr/local/bin/claude"),
         created_at_ms: snapshot.generated_ms - 10_000,
@@ -1997,7 +1993,7 @@ fn failed_task_detail_explains_identity_timing_failure_result_and_available_acti
         source_provider: Provider::CodexCli,
         source_session_id: "codex-failed-session".into(),
         source_record_path: PathBuf::from("/private/provider-record.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::CodexCli,
         successor_executable: PathBuf::from("/usr/local/bin/codex"),
         created_at_ms: snapshot.generated_ms - 10_000,
@@ -2048,7 +2044,7 @@ fn failed_task_detail_explains_identity_timing_failure_result_and_available_acti
         "Source Provider",
         "Codex CLI",
         "codex-failed-session",
-        "/Users/fixture/code/sessionmesh",
+        "/Users/fixture/code/mudi",
         "Successor Provider",
         "Failed",
         "Created",
@@ -2081,7 +2077,7 @@ fn waiting_task_detail_shows_its_reason_and_fixed_authorization_deadline() {
         source_provider: Provider::ClaudeCode,
         source_session_id: "claude-critical".into(),
         source_record_path: PathBuf::from("/private/provider-record-must-not-render.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::ClaudeCode,
         successor_executable: PathBuf::from("/usr/local/bin/claude"),
         created_at_ms: snapshot.generated_ms,
@@ -2127,7 +2123,7 @@ fn waiting_task_detail_shows_its_reason_and_fixed_authorization_deadline() {
         "Waiting reason",
         "Source Current Run is Busy",
         "Authorization deadline",
-        &sessionmesh::app::fmt_datetime(deadline_ms),
+        &mudi::app::fmt_datetime(deadline_ms),
     ] {
         assert!(detail.contains(expected), "missing {expected:?}\n{detail}");
     }
@@ -2145,7 +2141,7 @@ fn expired_waiting_authority_is_an_unread_cancelled_task_with_a_clear_explanatio
         source_provider: Provider::CodexCli,
         source_session_id: "codex-idle".into(),
         source_record_path: PathBuf::from("/private/rollout.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::CodexCli,
         successor_executable: PathBuf::from("/usr/local/bin/codex"),
         created_at_ms: snapshot.generated_ms - 7_201_000,
@@ -2217,7 +2213,7 @@ fn close_for_later_returns_to_tasks_without_hiding_or_invalidating_the_ready_res
         source_provider: Provider::ClaudeCode,
         source_session_id: "ready-id".into(),
         source_record_path: PathBuf::from("/private/source.jsonl"),
-        source_working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+        source_working_directory: PathBuf::from("/Users/fixture/code/mudi"),
         successor_provider: Provider::ClaudeCode,
         successor_executable: PathBuf::from("/usr/local/bin/claude"),
         created_at_ms: snapshot.generated_ms - 10_000,
@@ -2238,7 +2234,7 @@ fn close_for_later_returns_to_tasks_without_hiding_or_invalidating_the_ready_res
         artifact_path: Some(artifact_path.clone()),
         successor_launch_plan: Some(SuccessorLaunchPlan {
             successor_provider: Provider::ClaudeCode,
-            working_directory: PathBuf::from("/Users/fixture/code/sessionmesh"),
+            working_directory: PathBuf::from("/Users/fixture/code/mudi"),
             executable: PathBuf::from("/usr/local/bin/claude"),
             arguments: vec!["Read the Handoff Artifact and continue.".into()],
             artifact_path: artifact_path.clone(),
@@ -2300,13 +2296,7 @@ fn terminal_below_the_hard_minimum_renders_only_the_too_small_state() {
             "missing required fallback text: {required:?}"
         );
     }
-    for normal_ui in [
-        "SessionMesh",
-        "1 2 3",
-        " PROJECT ",
-        " RECENT SIGNALS ",
-        "Theme",
-    ] {
+    for normal_ui in ["Mudi", "1 2 3", " PROJECT ", " RECENT SIGNALS ", "Theme"] {
         assert!(
             !rendered.text.contains(normal_ui),
             "normal UI leaked into the fallback: {normal_ui:?}"
@@ -2324,7 +2314,7 @@ fn global_header_combines_identity_with_indexed_usage_and_project_totals() {
 
     let wide = render(&snapshot, &Ui::default(), 120, 30);
     let wide_header = wide.text.lines().next().unwrap();
-    assert!(wide_header.contains(&format!("SessionMesh | v{}", env!("CARGO_PKG_VERSION"))));
+    assert!(wide_header.contains(&format!("Mudi | v{}", env!("CARGO_PKG_VERSION"))));
     assert!(!wide_header.contains("1 2 3"));
     assert!(wide_header.contains("In 86.4k  Out 16.4k | 1 Project"));
     let tasks_row = wide
@@ -2347,7 +2337,7 @@ fn global_header_combines_identity_with_indexed_usage_and_project_totals() {
 
     let compact = render(&snapshot, &Ui::default(), 80, 24);
     let compact_header = compact.text.lines().next().unwrap();
-    assert!(compact_header.contains(&format!("SessionMesh | v{}", env!("CARGO_PKG_VERSION"))));
+    assert!(compact_header.contains(&format!("Mudi | v{}", env!("CARGO_PKG_VERSION"))));
     assert!(compact_header.contains("In 86.4k Out 16.4k | P 1"));
     assert!(compact
         .text
@@ -2392,7 +2382,7 @@ fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
 #[test]
 fn overview_focus_and_retained_selection_render_across_themes_and_target_sizes() {
     for theme in [
-        "sessionmesh",
+        "mudi",
         "catppuccin",
         "dracula",
         "gruvbox",
@@ -2445,15 +2435,15 @@ fn all_page_labels_the_session_tree_and_uses_theme_foreground_for_project_names(
 
     let dark = render(&snapshot, &ui, 120, 30);
     assert!(dark.text.lines().any(|line| line.contains(" PROJECT ")));
-    assert!(dark.text.lines().any(|line| line.contains("▾ sessionmesh")));
-    assert!(!dark.text.contains("PROJECT  sessionmesh"));
-    let dark_project = dark.style_at("sessionmesh");
+    assert!(dark.text.lines().any(|line| line.contains("▾ mudi")));
+    assert!(!dark.text.contains("PROJECT  mudi"));
+    let dark_project = dark.style_at("mudi");
     assert_eq!(dark_project.fg, Some(Color::Rgb(224, 220, 210)));
     assert!(dark_project.add_modifier.contains(Modifier::BOLD));
 
     let light_ui = ui_with_theme("light");
     let light = render(&snapshot, &light_ui, 120, 30);
-    let light_project = light.style_at("sessionmesh");
+    let light_project = light.style_at("mudi");
     assert_eq!(light_project.fg, Some(Color::Rgb(28, 31, 34)));
     assert!(light_project.add_modifier.contains(Modifier::BOLD));
 }
@@ -2493,7 +2483,7 @@ fn all_page_keeps_multiple_worktrees_below_the_project_without_context() {
 #[test]
 fn all_page_abbreviates_the_current_users_home_in_worktree_paths() {
     let home = dirs::home_dir().expect("test environment should have a home directory");
-    let root = home.join("code/sessionmesh");
+    let root = home.join("code/mudi");
     let root_text = root.to_string_lossy();
     let session = fixture_session(
         Provider::ClaudeCode,
@@ -2513,12 +2503,12 @@ fn all_page_abbreviates_the_current_users_home_in_worktree_paths() {
 
     let rendered = render(&snapshot, &Ui::default(), 120, 30);
 
-    assert!(rendered.text.contains("▾ sessionmesh (1)"));
-    assert!(rendered.text.contains("~/code/sessionmesh @ main"));
+    assert!(rendered.text.contains("▾ mudi (1)"));
+    assert!(rendered.text.contains("~/code/mudi @ main"));
     assert!(!rendered
         .text
         .lines()
-        .find(|line| line.contains("▾ sessionmesh"))
+        .find(|line| line.contains("▾ mudi"))
         .unwrap()
         .contains("Context"));
     assert!(!rendered.text.contains(root_text.as_ref()));
@@ -2531,7 +2521,7 @@ fn production_render_uses_the_snapshot_time_for_relative_session_age() {
         sessions: vec![Session {
             provider: Provider::ClaudeCode,
             id: "stable-clock-session".into(),
-            provenance: sessionmesh::domain::SessionProvenance::Observed,
+            provenance: mudi::domain::SessionProvenance::Observed,
             source: Default::default(),
             project: Some(Project {
                 identity: ProjectIdentity::GitCommonDir(PathBuf::from(
@@ -2965,7 +2955,7 @@ fn alt_arrow_resizes_without_replacing_project_tree_navigation() {
 fn keyboard_resize_adjusts_the_preference_after_the_effective_width_is_clamped() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-keyboard-split-{}-{}",
+        "mudi-keyboard-split-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -3002,7 +2992,7 @@ fn keyboard_resize_adjusts_the_preference_after_the_effective_width_is_clamped()
 fn completed_drag_persists_the_preferred_width_across_terminal_sizes() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-workspace-split-{}-{}",
+        "mudi-workspace-split-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -3401,7 +3391,7 @@ fn project_tree_hides_unresolved_and_system_temporary_sessions() {
     let mut temporary = unavailable.clone();
     temporary.id = "temporary".into();
     temporary.latest_model = Some("temporary-model".into());
-    temporary.cwd = Some("/private/tmp/sessionmesh-test".into());
+    temporary.cwd = Some("/private/tmp/mudi-test".into());
     let snapshot = Snapshot {
         sessions: vec![unavailable, temporary],
         generated_ms: NOW,
@@ -3527,7 +3517,7 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
         SessionState::Exited,
         20_000,
         NOW - DAY_MS,
-        ("/Users/fixture/code/sessionmesh-alpha", "alpha"),
+        ("/Users/fixture/code/mudi-alpha", "alpha"),
     );
     let beta = fixture_session(
         Provider::CodexCli,
@@ -3536,7 +3526,7 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
         SessionState::Exited,
         20_000,
         NOW - 9 * DAY_MS,
-        ("/Users/fixture/code/sessionmesh-beta", "beta"),
+        ("/Users/fixture/code/mudi-beta", "beta"),
     );
     let mut alpha_open = alpha.clone();
     alpha_open.id = "alpha-open".into();
@@ -4365,7 +4355,7 @@ fn cancelling_session_editing_hides_the_terminal_cursor() {
 fn edit_session_metadata_survives_reloading_the_ui() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-edit-title-{}-{}",
+        "mudi-edit-title-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -4403,7 +4393,7 @@ fn edit_session_metadata_survives_reloading_the_ui() {
 fn deleting_an_existing_alias_and_confirming_clears_the_title() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-clear-title-{}-{}",
+        "mudi-clear-title-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -4440,7 +4430,7 @@ fn deleting_an_existing_alias_and_confirming_clears_the_title() {
 fn malformed_label_store_disables_editing_until_rescan_reloads_it() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-label-recovery-{}-{}",
+        "mudi-label-recovery-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -4470,7 +4460,7 @@ fn malformed_label_store_disables_editing_until_rescan_reloads_it() {
 fn malformed_label_store_disables_curation_until_rescan_reloads_it() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-curation-recovery-{}-{}",
+        "mudi-curation-recovery-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -4526,7 +4516,7 @@ fn malformed_label_store_disables_curation_until_rescan_reloads_it() {
 fn failed_metadata_save_preserves_both_editor_inputs_for_a_successful_retry() {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-title-retry-{}-{}",
+        "mudi-title-retry-{}-{}",
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -4706,7 +4696,7 @@ fn overview_guide_explains_scope_and_current_versus_recent_state() {
     let rendered = render(&snapshot, &ui, 120, 30);
 
     for required in [
-        "SessionMesh is local to this Mac.",
+        "Mudi is local to this Mac.",
         "Passive observation is the default.",
         "Control Operations require explicit authorization.",
         "NOW shows current conditions.",
@@ -5019,7 +5009,7 @@ fn sessions_guide_explains_titles_aliases_fallbacks_and_editing() {
 
     for required in [
         "Session Titles",
-        "Title  The name SessionMesh displays for a Session.",
+        "Title  The name Mudi displays for a Session.",
         "Alias  A local user-authored Title.",
         "Short Session ID  The last eight characters",
         "Duplicate Titles include their Short Session ID.",
@@ -5043,8 +5033,8 @@ fn theme_guide_explains_the_active_theme_built_ins_and_process_override() {
     let rendered = render(&snapshot, &ui, 120, 30);
 
     for required in [
-        "Active Theme  sessionmesh",
-        "sessionmesh",
+        "Active Theme  mudi",
+        "mudi",
         "catppuccin",
         "dracula",
         "gruvbox",
@@ -5133,7 +5123,7 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
     let mut baseline_body = None;
 
     for expected_theme in [
-        "sessionmesh",
+        "mudi",
         "catppuccin",
         "dracula",
         "gruvbox",

@@ -29,7 +29,7 @@
 | --- | --- |
 | `src/domain.rs` | 全应用共享的归一化领域模型；Provider 特有字段名不允许出现在 `providers/` 之外，词汇统一遵循 `CONTEXT.md` |
 | `src/project.rs` | 把 Session 工作目录解析为规范的 Project 与 Worktree 身份（同一 Git common directory 归为一个 Project） |
-| `src/session_labels.rs` | 持久化 SessionMesh 拥有的会话元数据（Session Alias、Session Description 等） |
+| `src/session_labels.rs` | 持久化 Mudi 拥有的会话元数据（Session Alias、Session Description 等） |
 | `src/models.rs` | 按 Model-Provider 划分的模型目录：价格、批量价格与上下文窗口，仅用于估算与描述性元数据 |
 | `src/config.rs` | 配置：数据目录、环境变量覆盖、告警阈值与可配置的额外扫描目录 |
 
@@ -68,8 +68,8 @@
 | `src/handoff/contract.rs` | Handoff 应用与 Worker 之间的数据契约 |
 | `src/handoff/ports.rs` | Handoff 应用与 Worker 策略依赖的可替换边界（端口） |
 | `src/handoff/worker.rs` | 分离式 Handoff Worker 的生命周期与 Provider 执行 |
-| `src/skills/mod.rs` | SessionMesh 托管 Skill 的通用边界：Skill 目录与安装器 trait |
-| `src/skills/handoff.rs` | 把 `sessionmesh-handoff` Skill 安装/校验到 Codex CLI 与 Claude Code 的 skills 目录（权限 0700/0600、防符号链接、区分 Missing/Stale/Unreadable/Conflict） |
+| `src/skills/mod.rs` | Mudi 托管 Skill 的通用边界：Skill 目录与安装器 trait |
+| `src/skills/handoff.rs` | 把 `mudi-handoff` Skill 安装/校验到 Codex CLI 与 Claude Code 的 skills 目录（权限 0700/0600、防符号链接、区分 Missing/Stale/Unreadable/Conflict） |
 
 ## 系统适配器
 

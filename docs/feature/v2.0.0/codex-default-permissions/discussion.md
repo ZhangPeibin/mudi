@@ -6,10 +6,10 @@
 
 ## Problem
 
-SessionMesh currently starts a Managed Codex CLI Session without an explicit sandbox or
+Mudi currently starts a Managed Codex CLI Session without an explicit sandbox or
 approval-policy override. The resulting permissions depend on the developer's Codex
 configuration and may interrupt work with approval prompts. The requested outcome is for a
-SessionMesh-started Codex Session to begin with the highest intended permission level by
+Mudi-started Codex Session to begin with the highest intended permission level by
 default.
 
 ## Users and Outcomes
@@ -29,7 +29,7 @@ configuration.
 
 ### In Scope
 
-- Select an explicit default permission policy for SessionMesh-started Managed Codex Sessions.
+- Select an explicit default permission policy for Mudi-started Managed Codex Sessions.
 - Keep the permission behavior inside the Codex runtime adapter.
 - Make the effective high-risk default visible before the developer authorizes launch if the
   chosen policy disables both sandboxing and approvals.
@@ -38,12 +38,12 @@ configuration.
 
 - Changing Claude Code permissions.
 - Modifying the developer's global Codex configuration files.
-- Granting SessionMesh authority over Externally Started Current Runs.
-- Treating one launch authorization as authority for unrelated SessionMesh Control Operations.
+- Granting Mudi authority over Externally Started Current Runs.
+- Treating one launch authorization as authority for unrelated Mudi Control Operations.
 
 ## Required Behaviour
 
-- SessionMesh passes a deterministic Codex-native permission policy on launch.
+- Mudi passes a deterministic Codex-native permission policy on launch.
 - Managed Codex New and Resume both pass
   `--dangerously-bypass-approvals-and-sandbox`.
 - The policy applies only to the exact Managed launch the developer authorizes.
@@ -59,14 +59,14 @@ configuration.
 ## Edge and Failure Cases
 
 - An installed Codex version that rejects the selected arguments must produce a known launch
-  failure; SessionMesh must not silently retry with weaker or different permissions.
+  failure; Mudi must not silently retry with weaker or different permissions.
 - Resume must not accidentally use a different policy from New if the agreed scope includes
   both paths.
-- Provider configuration must not silently override an explicit SessionMesh launch policy.
+- Provider configuration must not silently override an explicit Mudi launch policy.
 
 ## Constraints and Dependencies
 
-- ADR 0002 requires explicit, target-specific authorization for SessionMesh control.
+- ADR 0002 requires explicit, target-specific authorization for Mudi control.
 - The v2.0.0 scope currently authorizes starting the Provider CLI, but does not state that this
   authorization grants an unbounded model-generated command bypass.
 - `codex --help` describes `--dangerously-bypass-approvals-and-sandbox` as extremely dangerous
@@ -77,7 +77,7 @@ configuration.
 
 ## Decisions
 
-- The policy will be passed per invocation; SessionMesh will not rewrite user configuration.
+- The policy will be passed per invocation; Mudi will not rewrite user configuration.
 - The developer explicitly selected complete bypass through
   `--dangerously-bypass-approvals-and-sandbox`, accepting that a private tmux is not an
   external sandbox and that Codex will execute without sandboxing or approval prompts.

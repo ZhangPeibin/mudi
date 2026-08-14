@@ -137,14 +137,14 @@ impl SessionState {
     }
 }
 
-/// Session 的“出身”：SessionMesh 只是观察到的，还是通过 Binding Receipt
+/// Session 的“出身”：Mudi 只是观察到的，还是通过 Binding Receipt
 /// 建立了管理关系。观察永远是默认值——这是产品的安全底线。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionProvenance {
-    /// 默认：外部启动、SessionMesh 只读观察。
+    /// 默认：外部启动、Mudi 只读观察。
     #[default]
     Observed,
-    /// SessionMesh 持有完整启动证据、可精确恢复的 Managed Session。
+    /// Mudi 持有完整启动证据、可精确恢复的 Managed Session。
     Managed,
 }
 

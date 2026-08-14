@@ -146,10 +146,7 @@ impl AlertEngine {
 
 /// Post a macOS notification via `osascript`. Best-effort; failures are ignored.
 fn notify(message: &str) {
-    let script = format!(
-        "display notification {:?} with title \"SessionMesh\"",
-        message
-    );
+    let script = format!("display notification {:?} with title \"Mudi\"", message);
     let _ = Command::new("osascript").arg("-e").arg(script).spawn();
 }
 
@@ -213,7 +210,7 @@ mod tests {
     #[test]
     fn renaming_a_session_does_not_emit_another_context_notification() {
         let directory =
-            std::env::temp_dir().join(format!("sessionmesh-alert-title-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mudi-alert-title-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("session-labels.json");
         let mut labels = SessionLabels::load(&path);

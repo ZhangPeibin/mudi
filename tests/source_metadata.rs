@@ -1,21 +1,21 @@
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::backend::TestBackend;
-use ratatui::style::{Modifier, Style};
-use ratatui::Terminal;
-use sessionmesh::app::Snapshot;
-use sessionmesh::clipboard::Clipboard;
-use sessionmesh::collector::build_sessions;
-use sessionmesh::config::Config;
-use sessionmesh::domain::{
+use mudi::app::Snapshot;
+use mudi::clipboard::Clipboard;
+use mudi::collector::build_sessions;
+use mudi::config::Config;
+use mudi::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceFormat,
     SourceMetadata, Usage, Worktree,
 };
-use sessionmesh::index::{Fingerprint, Index};
-use sessionmesh::models::ModelCatalog;
-use sessionmesh::providers::ParsedSession;
-use sessionmesh::ui::{draw, Ui, UiAction};
+use mudi::index::{Fingerprint, Index};
+use mudi::models::ModelCatalog;
+use mudi::providers::ParsedSession;
+use mudi::ui::{draw, Ui, UiAction};
+use ratatui::backend::TestBackend;
+use ratatui::style::{Modifier, Style};
+use ratatui::Terminal;
 
 struct RecordingClipboard {
     writes: Vec<String>,
@@ -41,14 +41,14 @@ fn session_with_metadata(
     Session {
         provider: Provider::ClaudeCode,
         id: native_id.into(),
-        provenance: sessionmesh::domain::SessionProvenance::Observed,
+        provenance: mudi::domain::SessionProvenance::Observed,
         source: SourceMetadata {
             path: source_path.into(),
             format: SourceFormat::JsonLines,
         },
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/sessionmesh")),
-            label: "sessionmesh".into(),
+            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/mudi")),
+            label: "mudi".into(),
         }),
         worktree: worktree_path.map(|root| Worktree {
             root: root.into(),
@@ -113,9 +113,8 @@ fn rendered_style_at(ui: &Ui, snapshot: &Snapshot, text: &str) -> Style {
 
 #[test]
 fn indexed_source_metadata_reaches_the_normalized_session() {
-    let source_path = PathBuf::from(
-        "/Users/example/.claude/projects/-Users-example-code-sessionmesh/session-123.jsonl",
-    );
+    let source_path =
+        PathBuf::from("/Users/example/.claude/projects/-Users-example-code-mudi/session-123.jsonl");
     let parsed = ParsedSession {
         provider: Provider::ClaudeCode,
         id: "session-123".into(),
@@ -154,10 +153,9 @@ fn indexed_source_metadata_reaches_the_normalized_session() {
 
 #[test]
 fn detail_displays_complete_local_source_metadata_without_shortening() {
-    let source_path = "/Users/example/.claude/projects/-Users-example-code-sessionmesh/a-very-long-source-directory/native-session-123.jsonl";
-    let worktree_path = "/Users/example/code/sessionmesh-worktrees/a-very-long-feature-worktree";
-    let cwd =
-        "/Users/example/code/sessionmesh-worktrees/a-very-long-feature-worktree/crates/sessionmesh-ui";
+    let source_path = "/Users/example/.claude/projects/-Users-example-code-mudi/a-very-long-source-directory/native-session-123.jsonl";
+    let worktree_path = "/Users/example/code/mudi-worktrees/a-very-long-feature-worktree";
+    let cwd = "/Users/example/code/mudi-worktrees/a-very-long-feature-worktree/crates/mudi-ui";
     let native_id = "native-session-123-with-a-complete-provider-identifier";
     let snapshot = Snapshot {
         sessions: vec![session_with_metadata(
@@ -276,10 +274,8 @@ fn clipboard_success_and_failure_are_reported_without_propagating_errors() {
 
 #[test]
 fn detail_and_direct_copy_expose_source_metadata_without_source_log_contents() {
-    let source_path = std::env::temp_dir().join(format!(
-        "sessionmesh-private-source-{}.jsonl",
-        std::process::id()
-    ));
+    let source_path =
+        std::env::temp_dir().join(format!("mudi-private-source-{}.jsonl", std::process::id()));
     let private_content = "PRIVATE_PROMPT_RESPONSE_TOOL_SOURCE_SENTINEL";
     std::fs::write(
         &source_path,

@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 
 /// Fixed, opt-in message used only to induce a Provider source record for Binding.
 pub const BINDING_INITIALIZER: &str =
-    "SessionMesh initialization only. Do not inspect files, run commands, or make changes. Reply with exactly: READY.";
+    "Mudi initialization only. Do not inspect files, run commands, or make changes. Reply with exactly: READY.";
 
 /// Provider-normalized source and process evidence considered for a Binding Receipt.
 /// Provider-private field names and file layouts do not cross this boundary.
@@ -25,7 +25,7 @@ pub struct ProviderBindingEvidence {
     pub process_session_id: String,
     pub source: SourceMetadata,
     pub working_directory: PathBuf,
-    /// Exact tmux-pane process that SessionMesh launched. A provider wrapper may
+    /// Exact tmux-pane process that Mudi launched. A provider wrapper may
     /// start a distinct descendant which owns the source record.
     pub launch_process: state::ProcessIdentity,
     /// Exact provider process that owns the source record and becomes the
@@ -234,11 +234,17 @@ impl ProviderExecutables {
             .map(Iterator::collect::<Vec<_>>)
             .unwrap_or_default();
         let mut discovered = Self::discover_in(&search);
-        if let Some(path) = std::env::var_os("SESSIONMESH_CLAUDE_EXECUTABLE") {
-            discovered.claude = PathBuf::from(path);
+        if let Some(path) = crate::config::configured_path([
+            "MUDI_CLAUDE_EXECUTABLE",
+            "SESSIONMESH_CLAUDE_EXECUTABLE",
+        ]) {
+            discovered.claude = path;
         }
-        if let Some(path) = std::env::var_os("SESSIONMESH_CODEX_EXECUTABLE") {
-            discovered.codex = PathBuf::from(path);
+        if let Some(path) = crate::config::configured_path([
+            "MUDI_CODEX_EXECUTABLE",
+            "SESSIONMESH_CODEX_EXECUTABLE",
+        ]) {
+            discovered.codex = path;
         }
         discovered
     }
@@ -407,7 +413,7 @@ mod tests {
     #[test]
     fn each_adapter_discovers_only_its_own_files() {
         use std::fs;
-        let base = std::env::temp_dir().join("sessionmesh-adapter-discover-test");
+        let base = std::env::temp_dir().join("mudi-adapter-discover-test");
         let _ = fs::remove_dir_all(&base);
         let claude_dir = base.join("claude");
         let codex_dir = base.join("codex");

@@ -1,9 +1,9 @@
-use sessionmesh::attention::SessionIdentity;
-use sessionmesh::domain::{
+use mudi::attention::SessionIdentity;
+use mudi::domain::{
     Compaction, ContextState, Project, ProjectIdentity, Provider, Session, SessionState, Usage,
     Worktree,
 };
-use sessionmesh::signals::{
+use mudi::signals::{
     ContextAlertLevel, RecentSignal, RecentSignalKind, RecentSignalsEngine,
     SharedWorktreeRiskChange,
 };
@@ -12,14 +12,14 @@ fn session(id: &str, state: SessionState, context_tokens: u64) -> Session {
     Session {
         provider: Provider::ClaudeCode,
         id: id.into(),
-        provenance: sessionmesh::domain::SessionProvenance::Observed,
+        provenance: mudi::domain::SessionProvenance::Observed,
         source: Default::default(),
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd("/tmp/sessionmesh".into()),
-            label: "sessionmesh".into(),
+            identity: ProjectIdentity::CanonicalCwd("/tmp/mudi".into()),
+            label: "mudi".into(),
         }),
         worktree: None,
-        cwd: Some("/tmp/sessionmesh".into()),
+        cwd: Some("/tmp/mudi".into()),
         latest_model: Some("claude-opus-4-1".into()),
         state,
         context: ContextState {
@@ -62,7 +62,7 @@ fn initial_snapshot_establishes_a_silent_baseline() {
 #[test]
 fn shared_worktree_risk_detection_emits_one_worktree_scoped_signal() {
     let mut engine = RecentSignalsEngine::default();
-    let worktree_root = "/tmp/sessionmesh-shared";
+    let worktree_root = "/tmp/mudi-shared";
     let mut claude = session("claude-session", SessionState::Busy, 80_000);
     claude.worktree = Some(Worktree {
         root: worktree_root.into(),
@@ -103,7 +103,7 @@ fn shared_worktree_risk_detection_emits_one_worktree_scoped_signal() {
 #[test]
 fn shared_worktree_risk_clear_emits_once_with_remaining_open_membership() {
     let mut engine = RecentSignalsEngine::default();
-    let worktree_root = "/tmp/sessionmesh-shared";
+    let worktree_root = "/tmp/mudi-shared";
     let mut claude = session("claude-session", SessionState::Busy, 80_000);
     claude.worktree = Some(Worktree {
         root: worktree_root.into(),
@@ -162,7 +162,7 @@ fn membership_changes_while_worktree_risk_remains_do_not_emit_a_signal() {
     let mut engine = RecentSignalsEngine::default();
     let mut first = session("first", SessionState::Busy, 80_000);
     first.worktree = Some(Worktree {
-        root: "/tmp/sessionmesh-shared".into(),
+        root: "/tmp/mudi-shared".into(),
         branch: Some("main".into()),
         writable: true,
     });

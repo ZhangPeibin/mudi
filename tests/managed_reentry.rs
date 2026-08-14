@@ -1,15 +1,13 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::backend::TestBackend;
-use ratatui::Terminal;
-use sessionmesh::application::ApplicationController;
-use sessionmesh::clipboard::Clipboard;
-use sessionmesh::config::Config;
-use sessionmesh::domain::{
+use mudi::application::ApplicationController;
+use mudi::clipboard::Clipboard;
+use mudi::config::Config;
+use mudi::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
     SourceFormat, SourceMetadata, Usage,
 };
-use sessionmesh::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
-use sessionmesh::managed_sessions::{
+use mudi::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
+use mudi::managed_sessions::{
     run_attach_from_args_with_access, BindingOutcome, BindingReceipt, EvidenceBinder,
     MacosManagedTerminalAccess, ManagedCurrentRunAccessService, ManagedCurrentRunEvidence,
     ManagedCurrentRunRecord, ManagedCurrentRunTerminalAccess, ManagedCurrentRunVerifier,
@@ -19,13 +17,15 @@ use sessionmesh::managed_sessions::{
     ProviderNewCommand, ProviderProcessObservation, SystemManagedCurrentRunEvidence,
     SystemProcessEvidence, VerifiedManagedCurrentRun,
 };
-use sessionmesh::providers::state::ProcessIdentity;
-use sessionmesh::providers::ProviderBindingEvidence;
-use sessionmesh::providers::ProviderExecutables;
-use sessionmesh::read_model::{ManagedCurrentRunSummary, RefreshSnapshot};
-use sessionmesh::refresh::RefreshService;
-use sessionmesh::successor::TerminalLauncher;
-use sessionmesh::ui::{draw, Ui, UiAction};
+use mudi::providers::state::ProcessIdentity;
+use mudi::providers::ProviderBindingEvidence;
+use mudi::providers::ProviderExecutables;
+use mudi::read_model::{ManagedCurrentRunSummary, RefreshSnapshot};
+use mudi::refresh::RefreshService;
+use mudi::successor::TerminalLauncher;
+use mudi::ui::{draw, Ui, UiAction};
+use ratatui::backend::TestBackend;
+use ratatui::Terminal;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -437,7 +437,7 @@ fn application_revalidates_each_reentry_action_without_replaying_provider_launch
     assert_eq!(*opened.lock().unwrap(), vec![opaque_ref.clone()]);
     assert_eq!(
         *copied.lock().unwrap(),
-        vec![format!("sessionmesh attach {opaque_ref}")]
+        vec![format!("mudi attach {opaque_ref}")]
     );
     assert_eq!(evidence_checks.lock().unwrap().len(), 2);
 
@@ -579,7 +579,14 @@ fn attach_cli_accepts_exactly_one_opaque_reference_and_revalidates_before_foregr
         &mut access,
     )
     .unwrap());
-    assert_eq!(*attached.lock().unwrap(), vec![opaque_ref]);
+    assert!(
+        run_attach_from_args_with_access(["mudi", "attach", opaque_ref.as_str()], &mut access,)
+            .unwrap()
+    );
+    assert_eq!(
+        *attached.lock().unwrap(),
+        vec![opaque_ref.clone(), opaque_ref]
+    );
 
     assert!(
         !run_attach_from_args_with_access(["sessionmesh", "--theme", "light"], &mut access)
@@ -596,7 +603,7 @@ fn attach_cli_accepts_exactly_one_opaque_reference_and_revalidates_before_foregr
         &mut access,
     )
     .is_err());
-    assert_eq!(attached.lock().unwrap().len(), 1);
+    assert_eq!(attached.lock().unwrap().len(), 2);
 }
 
 #[test]
@@ -814,7 +821,7 @@ fn system_revalidation_requires_the_exact_live_process_and_native_session_source
         .unwrap();
     };
     write_state(process.started_at_ms);
-    let resolution = sessionmesh::project::resolve(Some(&working_directory));
+    let resolution = mudi::project::resolve(Some(&working_directory));
     let project = resolution.project.unwrap();
     let registration = ManagedLaunchRegistration {
         id: "launch-system".into(),
@@ -949,7 +956,7 @@ fn bind_managed_run(
         pid: 42,
         started_at_ms: 41_000,
     };
-    let resolution = sessionmesh::project::resolve(Some(&working_directory));
+    let resolution = mudi::project::resolve(Some(&working_directory));
     let project = resolution.project.unwrap();
     let registration = ManagedLaunchRegistration {
         id: registration_id.into(),

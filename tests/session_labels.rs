@@ -1,8 +1,8 @@
-use sessionmesh::config::Config;
-use sessionmesh::domain::{Provider, SessionIdentity};
-use sessionmesh::index::Index;
-use sessionmesh::providers::claude;
-use sessionmesh::session_labels::{CurationDisposition, SessionLabels};
+use mudi::config::Config;
+use mudi::domain::{Provider, SessionIdentity};
+use mudi::index::Index;
+use mudi::providers::claude;
+use mudi::session_labels::{CurationDisposition, SessionLabels};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -14,7 +14,7 @@ static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 fn temp_label_store(test_name: &str) -> (PathBuf, PathBuf) {
     let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
     let directory = std::env::temp_dir().join(format!(
-        "sessionmesh-{test_name}-{}-{sequence}",
+        "mudi-{test_name}-{}-{sequence}",
         std::process::id()
     ));
     let path = directory.join("session-labels.json");

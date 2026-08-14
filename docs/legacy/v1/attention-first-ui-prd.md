@@ -1,4 +1,4 @@
-# SessionMesh Attention-First UI PRD
+# Mudi Attention-First UI PRD
 
 > Legacy local record. It captures the proposed post-v1 product direction at the time of
 > writing. Formal PRDs and delivery tickets now live in GitHub Issues; accepted version
@@ -45,7 +45,7 @@ deciding what to do.
 
 ## 3. Product position
 
-SessionMesh should evolve from a token and session monitor into a local attention console
+Mudi should evolve from a token and session monitor into a local attention console
 for concurrent AI coding sessions.
 
 The product promise is:
@@ -207,7 +207,7 @@ Items with the same rank use condition-specific evidence strength first:
 Remaining ties use the most recent relevant transition or activity, then canonical Project
 and Worktree path, then Provider plus native Session ID. If an Idle transition timestamp
 is unavailable, last activity is the permitted ordering fallback. These rules form a
-visible, deterministic lexicographic order; SessionMesh must not replace them with an opaque
+visible, deterministic lexicographic order; Mudi must not replace them with an opaque
 weighted score.
 
 ## 8. Main screen (`1`)
@@ -263,11 +263,11 @@ Every Operation Task has exactly one execution state:
 
 The normal successful path is `Queued -> Waiting -> Running -> Ready`; a Task may omit
 `Waiting` when no external condition blocks it. A known error may move a non-terminal Task
-to `Failed`. Cancellation may produce `Cancelled` only when SessionMesh can establish that
+to `Failed`. Cancellation may produce `Cancelled` only when Mudi can establish that
 no uncertain external side effect occurred; otherwise an uncertain outcome is
 `Interrupted`. Worker loss invokes reconciliation: a valid declared result becomes
 `Ready`, confirmed live execution remains in its current non-terminal state, and an
-unresolvable outcome becomes `Interrupted`. SessionMesh never silently retries or
+unresolvable outcome becomes `Interrupted`. Mudi never silently retries or
 resubmits an `Interrupted` Task.
 
 Execution state is independent of Task Acknowledgement. Closing a completion notice,
@@ -344,11 +344,11 @@ authorization. Configurable deadlines are deferred beyond the first implementati
 
 **Status: Confirmed**
 
-Every non-terminal Task offers `Cancel Task` and requires confirmation before SessionMesh
+Every non-terminal Task offers `Cancel Task` and requires confirmation before Mudi
 acts. Cancellation is a requested intent, not a forced terminal-state assignment:
 
 - if no Provider Prompt or control action was sent, cancellation becomes `Cancelled`;
-- if a Task-owned Provider process started, SessionMesh requests graceful termination and
+- if a Task-owned Provider process started, Mudi requests graceful termination and
   never escalates automatically to `SIGKILL`;
 - after termination, a valid declared result becomes `Ready`, a verified stop without a
   valid result becomes `Cancelled`, and an outcome that cannot be established becomes
@@ -368,7 +368,7 @@ creates a new Operation Task with a new Task ID, fresh authorization, new Artifa
 and `retry_of_task_id` pointing to its predecessor. The predecessor and any evidence or
 partial metadata remain unchanged.
 
-Before creating the new Task, SessionMesh revalidates the source Session, process,
+Before creating the new Task, Mudi revalidates the source Session, process,
 Project or Worktree, and the one-non-terminal-Task concurrency rule. An `Interrupted`
 Task offers Retry only after reconciliation proves that its previous Worker and Provider
 process are no longer running; uncertainty must not create concurrent transcript writers.
@@ -391,7 +391,7 @@ Sessions are all eligible when the following preconditions hold:
 - the Session has no other non-terminal Operation Task.
 
 An Open Session additionally requires the confirmation flow to disclose and obtain
-authorization to end its Current Run safely. Without that authorization, SessionMesh does
+authorization to end its Current Run safely. Without that authorization, Mudi does
 not create the Handoff Task. Provider authentication and similar conditions that cannot be
 reliably established by preflight are execution failures, not false eligibility claims.
 
@@ -444,7 +444,7 @@ ship untested non-macOS adapters; unsupported terminals use `Copy Command`.
 
 **Status: Confirmed**
 
-Both `Open Terminal` and `Copy Command` use a foreground SessionMesh launch helper that
+Both `Open Terminal` and `Copy Command` use a foreground Mudi launch helper that
 loads the Task's validated Successor Launch Plan, starts the selected Provider CLI with
 the Terminal's inherited standard input and output, and records only process and Task
 metadata. It does not proxy or persist interactive Provider content.
@@ -456,7 +456,7 @@ rollout file held by the launched process. Both paths apply process-start valida
 protect against PID reuse and confirm that the Provider source record exists before storing
 `successor_session_id` and `successor_linked_at`.
 
-SessionMesh does not preassign a Claude Session ID and never correlates either Provider by
+Mudi does not preassign a Claude Session ID and never correlates either Provider by
 choosing the newest Session in a working directory. If the user changes the copied command,
 bypasses the helper, or linkage evidence never becomes conclusive, the Handoff remains
 `Ready` and displays `Successor Session not linked`; uncertainty never creates a guessed
@@ -541,7 +541,7 @@ The count uses provider-native Session identity, not the number of discovered so
 paths.
 
 Sharing only a Project while using separate Worktrees does not create this risk. If
-Worktree identity cannot be resolved, the state is unknown and SessionMesh must not infer a
+Worktree identity cannot be resolved, the state is unknown and Mudi must not infer a
 risk. Shared Worktree Risk reports structural exposure only; it does not claim that the
 Sessions edit the same files or that a file-level or Git merge conflict has occurred.
 
@@ -559,7 +559,7 @@ History, filters, search, a timeline inspector, and long-term retention are Defe
 
 Recent Signals are process-lifetime only. The initial scan establishes a baseline and
 does not emit Signals for conditions that already exist. Only changes observed after that
-baseline are recorded; quitting SessionMesh clears the list, and the next launch starts with
+baseline are recorded; quitting Mudi clears the list, and the next launch starts with
 a new empty list. Current conditions discovered at launch still appear immediately in
 `NOW`.
 
@@ -576,11 +576,11 @@ It does not record Idle-to-Busy changes, Busy heartbeats, ordinary Current Conte
 percentage changes, Usage or Cost changes, source-file timestamp changes, unchanged polling
 observations, or `Possible Stall`.
 
-When one Compaction observation also clears a Context Alert, SessionMesh emits one compound
+When one Compaction observation also clears a Context Alert, Mudi emits one compound
 Recent Signal containing the Compaction evidence, Context before/after values, and cleared
 Alert rather than occupying multiple rows.
 
-`RECENT SIGNALS` retains at most the five newest Signals for the current SessionMesh process
+`RECENT SIGNALS` retains at most the five newest Signals for the current Mudi process
 and renders them newest first. A compact viewport may render fewer than five when required
 to preserve `NOW`; the region does not scroll, expand, or link to additional history. A
 new Signal is inserted at the top and evicts the oldest retained Signal when the limit is
@@ -649,14 +649,14 @@ Operation or changes the explicit authorization boundary.
 - `Enter` on a Session-scoped Recent Signal opens that Session's Detail modal.
 - `Enter` on a Shared Worktree Risk Signal switches to page `1` and focuses the matching
   Worktree in `NOW`. If the risk has cleared and the Worktree no longer contains an Open
-  Session, SessionMesh stays on the Signal and briefly reports
+  Session, Mudi stays on the Signal and briefly reports
   `Worktree is no longer open` in the status line.
 - Duplicate polling observations do not produce duplicate Recent Signals.
 - A threshold crossing produces one Recent Signal per crossing and may produce another
   when the condition clears.
 - A Compaction and the Context Alert it clears appear as one compound Recent Signal.
 - Recent Signals never contain prompt, response, tool, or source-code content.
-- Restarting SessionMesh starts `RECENT SIGNALS` empty without affecting current conditions
+- Restarting Mudi starts `RECENT SIGNALS` empty without affecting current conditions
   shown in `NOW`.
 - The reserved upper-left region remains unlabelled, empty, and non-focusable.
 
@@ -726,7 +726,7 @@ Session detail remains the evidence surface and should contain:
 
 Session Detail does not repeat `RECENT SIGNALS`, add a Recent Transitions list, or expose
 a Signal timeline. Compactions remain because they are provider-recorded transcript
-metadata that can be rebuilt independently of SessionMesh's process-lifetime Signals.
+metadata that can be rebuilt independently of Mudi's process-lifetime Signals.
 
 ### UI-013 - Session Detail modal
 
@@ -797,7 +797,7 @@ Session detail should expose the exact local source metadata needed to locate a 
 
 The current implementation already indexes the source-log path and carries `cwd`, but the
 normalized UI `Session` does not retain the source path. Session Detail displays complete
-paths even when compact lists truncate them. SessionMesh must not read or display raw JSONL
+paths even when compact lists truncate them. Mudi must not read or display raw JSONL
 contents, prompt/response content, tool content, or source-code content through this view.
 
 Source-log path, Worktree path, `cwd`, and native Session ID are value-bearing fields in
@@ -825,13 +825,13 @@ Theme defines at least:
   Exited/unknown;
 - Context roles: normal, Warning, and Critical.
 
-SessionMesh ships with a built-in `sessionmesh` Theme as the default and restores an
+Mudi ships with a built-in `mudi` Theme as the default and restores an
 existing Theme choice from the local Profile. There is no runtime Theme-cycling shortcut;
 interactive Theme selection belongs to a later Settings feature.
 
 The first implementation includes six built-in Themes:
 
-1. `sessionmesh` - the default dark Theme;
+1. `mudi` - the default dark Theme;
 2. `catppuccin` - Catppuccin Mocha;
 3. `dracula`;
 4. `gruvbox` - Gruvbox Dark;
@@ -843,7 +843,7 @@ implementation. Additional built-in Themes may be added later without changing T
 semantics or Guide behavior.
 
 `--theme <name>` overrides the saved Theme for the current process without changing the
-saved preference. An unknown or unavailable Theme name falls back to `sessionmesh` instead
+saved preference. An unknown or unavailable Theme name falls back to `mudi` instead
 of preventing startup.
 
 Theme changes affect presentation only. They never change thresholds, severity, ordering,
@@ -915,7 +915,7 @@ Theme roles for Open Sessions follow the Context thresholds:
 - 70% or above but below 85% - Context Warning;
 - 85% and above - Context Critical.
 
-The default `sessionmesh` Theme maps these roles to green, amber/yellow, and red. Other
+The default `mudi` Theme maps these roles to green, amber/yellow, and red. Other
 Themes may use different accessible colors without changing the thresholds or labels.
 
 The percentage remains visible so color is not the only signal. Values above 100% render a
@@ -989,7 +989,7 @@ The existing privacy contract remains non-negotiable:
 - provider sessions remain distinct even when grouped by project.
 
 Passive observation remains the default. Attention Conditions, Alerts, thresholds, and
-elapsed time never authorize action. SessionMesh may perform only a declared, bounded
+elapsed time never authorize action. Mudi may perform only a declared, bounded
 Control Operation after the user selects its target and explicitly authorizes that one
 workflow attempt. Handoff generation remains read-only toward the source Project and
 Worktree even when its authorized workflow safely ends a Current Run or launches a later
@@ -1032,7 +1032,7 @@ metadata for terminal Operation Tasks.
 Full Signal History is Deferred to a later requirement. The first implementation provides
 only the bounded `RECENT SIGNALS` list and does not include a History page or overlay,
 global/Project/Session filters, search, a timeline inspector, or long-term event retention.
-Recent Signals exist only for the current SessionMesh process and require no persistent event
+Recent Signals exist only for the current Mudi process and require no persistent event
 store.
 
 ## 15. Product success criteria
@@ -1070,9 +1070,9 @@ and direct usability observation.
 | 2026-07-30 | Introduce the numeric mapping and essential keys in a small startup Help overlay. | Superseded | Replaced on 2026-08-01 by the complete contextual Guide. |
 | 2026-07-30 | Defer full Signal History and keep only `RECENT SIGNALS` in the first implementation. | Deferred | A bounded recent-change list covers the immediate return-to-terminal job without adding another view, filters, search, and long-term event retention. |
 | 2026-07-30 | Do not use a separate Attention Inbox as the default-screen structure. | Rejected | The main screen uses one non-duplicated current Session inventory instead. |
-| 2026-07-30 | Keep SessionMesh read-only and use `Inspect` as the primary action. | Superseded | ADR 0002 preserves passive observation as the default while permitting one explicitly authorized, bounded Control Operation. |
-| 2026-07-30 | Use Theme-defined semantic colors, with severity and state rather than Provider owning alert meaning. | Confirmed | A default Theme gives SessionMesh a coherent identity while Profile loading, command-line overrides, and accessible alternatives can change presentation without changing behavior. |
-| 2026-07-30 | Ship six built-in Themes and defer user-authored palettes. | Confirmed | SessionMesh, Catppuccin, Dracula, Gruvbox, Light, and High Contrast cover mainstream dark, bright-terminal, and accessibility needs without expanding first-version configuration and validation across a large palette catalog. |
+| 2026-07-30 | Keep Mudi read-only and use `Inspect` as the primary action. | Superseded | ADR 0002 preserves passive observation as the default while permitting one explicitly authorized, bounded Control Operation. |
+| 2026-07-30 | Use Theme-defined semantic colors, with severity and state rather than Provider owning alert meaning. | Confirmed | A default Theme gives Mudi a coherent identity while Profile loading, command-line overrides, and accessible alternatives can change presentation without changing behavior. |
+| 2026-07-30 | Ship six built-in Themes and defer user-authored palettes. | Confirmed | Mudi, Catppuccin, Dracula, Gruvbox, Light, and High Contrast cover mainstream dark, bright-terminal, and accessibility needs without expanding first-version configuration and validation across a large palette catalog. |
 | 2026-07-30 | Show complete working-directory and source-log metadata in Session Detail without exposing raw contents. | Confirmed | Local paths and native identity support investigation, while raw JSONL, prompt/response, tool, and source-code content remain outside the privacy boundary. |
 | 2026-07-30 | Group provider-page sessions by Project while retaining one row per Session. | Confirmed | Project supplies context without losing session-specific state or detail navigation. |
 | 2026-07-30 | Render Current Context as a percentage progress bar with threshold colors. | Confirmed | Makes Current Context occupancy scannable while retaining precise text and unknown-state handling. |
@@ -1095,7 +1095,7 @@ and direct usability observation.
 | 2026-07-30 | Integrate Project and Worktree organization into `NOW` instead of creating a separate Projects capability. | Confirmed | The main page already owns the cross-Provider Open Session inventory; a second view would duplicate the same Sessions and conflict with the fixed three-page navigation. |
 | 2026-07-30 | Keep Processed Usage and Estimated Cost off the main screen. | Confirmed | `NOW` prioritizes current action and evidence; Current Context remains because it is operational state, while cumulative usage and cost stay in Provider pages and Session detail. |
 | 2026-07-30 | Defer `Acknowledge` and `Snooze` to a later requirement. | Deferred | A factual current-state view does not yet need user-authored suppression state, expiry rules, persistence, or dedicated commands. |
-| 2026-07-30 | Keep `RECENT SIGNALS` process-lifetime only. | Confirmed | Live state transitions cannot be reconstructed reliably after SessionMesh was closed; an initial snapshot is a baseline, not a set of newly observed events. |
+| 2026-07-30 | Keep `RECENT SIGNALS` process-lifetime only. | Confirmed | Live state transitions cannot be reconstructed reliably after Mudi was closed; an initial snapshot is a baseline, not a set of newly observed events. |
 | 2026-07-30 | Limit Recent Signals to actionable lifecycle, Context, Compaction, and Shared Worktree Risk changes. | Confirmed | Excluding Idle-to-Busy, heartbeats, ordinary metric changes, and unchanged polls keeps the bounded list focused; a Compaction and its resulting Alert clear are one compound Signal. |
 | 2026-07-30 | Retain at most the five newest Recent Signals without scrolling or expansion. | Confirmed | Five changes provide short return-to-terminal context without recreating the Deferred Signal History capability; compact layouts yield space to `NOW` first. |
 | 2026-07-30 | Use `80x24` as the hard minimum and `120x30` as the full-layout target. | Confirmed | Deterministic interactive Ratatui renders at both sizes preserved the required hierarchy, state, Context, selection, actions, and complete Detail metadata without overlap; `79x23` correctly falls back to the terminal-too-small state. |

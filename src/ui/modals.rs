@@ -114,7 +114,7 @@ fn draw_inventory_delete_confirmation(f: &mut Frame, ui: &Ui) {
         )),
         Line::from(""),
         Line::from(format!(
-            "{count} Session{plural} will be removed from SessionMesh inventory."
+            "{count} Session{plural} will be removed from Mudi inventory."
         )),
         Line::from("Alias and Description will be deleted."),
         Line::from("Provider JSONL remains unchanged."),
@@ -132,7 +132,7 @@ fn draw_inventory_delete_confirmation(f: &mut Frame, ui: &Ui) {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.critical))
-                    .title(" Permanent SessionMesh Exclusion "),
+                    .title(" Permanent Mudi Exclusion "),
             )
             .style(Style::default().fg(theme.foreground).bg(theme.background)),
         area,
@@ -689,14 +689,14 @@ fn draw_handoff_confirmation(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
             Line::from(""),
             Line::from("This authorization may end this one Current Run."),
             Line::from("A Busy Current Run waits until Idle and is never interrupted."),
-            Line::from("SessionMesh revalidates it before requesting graceful exit."),
+            Line::from("Mudi revalidates it before requesting graceful exit."),
             Line::from("The users Terminal and shell remain open."),
         ]);
     }
     lines.extend([
         Line::from(""),
         Line::from("Generation keeps the source Project and Worktree read-only."),
-        Line::from("The detached Task continues after SessionMesh closes."),
+        Line::from("The detached Task continues after Mudi closes."),
         Line::from(""),
         Line::from(Span::styled(
             "Enter Authorize   Esc Cancel",

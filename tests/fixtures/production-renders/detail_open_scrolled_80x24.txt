@@ -1,4 +1,4 @@
-┌ SessionMesh | v0.1.0 ────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ Mudi | v0.1.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
         ┌ Session Detail ──────────────────────────────────────────────┐       │
         │Output          230                                           │       │
@@ -8,7 +8,7 @@
         │  claude-opus-4-8      in 1.2k out 230  $0.04                 │       │
         │                                                              │───────┘
  PROJECT│Transcript Lifetime Usage                                     │────────
- ▾ sessi│Input           12.3k                                         │n select
+ ▾ mudi │Input           12.3k                                         │n select
    ▾ mai│Output          2.3k                                          │
     > ✳ │Est. API cost   $0.42                                         │
       ⬡ │                                                              │

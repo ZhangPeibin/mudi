@@ -1,6 +1,6 @@
-# CONTEXT.md — SessionMesh domain model
+# CONTEXT.md — Mudi domain model
 
-SessionMesh is a fully local macOS TUI for observing **Claude Code** and **Codex CLI**
+Mudi is a fully local macOS TUI for observing **Claude Code** and **Codex CLI**
 coding Sessions and starting or managing explicitly authorized local Sessions and
 operations. Passive observation is the default; discovery, an alert, or a threshold never
 authorizes control. It is not a provider billing dashboard. Source JSONL logs are the
@@ -30,12 +30,12 @@ _Avoid:_ Model Provider, API vendor.
 
 ## Managed Session
 
-A provider-native Session that SessionMesh can precisely resume through an explicitly
-authorized, SessionMesh-owned control channel because it retains conclusive launch and
+A provider-native Session that Mudi can precisely resume through an explicitly
+authorized, Mudi-owned control channel because it retains conclusive launch and
 identity evidence. Its native Session ID remains its identity; being Managed never turns
 an externally started Current Run into a controlled one.
 
-_Avoid:_ tmux Session, SessionMesh Session, owned conversation.
+_Avoid:_ tmux Session, Mudi Session, owned conversation.
 
 ## Session Label
 
@@ -52,10 +52,10 @@ _Avoid:_ Summary, Intent, Current Task, when referring to Session display identi
 
 ## Session Alias
 
-A SessionMesh-owned Session Label explicitly assigned by the user to one Session, including
+A Mudi-owned Session Label explicitly assigned by the user to one Session, including
 as the Title supplied when creating a Managed Session. It is a local nickname and never
 renames or modifies the provider-native Session. It remains associated across Current Runs,
-SessionMesh restarts, and temporary source-log absence until the user explicitly clears it.
+Mudi restarts, and temporary source-log absence until the user explicitly clears it.
 
 _Avoid:_ Provider title, Project label, Current Task.
 
@@ -69,7 +69,7 @@ _Avoid:_ Current Task, latest prompt, generated summary.
 
 ## Generated Session Label
 
-A SessionMesh-owned Session Label created only when the user explicitly invokes
+A Mudi-owned Session Label created only when the user explicitly invokes
 `Generate title`. It is never generated in the background, remains distinct from a
 user-written Session Alias, and is ignored whenever an Alias exists for the same Session.
 
@@ -121,7 +121,7 @@ _Avoid:_ Current Session, when referring only to usage since the latest invocati
 
 ## Managed Current Run
 
-A Current Run launched by SessionMesh for a Managed Session through a SessionMesh-owned
+A Current Run launched by Mudi for a Managed Session through a Mudi-owned
 control channel under explicit authorization. It is conclusively bound to both the native
 Session ID and the live provider process.
 
@@ -145,7 +145,7 @@ _Avoid:_ tmux binding, guessed association, launch success message.
 
 ## Binding Initializer
 
-An opt-in, SessionMesh-owned launch-time request whose only purpose is to induce a Provider
+An opt-in, Mudi-owned launch-time request whose only purpose is to induce a Provider
 source record for a new Session before the developer writes their first task. It is neither
 developer task content nor a generic Prompt-control path.
 
@@ -161,7 +161,7 @@ _Avoid:_ Managed Current Run, Operation Task State, retryable failure.
 
 ## Externally Started Current Run
 
-A Current Run launched outside a SessionMesh-owned control channel. SessionMesh may observe
+A Current Run launched outside a Mudi-owned control channel. Mudi may observe
 or explicitly associate it, but observation and association never imply authority to
 control its live process.
 
@@ -177,7 +177,7 @@ _Avoid:_ Active Session, live log, closed Session.
 
 ## Control Operation
 
-A bounded, state-changing action that SessionMesh performs on a selected Session only
+A bounded, state-changing action that Mudi performs on a selected Session only
 after the user explicitly authorizes it. Attention Conditions, Alerts, thresholds, and
 elapsed time may offer a Control Operation but never authorize one. One authorization
 covers one declared operation workflow only until its declared deadline, and expires
@@ -191,7 +191,7 @@ _Avoid:_ Automatic remediation, background action, when no user authorization ex
 One execution instance of an authorized Control Operation. Multiple Operation Tasks may
 coexist; each identifies its operation type, selected target, execution state, timestamps,
 and result reference without storing provider conversation content. Once started, an
-authorized Operation Task continues independently of whether the SessionMesh TUI remains
+authorized Operation Task continues independently of whether the Mudi TUI remains
 open. A Session may have at most one non-terminal Operation Task; tasks targeting different
 Sessions may execute concurrently, but a second authorization is never silently queued
 behind an existing task. Losing the executing process triggers reconciliation against live
@@ -199,7 +199,7 @@ process and declared-result evidence; an uncertain outcome becomes Interrupted a
 retried without new user authorization. A terminal Operation Task never reopens; a manual
 retry is a distinct Task linked to its predecessor.
 
-_Avoid:_ Provider task, when referring to work managed by SessionMesh; Control Operation,
+_Avoid:_ Provider task, when referring to work managed by Mudi; Control Operation,
 when referring to one execution rather than the authorized action type.
 
 ## Operation Task State
@@ -243,7 +243,7 @@ completed successfully. Dismissing its completion notice preserves the result.
 ## Handoff Artifact
 
 A local, structured Markdown document containing the working context needed by a Successor
-Session. SessionMesh owns it in the private SessionMesh data directory, tracks its location
+Session. Mudi owns it in the private Mudi data directory, tracks its location
 and readiness, and does not place its contents in either the disposable Session index or
 authoritative Task Store. It remains until its terminal Operation Task is explicitly
 deleted; exporting an Artifact into a Project is a separate user choice.
@@ -262,7 +262,7 @@ either interaction is independent of Handoff completion.
 A new provider-native Session started from a Handoff Result. It is related to its source
 Session but has a distinct native Session ID and does not inherit the source transcript.
 Its Provider may differ from the source Provider; the Handoff Artifact is their only
-working-context bridge. SessionMesh records the relationship only after Provider evidence
+working-context bridge. Mudi records the relationship only after Provider evidence
 ties the launched process to the new native Session ID; launch intent alone is insufficient.
 
 ## Current Context

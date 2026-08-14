@@ -1,29 +1,29 @@
-┌ SessionMesh | v0.1.0 ─────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
+┌ Mudi | v0.1.0 ────────────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
                                         ┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
                                         │WT /Users/fixture/co...  Risk detected││                                      │
             ┌ Session Detail ──────────────────────────────────────────────────────────────────────────────┐           │
             │Provider        Claude Code -> claude-opus-4-8                                                │           │
-            │Project         sessionmesh                                                                   │           │
-            │Worktree        /Users/fixture/code/sessionmesh                                               │           │
+            │Project         mudi                                                                          │           │
+            │Worktree        /Users/fixture/code/mudi                                                      │           │
             │Branch          main                                                                          │           │
-            │cwd             /Users/fixture/code/sessionmesh                                               │───────────┘
- PROJECT 1 ─│Source log                                                                                    │────────────
- ▾ sessionme│/Users/fixture/.claude/projects/-Users-fixture-code-sessionmesh/claude-critical.jsonl         │
-   ▾ main !2│Source format   JSONL                                                                         │
-    > ✳ crit│Title           critical                                                                      │
-      ⬡ x-sh│Session ID      claude-critical                                                               │
-   ▾ warning│State           Busy                                                                          │
-      ✳ -war│                                                                                              │
-   ▾ idle   │Current Context                                                                               │
-      ⬡ dex-│Occupancy        180.0k / 200.0k [#############################---] (90.0%)                   │
-   ▾ healthy│                                                                                              │
-      ✳ -hea│Attention Conditions                                                                          │
- DETAILS ───│  CRITICAL Current Context 90.0% >= 85%                                                       │
- Title      │  WARNING Shared Worktree Risk x2                                                             │
- Description│                                                                                              │
- Context    │Current Run Usage                                                                             │
- Attention  │Input           1.2k                                                                          │
- Provider   │Output          230                                                                           │
+            │cwd             /Users/fixture/code/mudi                                                      │───────────┘
+ PROJECT 1 ─│Source log      /Users/fixture/.claude/projects/-Users-fixture-code-mudi/claude-critical.jsonl│────────────
+ ▾ mudi (7) │Source format   JSONL                                                                         │
+   ▾ main !2│Title           critical                                                                      │
+    > ✳ crit│Session ID      claude-critical                                                               │
+      ⬡ x-sh│State           Busy                                                                          │
+   ▾ warning│                                                                                              │
+      ✳ -war│Current Context                                                                               │
+   ▾ idle   │Occupancy        180.0k / 200.0k [#############################---] (90.0%)                   │
+      ⬡ dex-│                                                                                              │
+   ▾ healthy│Attention Conditions                                                                          │
+      ✳ -hea│  CRITICAL Current Context 90.0% >= 85%                                                       │
+ DETAILS ───│  WARNING Shared Worktree Risk x2                                                             │
+ Title      │                                                                                              │
+ Description│Current Run Usage                                                                             │
+ Context    │Input           1.2k                                                                          │
+ Attention  │Output          230                                                                           │
+ Provider   │Est. API cost   $0.04                                                                         │
  Worktree   └ Up/Down Select | c Copy | h Handoff | Esc Close ──────────────────────────────── fields 1/17 ┘
  Run usage   in 1.2k | out 230                         │
 ───────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────

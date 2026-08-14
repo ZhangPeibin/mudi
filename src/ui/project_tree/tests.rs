@@ -62,7 +62,7 @@ fn empty_tree_content_explains_that_no_open_sessions_exist() {
     };
     let state = State::default();
     let labels = SessionLabels::default();
-    let theme = ThemeName::SessionMesh.palette();
+    let theme = ThemeName::Mudi.palette();
 
     terminal
         .draw(|frame| draw(frame, frame.area(), &snapshot, &state, &labels, theme))
@@ -130,7 +130,7 @@ fn multiple_worktrees_keep_short_branch_groups() {
         true,
         false,
         40,
-        ThemeName::SessionMesh.palette(),
+        ThemeName::Mudi.palette(),
     )
     .to_string();
     assert!(line.contains("main"));
@@ -143,7 +143,7 @@ fn tree_rows_use_disclosure_triangles_provider_icons_and_lifecycle_dots() {
     assert_eq!(group_prefix(0, false, false), " ▸ ");
 
     let session = unresolved_open_session(Provider::ClaudeCode, "one");
-    let theme = ThemeName::SessionMesh.palette();
+    let theme = ThemeName::Mudi.palette();
     let line = open_session_line(
         &session,
         "one",
@@ -171,7 +171,7 @@ fn only_observed_rows_show_an_external_suffix_after_the_title() {
     let mut managed = observed.clone();
     managed.id = "managed".into();
     managed.provenance = SessionProvenance::Managed;
-    let theme = ThemeName::SessionMesh.palette();
+    let theme = ThemeName::Mudi.palette();
     let position = SessionTreePosition {
         depth: 1,
         selected: false,
@@ -242,7 +242,7 @@ fn open_session_operational_evidence_uses_stable_columns() {
         depth: 1,
         selected: false,
     };
-    let theme = ThemeName::SessionMesh.palette();
+    let theme = ThemeName::Mudi.palette();
     let warning =
         open_session_line(&warning, "short", &attention, NOW, 50, position, theme).to_string();
     let critical = open_session_line(
@@ -482,7 +482,7 @@ fn project_with_only_recent_and_older_sessions_is_not_in_the_tree() {
     let mut terminal = Terminal::new(backend).unwrap();
     let state = State::default();
     let labels = SessionLabels::default();
-    let theme = ThemeName::SessionMesh.palette();
+    let theme = ThemeName::Mudi.palette();
     terminal
         .draw(|frame| draw(frame, frame.area(), &snapshot, &state, &labels, theme))
         .unwrap();

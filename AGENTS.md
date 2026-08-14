@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues and PRDs are tracked in GitHub Issues for `ZhangPeibin/SessionMesh`.
+Issues and PRDs are tracked in GitHub Issues for `ZhangPeibin/mudi`.
 External PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels

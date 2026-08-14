@@ -1,4 +1,4 @@
-//! Persistent, SessionMesh-owned metadata for provider-native Sessions.
+//! Persistent, Mudi-owned metadata for provider-native Sessions.
 
 use crate::domain::{Provider, SessionIdentity};
 use serde::{Deserialize, Serialize};

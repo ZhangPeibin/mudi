@@ -6,7 +6,7 @@
   product invariants.
 - [`adr/`](./adr/) - accepted architectural decisions.
 - [`../feature/`](../feature/) - accepted version capability boundaries.
-- [GitHub Issues](https://github.com/ZhangPeibin/SessionMesh/issues) - formal PRDs and
+- [GitHub Issues](https://github.com/ZhangPeibin/mudi/issues) - formal PRDs and
   delivery tickets.
 
 ## Active Product Work
@@ -28,6 +28,8 @@ not change an accepted version scope on their own.
   readers.
 - [`agents/`](./agents/) - issue-tracker, domain-document, triage-label, and feature-doc
   conventions used by engineering skills.
+- [`releases/mudi-rename.md`](./releases/mudi-rename.md) - product rename, storage
+  selection, and legacy compatibility policy.
 
 ## Research and History
 

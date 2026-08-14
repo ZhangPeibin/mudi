@@ -1,9 +1,9 @@
-//! SessionMesh entry point.
-//!
-//! The TUI opens immediately. A background task performs the initial (potentially long)
-//! historical index with visible progress, then keeps the index fresh with cheap
-//! incremental scans ~every 2s. The render loop never blocks on IO — it reads the latest
-//! snapshot from shared state each frame.
+// Mudi entry point.
+//
+// The TUI opens immediately. A background task performs the initial (potentially long)
+// historical index with visible progress, then keeps the index fresh with cheap
+// incremental scans ~every 2s. The render loop never blocks on IO - it reads the latest
+// snapshot from shared state each frame.
 
 use anyhow::Result;
 use crossterm::event;
@@ -19,24 +19,24 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use sessionmesh::application::ApplicationController;
-use sessionmesh::clipboard::{Clipboard, MacosClipboard};
-use sessionmesh::config::{theme_override_from_args, Config};
-use sessionmesh::handoff::{
+use mudi::application::ApplicationController;
+use mudi::clipboard::{Clipboard, MacosClipboard};
+use mudi::config::{theme_override_from_args, Config};
+use mudi::handoff::{
     DetachedWorkerLauncher, HandoffPaths, HandoffService, MacosCurrentRunControl,
     ProviderExecutables, WorkerLauncher,
 };
-use sessionmesh::handoff_skill::ManagedHandoffSkills;
-use sessionmesh::managed_sessions::{
+use mudi::handoff_skill::ManagedHandoffSkills;
+use mudi::managed_sessions::{
     discover_tmux_executable, run_attach_from_args, MacosManagedTerminalAccess,
     ManagedCurrentRunAccessService, ManagedCurrentRunVerifier, ManagedLaunchStore,
     ManagedResumeVerifier, ManagedSessionService, SystemManagedCurrentRunEvidence,
     SystemManagedResumeEvidence, TmuxLaunchBroker,
 };
-use sessionmesh::read_model::{InMemoryReadModelCache, ReadModelCache};
-use sessionmesh::refresh::RefreshService;
-use sessionmesh::successor::{MacosTerminalLauncher, TerminalLauncher};
-use sessionmesh::ui::{draw, Ui};
+use mudi::read_model::{InMemoryReadModelCache, ReadModelCache};
+use mudi::refresh::RefreshService;
+use mudi::successor::{MacosTerminalLauncher, TerminalLauncher};
+use mudi::ui::{draw, Ui};
 
 /// Shared read-only projection published by refresh and consumed by the UI.
 type Shared = Arc<dyn ReadModelCache>;
@@ -46,24 +46,22 @@ async fn main() -> Result<()> {
     if run_attach_from_args(std::env::args_os())? {
         return Ok(());
     }
-    if sessionmesh::successor::run_successor_from_args(std::env::args_os())? {
+    if mudi::successor::run_successor_from_args(std::env::args_os())? {
         return Ok(());
     }
-    if sessionmesh::handoff::run_worker_from_args(std::env::args_os())? {
+    if mudi::handoff::run_worker_from_args(std::env::args_os())? {
         return Ok(());
     }
-    let cfg = Config::load();
+    let cfg = Config::load()?;
     let theme_override = theme_override_from_args(std::env::args());
     let ui = Ui::load(cfg.profile_path(), theme_override.as_deref())?;
     let handoff_paths = HandoffPaths {
         task_store: cfg.task_store_path(),
         artifact_root: cfg.artifact_root(),
     };
-    let sessionmesh_executable = std::env::current_exe()?;
-    let terminal_launcher = MacosTerminalLauncher::new(
-        sessionmesh_executable.clone(),
-        handoff_paths.task_store.clone(),
-    );
+    let mudi_executable = std::env::current_exe()?;
+    let terminal_launcher =
+        MacosTerminalLauncher::new(mudi_executable.clone(), handoff_paths.task_store.clone());
     let provider_executables = ProviderExecutables::discover();
     let tmux_executable = discover_tmux_executable().unwrap_or_default();
     let managed_sessions = ManagedSessionService::new(
@@ -85,7 +83,7 @@ async fn main() -> Result<()> {
     let user_home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let managed_handoff_skills = ManagedHandoffSkills::for_user_home(&user_home, &cfg.claude_dir);
     let worker_launcher = DetachedWorkerLauncher::new(
-        sessionmesh_executable,
+        mudi_executable,
         handoff_paths.clone(),
         provider_executables.clone(),
         claude_sessions_dir.clone(),
@@ -177,7 +175,7 @@ fn enter_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
         writer,
         EnterAlternateScreen,
         // Crossterm's EnableMouseCapture also enables 1003, which reports every
-        // unpressed pointer movement. SessionMesh only needs clicks, wheel events,
+        // unpressed pointer movement. Mudi only needs clicks, wheel events,
         // and button-motion events for divider dragging.
         Print(concat!(
             "\x1b[?1003l",

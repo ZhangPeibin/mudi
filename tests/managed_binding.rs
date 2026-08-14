@@ -1,24 +1,24 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::backend::TestBackend;
-use ratatui::Terminal;
-use sessionmesh::app::Snapshot;
-use sessionmesh::config::Config;
-use sessionmesh::domain::{
+use mudi::app::Snapshot;
+use mudi::config::Config;
+use mudi::domain::{
     ContextState, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
     SourceFormat, SourceMetadata, Usage,
 };
-use sessionmesh::managed_sessions::{
+use mudi::managed_sessions::{
     BindingOutcome, EvidenceBinder, ManagedLaunchAction, ManagedLaunchCleanup,
     ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore,
     ManagedLaunchTarget, PrivateTmuxEnvironment, ProcessEvidence, ProviderNewCommand,
     ProviderProcessObservation, SystemProcessEvidence,
 };
-use sessionmesh::providers::state::ProcessIdentity;
-use sessionmesh::providers::{registry, ProviderBindingEvidence};
-use sessionmesh::read_model::{ManagedLaunchSummary, ManagedTerminalState};
-use sessionmesh::refresh::RefreshService;
-use sessionmesh::session_labels::SessionLabels;
-use sessionmesh::ui::{draw, Ui, UiAction};
+use mudi::providers::state::ProcessIdentity;
+use mudi::providers::{registry, ProviderBindingEvidence};
+use mudi::read_model::{ManagedLaunchSummary, ManagedTerminalState};
+use mudi::refresh::RefreshService;
+use mudi::session_labels::SessionLabels;
+use mudi::ui::{draw, Ui, UiAction};
+use ratatui::backend::TestBackend;
+use ratatui::Terminal;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -517,7 +517,7 @@ fn codex_adapter_resolves_the_rollout_holder_below_a_launch_wrapper() {
         .args([
             "-c",
             r#"tail -f "$1" >/dev/null 2>&1 & child=$!; trap 'kill "$child" 2>/dev/null; wait "$child"; exit 0' TERM INT; wait "$child""#,
-            "sessionmesh-wrapper",
+            "mudi-wrapper",
         ])
         .arg(&source_path)
         .spawn()
@@ -895,10 +895,10 @@ fn launch_summary(
         id: id.into(),
         status,
         provider: Provider::CodexCli,
-        project: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/sessionmesh")),
-        project_label: "sessionMesh".into(),
-        worktree_root: Some(PathBuf::from("/workspace/sessionmesh/main")),
-        working_directory: PathBuf::from("/workspace/sessionmesh/main"),
+        project: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/mudi")),
+        project_label: "mudi".into(),
+        worktree_root: Some(PathBuf::from("/workspace/mudi/main")),
+        working_directory: PathBuf::from("/workspace/mudi/main"),
         title: "Work Continuity".into(),
         created_at_ms,
         terminal_state,
@@ -1108,7 +1108,7 @@ fn assert_managed_refresh(
         .iter()
         .find(|session| session.provider == provider && session.id == native_session_id)
         .expect("verified Session should appear in Session inventory");
-    let expected = sessionmesh::project::resolve(Some(worktree));
+    let expected = mudi::project::resolve(Some(worktree));
     assert_eq!(session.provenance, SessionProvenance::Managed);
     assert_eq!(
         session.project.as_ref().map(|project| &project.identity),
@@ -1204,7 +1204,7 @@ fn registration(
     working_directory: &Path,
     provider_process: ProcessIdentity,
 ) -> ManagedLaunchRegistration {
-    let resolution = sessionmesh::project::resolve(Some(working_directory));
+    let resolution = mudi::project::resolve(Some(working_directory));
     let project = resolution
         .project
         .expect("test working directory should resolve to a Project");
@@ -1226,7 +1226,7 @@ fn registration(
             arguments: Vec::new(),
         },
         tmux: PrivateTmuxEnvironment {
-            socket_name: format!("sessionmesh-{id}"),
+            socket_name: format!("mudi-{id}"),
             session_name: "managed".into(),
         },
         created_at_ms: 40_000,
@@ -1325,7 +1325,7 @@ impl TempDir {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "sessionmesh-managed-binding-{name}-{}-{nonce}",
+            "mudi-managed-binding-{name}-{}-{nonce}",
             std::process::id()
         ));
         fs::create_dir_all(&path).unwrap();

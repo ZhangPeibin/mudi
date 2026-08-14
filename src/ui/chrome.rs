@@ -18,7 +18,7 @@ pub(super) fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let compact_projects = area.width < 88;
     let left = vec![
         Span::styled(
-            " SessionMesh ",
+            " Mudi ",
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),

@@ -35,7 +35,7 @@ remain `N/A` and never use a nearby model.
 The bundled public snapshot imports the structured pricing table from
 `llmcalcs.com/pricing-comparison`, records its source update and retrieval dates, and retains
 the per-model official pricing URL exposed by that table. Exact runtime IDs already observed
-by SessionMesh but absent from the imported source remain explicit supplemental entries.
+by Mudi but absent from the imported source remain explicit supplemental entries.
 
 Claude's exact Catalog entry owns its Context Window because Claude JSONL has no native
 window field. Codex's provider-native window wins, with the Catalog only as fallback. This
@@ -45,7 +45,7 @@ index.
 Interactive Session estimates use direct prices only. Missing Cached or Batch prices remain
 absent rather than becoming zero; Batch prices are descriptive and do not participate in
 current cost calculation. A complete local `models.json` can override individual exact
-entries under `SESSIONMESH_DATA_DIR`.
+entries under `MUDI_DATA_DIR`.
 
 ## Consequences
 

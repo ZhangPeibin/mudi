@@ -440,10 +440,8 @@ mod tests {
         let started = chrono::Utc::now();
         let started_at_ms = started.timestamp_millis();
         let nonce = started.timestamp_nanos_opt().unwrap();
-        let root = std::env::temp_dir().join(format!(
-            "sessionmesh-current-run-{}-{nonce}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mudi-current-run-{}-{nonce}", std::process::id()));
         let claude_dir = root.join("claude");
         let transcript_dir = claude_dir.join("projects/project");
         let state_dir = claude_dir.join("sessions");

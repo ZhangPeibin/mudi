@@ -1,4 +1,4 @@
-# SessionMesh Assisted Handoff PRD
+# Mudi Assisted Handoff PRD
 
 > Legacy local record. It preserves prior Handoff detail, but does not replace the formal
 > GitHub Issue PRD process, `CONTEXT.md`, or accepted ADRs.
@@ -14,7 +14,7 @@
 ## 1. Purpose
 
 Assisted Handoff lets a user ask an existing Claude Code or Codex CLI Session to produce a
-durable, structured handoff for a new Successor Session. SessionMesh owns the bounded local
+durable, structured handoff for a new Successor Session. Mudi owns the bounded local
 workflow, keeps working after its TUI exits, notifies the user when the result is ready, and
 then lets the user launch or copy a successor command.
 
@@ -31,7 +31,7 @@ the same transcript does not create a fresh context and does not support changin
 The user needs a workflow that:
 
 - captures the current working state without modifying the source Project;
-- survives SessionMesh TUI exit;
+- survives Mudi TUI exit;
 - distinguishes generation success from launch and linkage success;
 - supports Claude-to-Codex and Codex-to-Claude continuation;
 - never treats an Alert or Context threshold as authorization.
@@ -50,9 +50,9 @@ The user needs a workflow that:
 
 - Automatically initiate Handoff when Current Context crosses a threshold.
 - Merge, clone, or migrate Provider-native Transcripts or Session IDs.
-- Give SessionMesh persistent control over a Session or Project.
+- Give Mudi persistent control over a Session or Project.
 - Write a Handoff Artifact into the source Project by default.
-- Let the Provider write directly into SessionMesh's private Artifact directory.
+- Let the Provider write directly into Mudi's private Artifact directory.
 - Automatically retry an uncertain or failed Prompt.
 - Require `tmux`, a background daemon, or terminal keystroke injection.
 - Support non-macOS terminal launch adapters in the first implementation.
@@ -93,7 +93,7 @@ A Successor Session is always a new Provider-native Session with a distinct nati
 ID. It receives working context only through the Handoff Artifact. Its Provider may differ
 from the source Provider.
 
-Launching a command does not prove that a Successor Session exists. SessionMesh records the
+Launching a command does not prove that a Successor Session exists. Mudi records the
 relationship only after Provider evidence ties the launched process to a new native Session
 source record.
 
@@ -152,7 +152,7 @@ Run safely. Declining that authority does not create a Task.
 
 ### 7.4 Completion and acknowledgement
 
-Every terminal transition is persisted in `TASKS`. SessionMesh also sends a best-effort
+Every terminal transition is persisted in `TASKS`. Mudi also sends a best-effort
 macOS notification without Provider conversation or Artifact content. Notification delivery
 failure does not affect Task state.
 
@@ -253,7 +253,7 @@ Every non-terminal Task offers `Cancel Task` behind a confirmation. Cancellation
 intent; evidence determines the result:
 
 - before a Provider Prompt or control action, it becomes `Cancelled`;
-- after Task-owned Provider startup, SessionMesh requests graceful termination;
+- after Task-owned Provider startup, Mudi requests graceful termination;
 - valid result evidence still becomes `Ready`;
 - verified termination without a result becomes `Cancelled`;
 - an unresolvable process or result outcome becomes `Interrupted`.
@@ -274,7 +274,7 @@ precondition checks. It never overwrites or reopens its predecessor.
 
 ```mermaid
 flowchart LR
-  TUI["SessionMesh TUI"] --> Store[("Authoritative Task Store")]
+  TUI["Mudi TUI"] --> Store[("Authoritative Task Store")]
   Store --> Worker["Detached Worker"]
   Worker --> Source["Source Provider CLI"]
   Source --> Candidate["Candidate Markdown"]
@@ -310,7 +310,7 @@ copyable commands are derived from templates and stored metadata.
 
 ### 10.2 Detached Worker
 
-Each authorized Task is executed by one detached Rust invocation of the SessionMesh binary.
+Each authorized Task is executed by one detached Rust invocation of the Mudi binary.
 It continues if the TUI exits. The TUI interacts through a small task-execution interface
 and does not own Worker, Provider command, reconciliation, or Artifact-writing details.
 
@@ -321,8 +321,8 @@ behind the same interface.
 ### 10.3 Source Provider execution
 
 The first explicitly authorized Handoff installs one canonical, versioned
-`sessionmesh-handoff` Skill into both Provider-standard user Skill directories. Installation
-and managed updates are atomic and owner-only. SessionMesh updates only copies carrying its
+`mudi-handoff` Skill into both Provider-standard user Skill directories. Installation
+and managed updates are atomic and owner-only. Mudi updates only copies carrying its
 ownership marker and refuses an unrelated same-name Skill.
 
 Authorization preflight verifies the managed copies before Task creation. The detached Worker
@@ -331,9 +331,9 @@ the source Session non-interactively and explicitly invokes the Skill through st
 
 ```text
 Codex:  codex exec --sandbox read-only resume <native-session-id> -
-        $sessionmesh-handoff
+        $mudi-handoff
 Claude: claude --print --resume <native-session-id> --bare --permission-mode plan --tools "" --strict-mcp-config
-        /sessionmesh-handoff
+        /mudi-handoff
 ```
 
 Claude's bare mode keeps explicitly invoked Skills available while disabling unrelated hooks,
@@ -345,14 +345,14 @@ Artifact writer.
 ### 10.4 Ending an Open Current Run
 
 Resuming a Session while its manual Current Run is open risks concurrent Transcript writes.
-When explicitly authorized, SessionMesh:
+When explicitly authorized, Mudi:
 
 1. waits while the Current Run is Busy;
 2. revalidates process identity after it becomes Idle;
 3. requests the Provider CLI process to exit without closing its Terminal or shell;
 4. proceeds only after exit is observed.
 
-SessionMesh never terminates a Busy Run, targets an unverified PID, or escalates to
+Mudi never terminates a Busy Run, targets an unverified PID, or escalates to
 `SIGKILL`. The authorization expires after two hours if no control action occurred.
 
 ### 10.5 Reconciliation
@@ -364,7 +364,7 @@ A restarted TUI or Worker reconciles every non-terminal Task against:
 - the declared final Artifact and its validation contract.
 
 A live verified process remains non-terminal, a valid result becomes `Ready`, and an
-outcome that cannot be established becomes `Interrupted`. SessionMesh never automatically
+outcome that cannot be established becomes `Interrupted`. Mudi never automatically
 resubmits an `Interrupted` Prompt.
 
 ## 11. Artifact contract
@@ -404,7 +404,7 @@ Artifact writer: it writes an owner-only temporary file and atomically renames i
 declared path only after validation. Invalid or interrupted output never appears as a
 completed Artifact.
 
-Artifacts live under SessionMesh's private data directory, use Task IDs rather than user
+Artifacts live under Mudi's private data directory, use Task IDs rather than user
 content in filenames, and remain outside the source Project. The directory mode is `0700`
 and file mode is `0600`. The Provider has read access to the source Project for generation
 but no write access to the Artifact directory; the Successor command is explicitly granted
@@ -438,7 +438,7 @@ available.
 
 ### 12.2 Foreground launch helper
 
-`Open Terminal` and the default copied command invoke a foreground SessionMesh launch
+`Open Terminal` and the default copied command invoke a foreground Mudi launch
 helper. The helper loads the validated Plan, starts the interactive Successor Provider with
 the Terminal's inherited standard input and output, and records only process metadata. It
 does not proxy or persist the interactive conversation.
@@ -450,7 +450,7 @@ The target Provider adapter maps the validated launched process to a new native 
 
 Both paths validate process start time, confirm the source record, and then store
 `successor_session_id` and `successor_linked_at`. Neither Provider preassigns an ID, and
-SessionMesh never chooses the newest Session by working directory. If the user bypasses the
+Mudi never chooses the newest Session by working directory. If the user bypasses the
 helper or evidence remains inconclusive, the Task stays `Ready` and displays
 `Successor Session not linked`.
 
@@ -536,7 +536,7 @@ separate interaction outcome.
 
 - No Task or Artifact expires automatically.
 - Only terminal Tasks may be explicitly deleted.
-- Deletion removes SessionMesh-owned Task and Artifact data without affecting either
+- Deletion removes Mudi-owned Task and Artifact data without affecting either
   Provider Session or an open Terminal.
 
 ## 16. Deferred work

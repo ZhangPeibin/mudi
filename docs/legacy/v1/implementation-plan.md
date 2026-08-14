@@ -1,4 +1,4 @@
-# SessionMesh — implementation plan (v1)
+# Mudi — implementation plan (v1)
 
 ## Architecture
 
@@ -29,8 +29,8 @@ state detector (state.rs, macOS)      SQLite index (index/) — disposable, rebu
 
 ## Modules
 
-- `config.rs` — data dirs, env overrides (`SESSIONMESH_CLAUDE_DIR`, `SESSIONMESH_CODEX_DIR`,
-  `SESSIONMESH_DATA_DIR`, `SESSIONMESH_EXTRA_DIRS`), thresholds.
+- `config.rs` — data dirs, env overrides (`MUDI_CLAUDE_DIR`, `MUDI_CODEX_DIR`,
+  `MUDI_DATA_DIR`, `MUDI_EXTRA_DIRS`), thresholds.
 - `domain.rs` — `Provider`, `SessionState`, `Usage`, `ContextState`, `ModelUsage`,
   `Compaction`, `Session`, `Snapshot`.
 - `models.rs` — bundled Model Provider/model catalog (embedded JSON), local override, Context

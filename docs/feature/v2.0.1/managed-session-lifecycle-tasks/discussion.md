@@ -26,7 +26,7 @@ themselves preserve actionable state.
 
 ## Users and Outcomes
 
-A developer should be able to inspect all explicitly authorized SessionMesh work through
+A developer should be able to inspect all explicitly authorized Mudi work through
 one Task model and one primary Task surface, regardless of whether the operation is New,
 Resume, or Handoff.
 
@@ -128,7 +128,7 @@ acknowledgement behavior remain open.
 - A Session has an existing non-terminal Handoff Task when Resume is requested, or vice
   versa.
 - A New or Resume Task enters `Needs Review` with a potentially live Provider process.
-- SessionMesh restarts with non-terminal launch Tasks and incomplete binding evidence.
+- Mudi restarts with non-terminal launch Tasks and incomplete binding evidence.
 - Task deletion is requested while launch or Provider evidence still requires retention.
 - A Task changes state between rendering and the developer invoking an action.
 - Compact terminals cannot display every Task kind, status, target, and action at once.

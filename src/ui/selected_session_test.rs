@@ -14,15 +14,15 @@ fn session() -> Session {
         provenance: crate::domain::SessionProvenance::Observed,
         source: SourceMetadata::default(),
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/Users/test/code/sessionmesh")),
-            label: "sessionmesh".into(),
+            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/Users/test/code/mudi")),
+            label: "mudi".into(),
         }),
         worktree: Some(crate::domain::Worktree {
-            root: PathBuf::from("/Users/test/code/sessionmesh"),
+            root: PathBuf::from("/Users/test/code/mudi"),
             branch: Some("main".into()),
             writable: true,
         }),
-        cwd: Some("/Users/test/code/sessionmesh".into()),
+        cwd: Some("/Users/test/code/mudi".into()),
         latest_model: Some("test-model".into()),
         state: SessionState::Busy,
         context: ContextState {
