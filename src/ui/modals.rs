@@ -278,7 +278,7 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         return;
     };
     let theme = ui.theme.palette();
-    let area = layout::centered_rect_with_max_size(88, 78, 7, f.area());
+    let area = layout::centered_rect_with_max_size(88, 78, 11, f.area());
     let content_width = usize::from(area.width).saturating_sub(2);
     let value_width = content_width.saturating_sub(FIELD_INDICATOR_WIDTH + FIELD_LABEL_WIDTH);
     let target = form.targets.get(form.target_index);
@@ -337,19 +337,23 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         .unwrap_or_default();
     let lines = vec![
         field_line("Provider *", provider, NewSessionField::Provider, false),
+        Line::from(""),
         field_line(
             "Location",
             location.as_ref(),
             NewSessionField::Location,
             true,
         ),
+        Line::from(""),
         field_line("Title *", &form.title, NewSessionField::Title, false),
+        Line::from(""),
         field_line(
             "Description",
             &form.description,
             NewSessionField::Description,
             false,
         ),
+        Line::from(""),
         status_line,
     ];
     let footer = if editing.is_some() {
@@ -390,7 +394,7 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
                 + FIELD_INDICATOR_WIDTH as u16
                 + FIELD_LABEL_WIDTH as u16
                 + cursor_column as u16,
-            area.y + 1 + draft.field() as u16,
+            area.y + 1 + draft.field() as u16 * 2,
         ));
     }
 
@@ -408,26 +412,28 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
 }
 
 fn draw_provider_choice(f: &mut Frame, form: &super::NewSessionForm, cursor: usize, theme: Theme) {
-    let area = layout::centered_rect_with_max_size(70, 58, 5, f.area());
+    let area = layout::centered_rect_with_max_size(70, 58, 7, f.area());
     let content_width = usize::from(area.width).saturating_sub(2);
     let choices = [
         ("Codex CLI", Provider::CodexCli, theme.provider_codex),
         ("Claude Code", Provider::ClaudeCode, theme.provider_claude),
     ];
-    let mut lines = choices
-        .iter()
-        .enumerate()
-        .map(|(index, (label, provider, color))| {
-            property_choice_line(
-                label,
-                index == cursor,
-                form.provider == Some(*provider),
-                content_width,
-                *color,
-                theme,
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut lines = vec![Line::from("")];
+    lines.extend(
+        choices
+            .iter()
+            .enumerate()
+            .map(|(index, (label, provider, color))| {
+                property_choice_line(
+                    label,
+                    index == cursor,
+                    form.provider == Some(*provider),
+                    content_width,
+                    *color,
+                    theme,
+                )
+            }),
+    );
     lines.push(
         if cursor == 0 || form.provider == Some(Provider::CodexCli) {
             Line::from(Span::styled(
@@ -440,6 +446,7 @@ fn draw_provider_choice(f: &mut Frame, form: &super::NewSessionForm, cursor: usi
             Line::from("")
         },
     );
+    lines.push(Line::from(""));
     draw_property_choice_dialog(f, area, " Select Provider ", lines, theme);
 }
 
@@ -451,36 +458,36 @@ fn draw_location_choice(f: &mut Frame, form: &super::NewSessionForm, cursor: usi
     let area = layout::centered_rect_with_max_size(
         88,
         78,
-        u16::try_from(visible_count + 2).unwrap_or(10),
+        u16::try_from(visible_count + 4).unwrap_or(12),
         f.area(),
     );
     let content_width = usize::from(area.width).saturating_sub(2);
     let start = cursor
         .saturating_sub(visible_count - 1)
         .min(option_count.saturating_sub(visible_count));
-    let lines = (start..start + visible_count)
-        .map(|index| {
-            if let Some(target) = form.targets.get(index) {
-                property_choice_line(
-                    &target.working_directory.to_string_lossy(),
-                    index == cursor,
-                    index == form.target_index,
-                    content_width,
-                    theme.foreground,
-                    theme,
-                )
-            } else {
-                property_choice_line(
-                    "Choose Directory...",
-                    index == cursor,
-                    false,
-                    content_width,
-                    theme.accent,
-                    theme,
-                )
-            }
-        })
-        .collect();
+    let mut lines = vec![Line::from("")];
+    lines.extend((start..start + visible_count).map(|index| {
+        if let Some(target) = form.targets.get(index) {
+            property_choice_line(
+                &target.working_directory.to_string_lossy(),
+                index == cursor,
+                index == form.target_index,
+                content_width,
+                theme.foreground,
+                theme,
+            )
+        } else {
+            property_choice_line(
+                "Choose Directory...",
+                index == cursor,
+                false,
+                content_width,
+                theme.accent,
+                theme,
+            )
+        }
+    }));
+    lines.push(Line::from(""));
     draw_property_choice_dialog(f, area, " Select Location ", lines, theme);
 }
 

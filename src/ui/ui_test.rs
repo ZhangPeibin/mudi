@@ -720,7 +720,17 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
     assert!(initial.contains("↑/↓ Move · Enter Edit · y Start · Esc/q Close"));
     assert!(!initial.contains("Full access · No sandbox · No approvals"));
     assert!(!initial.contains("Start New"));
-    assert_eq!(rendered_modal_height(&initial, "New"), 7);
+    assert_eq!(rendered_modal_height(&initial, "New"), 11);
+    let initial_rows = initial.lines().collect::<Vec<_>>();
+    let property_rows = ["Provider *", "Location", "Title *", "Description"].map(|label| {
+        initial_rows
+            .iter()
+            .position(|row| row.contains(label))
+            .unwrap()
+    });
+    assert_eq!(property_rows[1], property_rows[0] + 2);
+    assert_eq!(property_rows[2], property_rows[1] + 2);
+    assert_eq!(property_rows[3], property_rows[2] + 2);
 
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
@@ -740,16 +750,39 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
         assert!(compact.contains(visible_control));
     }
     assert!(!compact.contains("Start New"));
-    assert_eq!(rendered_modal_height(&compact, "New"), 7);
+    assert_eq!(rendered_modal_height(&compact, "New"), 11);
 
     ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     let provider_choice = rendered_rows_at(&ui, &snapshot, 120, 36);
     assert!(provider_choice.contains("Select Provider"));
     assert!(provider_choice.contains("› ◦ Codex CLI"));
     assert!(provider_choice.contains("Full access · No sandbox · No approvals"));
+    assert_eq!(
+        rendered_modal_height(&provider_choice, "Select Provider"),
+        7
+    );
+    let provider_rows = provider_choice.lines().collect::<Vec<_>>();
+    let provider_top = provider_rows
+        .iter()
+        .position(|row| row.contains("Select Provider"))
+        .unwrap();
+    let codex_row = provider_rows
+        .iter()
+        .position(|row| row.contains("Codex CLI"))
+        .unwrap();
+    let notice_row = provider_rows
+        .iter()
+        .position(|row| row.contains("Full access · No sandbox · No approvals"))
+        .unwrap();
+    assert_eq!(codex_row, provider_top + 2);
+    assert_eq!(notice_row, provider_top + 4);
     let compact_provider_choice = rendered_rows_at(&ui, &snapshot, 80, 24);
     assert!(compact_provider_choice.contains("Select Provider"));
     assert!(compact_provider_choice.contains("Enter Select · Esc Back"));
+    assert_eq!(
+        rendered_modal_height(&compact_provider_choice, "Select Provider"),
+        7
+    );
     assert_eq!(ui.new_session.as_ref().unwrap().provider, None);
     ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     let codex_selected = rendered_rows_at(&ui, &snapshot, 120, 36);
@@ -769,9 +802,29 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
     assert!(locations.contains("› • /Users/x/code/mudi"));
     assert!(locations.contains("/Users/x/code/mudi-feature"));
     assert!(locations.contains("Choose Directory..."));
+    assert_eq!(rendered_modal_height(&locations, "Select Location"), 7);
+    let location_rows = locations.lines().collect::<Vec<_>>();
+    let location_top = location_rows
+        .iter()
+        .position(|row| row.contains("Select Location"))
+        .unwrap();
+    let current_location_row = location_rows
+        .iter()
+        .position(|row| row.contains("› • /Users/x/code/mudi"))
+        .unwrap();
+    let choose_directory_row = location_rows
+        .iter()
+        .position(|row| row.contains("Choose Directory..."))
+        .unwrap();
+    assert_eq!(current_location_row, location_top + 2);
+    assert_eq!(choose_directory_row, location_top + 4);
     let compact_locations = rendered_rows_at(&ui, &snapshot, 80, 24);
     assert!(compact_locations.contains("Select Location"));
     assert!(compact_locations.contains("Choose Directory..."));
+    assert_eq!(
+        rendered_modal_height(&compact_locations, "Select Location"),
+        7
+    );
     ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
     assert_eq!(
         ui.new_session.as_ref().unwrap().targets[ui.new_session.as_ref().unwrap().target_index]
@@ -874,6 +927,40 @@ fn new_session_shortcut_letters_are_text_only_while_inline_editing() {
     ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
     assert_eq!(ui.new_session.as_ref().unwrap().description, "");
     assert!(ui.new_session.is_some());
+}
+
+#[test]
+fn new_inline_editing_keeps_the_cursor_on_the_spaced_property_row() {
+    let snapshot = managed_new_snapshot();
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+    let mut title_terminal = render_terminal_at(&ui, &snapshot, 80, 24);
+    let title_cursor = title_terminal.get_cursor_position().unwrap();
+    let title_rows = rendered_rows_at(&ui, &snapshot, 80, 24);
+    let title_row = title_rows
+        .lines()
+        .position(|row| row.contains("Title *"))
+        .unwrap() as u16;
+    assert_eq!(title_cursor.y, title_row);
+
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    let mut description_terminal = render_terminal_at(&ui, &snapshot, 80, 24);
+    let description_cursor = description_terminal.get_cursor_position().unwrap();
+    let description_rows = rendered_rows_at(&ui, &snapshot, 80, 24);
+    let description_row = description_rows
+        .lines()
+        .position(|row| row.contains("Description"))
+        .unwrap() as u16;
+    assert_eq!(description_cursor.y, description_row);
+    assert_eq!(description_cursor.y, title_cursor.y + 2);
 }
 
 #[test]
@@ -1086,6 +1173,20 @@ fn empty_target_directory_browser_starts_from_mudi_working_directory() {
     assert!(location_choice.contains("Select Location"));
     assert!(location_choice.contains("› ◦ Choose Directory..."));
     assert_eq!(
+        rendered_modal_height(&location_choice, "Select Location"),
+        5
+    );
+    let location_rows = location_choice.lines().collect::<Vec<_>>();
+    let location_top = location_rows
+        .iter()
+        .position(|row| row.contains("Select Location"))
+        .unwrap();
+    let choose_directory_row = location_rows
+        .iter()
+        .position(|row| row.contains("Choose Directory..."))
+        .unwrap();
+    assert_eq!(choose_directory_row, location_top + 2);
+    assert_eq!(
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
         UiAction::None
     );
@@ -1094,6 +1195,60 @@ fn empty_target_directory_browser_starts_from_mudi_working_directory() {
         ui.directory_browser.as_ref().unwrap().explorer.cwd(),
         &std::env::current_dir().unwrap()
     );
+}
+
+#[test]
+fn location_selector_keeps_padding_while_scrolling_a_capped_option_list() {
+    let mut snapshot = managed_new_snapshot();
+    for index in 2..=9 {
+        let mut session = snapshot.sessions[0].clone();
+        session.id = format!("worktree-session-{index}");
+        let root = PathBuf::from(format!("/Users/x/code/mudi-worktree-{index}"));
+        session.worktree = Some(Worktree {
+            root: root.clone(),
+            branch: Some(format!("worktree-{index}")),
+            writable: true,
+        });
+        session.cwd = Some(root.to_string_lossy().into_owned());
+        session.last_activity_ms = 1_000 - index;
+        snapshot.sessions.push(session);
+    }
+    let mut ui = Ui::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    ui.clamp_selections(&snapshot);
+    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+    let initial = rendered_rows_at(&ui, &snapshot, 80, 24);
+    assert_eq!(rendered_modal_height(&initial, "Select Location"), 12);
+    let initial_rows = initial.lines().collect::<Vec<_>>();
+    let initial_top = initial_rows
+        .iter()
+        .position(|row| row.contains("Select Location"))
+        .unwrap();
+    let current_location_row = initial_rows
+        .iter()
+        .position(|row| row.contains("› • /Users/x/code/mudi"))
+        .unwrap();
+    assert_eq!(current_location_row, initial_top + 2);
+    assert!(!initial.contains("Choose Directory..."));
+
+    for _ in 0..10 {
+        ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    }
+    let scrolled = rendered_rows_at(&ui, &snapshot, 80, 24);
+    assert_eq!(rendered_modal_height(&scrolled, "Select Location"), 12);
+    let scrolled_rows = scrolled.lines().collect::<Vec<_>>();
+    let scrolled_top = scrolled_rows
+        .iter()
+        .position(|row| row.contains("Select Location"))
+        .unwrap();
+    let choose_directory_row = scrolled_rows
+        .iter()
+        .position(|row| row.contains("› ◦ Choose Directory..."))
+        .unwrap();
+    assert_eq!(choose_directory_row, scrolled_top + 9);
 }
 
 #[test]
@@ -1387,7 +1542,17 @@ fn selected_worktree_new_requires_title_and_does_not_remember_provider() {
         ui.new_session.as_ref().unwrap().field(),
         NewSessionField::Title
     );
-    assert_eq!(rendered_modal_height(&invalid, "New"), 7);
+    assert_eq!(rendered_modal_height(&invalid, "New"), 11);
+    let invalid_rows = invalid.lines().collect::<Vec<_>>();
+    let description_row = invalid_rows
+        .iter()
+        .position(|row| row.contains("Description"))
+        .unwrap();
+    let error_row = invalid_rows
+        .iter()
+        .position(|row| row.contains("Title is required"))
+        .unwrap();
+    assert_eq!(error_row, description_row + 2);
 
     ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
