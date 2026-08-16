@@ -150,6 +150,30 @@ impl ProductionRender {
         panic!("rendered text not found: {text:?}");
     }
 
+    fn bordered_region_size(&self, title: &str) -> (u16, u16) {
+        let title_position = self.position_of(title);
+        let rows = self.buffer.content().chunks(self.width as usize);
+        let top_row = rows.clone().nth(title_position.y as usize).unwrap();
+        let left = top_row
+            .iter()
+            .position(|cell| cell.symbol() == "┌")
+            .unwrap_or_else(|| panic!("left border not found for {title:?}"));
+        let right = top_row
+            .iter()
+            .rposition(|cell| cell.symbol() == "┐")
+            .unwrap_or_else(|| panic!("right border not found for {title:?}"));
+        let bottom = rows
+            .enumerate()
+            .skip(title_position.y as usize + 1)
+            .find(|(_, row)| row[left].symbol() == "└")
+            .map(|(y, _)| y)
+            .unwrap_or_else(|| panic!("bottom border not found for {title:?}"));
+        (
+            (right - left + 1) as u16,
+            bottom as u16 - title_position.y + 1,
+        )
+    }
+
     fn top_rule_style(&self, title: &str) -> Style {
         let position = self.position_of(title);
         let row_start = position.y as usize * self.width as usize;
@@ -4167,21 +4191,37 @@ fn edit_session_opens_for_the_selected_session_with_identity_evidence() {
     let mut ui = Ui::default();
 
     press(&mut ui, &snapshot, KeyCode::Char('e'));
-    let rendered = render(&snapshot, &ui, 80, 24);
-
-    for required in [
-        "Edit Session",
-        "Session  Claude Code · critical",
-        "Title",
-        "Description",
-        "Tab/Shift+Tab Fields",
-        "Enter Save",
-        "Esc Cancel",
-    ] {
-        assert!(
-            rendered.text.contains(required),
-            "Edit Session should contain {required:?}:\n{}",
-            rendered.visible_text()
+    for (width, height, expected_width) in [(80, 24, 70), (120, 36, 78)] {
+        let rendered = render(&snapshot, &ui, width, height);
+        for required in [
+            "Edit Session",
+            "Claude Code · critical",
+            "Session",
+            "Title",
+            "Description",
+            "Not set",
+            "Tab/Shift+Tab Fields · Enter Save · Esc Cancel",
+        ] {
+            assert!(
+                rendered.text.contains(required),
+                "Edit Session should contain {required:?}:\n{}",
+                rendered.visible_text()
+            );
+        }
+        assert_eq!(
+            rendered.bordered_region_size("Edit Session"),
+            (expected_width, 8)
+        );
+        let modal_top = rendered.position_of("Edit Session").y;
+        let session_row = rendered.position_of("Claude Code · critical").y;
+        let title_row = rendered.position_of("Title").y;
+        let description_row = rendered.position_of("Description").y;
+        assert_eq!(session_row, modal_top + 2);
+        assert_eq!(title_row, session_row + 1);
+        assert_eq!(description_row, title_row + 1);
+        assert_ne!(
+            rendered.style_before_right_border_in_row("› Title").bg,
+            rendered.style_before_right_border_in_row("Description").bg
         );
     }
 }
@@ -4193,12 +4233,12 @@ fn tab_and_shift_tab_move_session_editor_focus_between_fields() {
     press(&mut ui, &snapshot, KeyCode::Char('e'));
 
     let title = render(&snapshot, &ui, 80, 24);
-    assert!(title.text.contains("> Title"));
+    assert!(title.text.contains("› Title"));
     let title_cursor = title.cursor_position;
 
     press(&mut ui, &snapshot, KeyCode::Tab);
     let description = render(&snapshot, &ui, 80, 24);
-    assert!(description.text.contains("> Description"));
+    assert!(description.text.contains("› Description"));
     assert_eq!(description.cursor_position.y, title_cursor.y + 1);
 
     ui.handle_key(
@@ -4207,7 +4247,7 @@ fn tab_and_shift_tab_move_session_editor_focus_between_fields() {
     )
     .unwrap();
     let title_again = render(&snapshot, &ui, 80, 24);
-    assert!(title_again.text.contains("> Title"));
+    assert!(title_again.text.contains("› Title"));
     assert_eq!(title_again.cursor_position, title_cursor);
 }
 
@@ -4216,6 +4256,8 @@ fn description_editor_accepts_unicode_and_enforces_the_240_character_limit() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    let initial = render(&snapshot, &ui, 120, 30);
+    assert_eq!(initial.bordered_region_size("Edit Session"), (78, 8));
     press(&mut ui, &snapshot, KeyCode::Tab);
     for character in "界".repeat(241).chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
@@ -4227,6 +4269,14 @@ fn description_editor_accepts_unicode_and_enforces_the_240_character_limit() {
         .text
         .contains("Description must be 240 characters or fewer"));
     assert!(invalid.cursor_visible);
+    assert_eq!(invalid.bordered_region_size("Edit Session"), (78, 8));
+    let modal_top = invalid.position_of("Edit Session").y;
+    let description_row = invalid.position_of("Description").y;
+    let error_row = invalid
+        .position_of("Description must be 240 characters or fewer")
+        .y;
+    assert_eq!(error_row, description_row + 1);
+    assert_eq!(modal_top + 7, error_row + 2);
 
     press(&mut ui, &snapshot, KeyCode::Backspace);
     press(&mut ui, &snapshot, KeyCode::Enter);
@@ -4246,7 +4296,7 @@ fn empty_session_editor_places_the_cursor_after_the_title_field_label() {
 
     assert_eq!(
         rendered.cursor_position,
-        Position::new(label.x + 13, label.y)
+        Position::new(label.x + 14, label.y)
     );
     assert!(rendered.cursor_visible);
 }
@@ -4265,7 +4315,7 @@ fn title_editor_keeps_the_cursor_after_ascii_input() {
 
     assert_eq!(
         rendered.cursor_position,
-        Position::new(label.x + 21, label.y)
+        Position::new(label.x + 22, label.y)
     );
 }
 
@@ -4283,7 +4333,7 @@ fn title_editor_places_the_cursor_after_double_width_unicode_input() {
 
     assert_eq!(
         rendered.cursor_position,
-        Position::new(label.x + 17, label.y)
+        Position::new(label.x + 18, label.y)
     );
 }
 
@@ -4302,7 +4352,7 @@ fn backspace_moves_the_title_editor_cursor_to_the_new_input_end() {
 
     assert_eq!(
         rendered.cursor_position,
-        Position::new(label.x + 15, label.y)
+        Position::new(label.x + 16, label.y)
     );
 }
 
@@ -4563,7 +4613,7 @@ fn title_editor_rejects_81_characters_and_accepts_80() {
 
     press(&mut ui, &snapshot, KeyCode::Enter);
     let invalid = render(&snapshot, &ui, 120, 30);
-    assert!(invalid.text.contains("Enter Save | Esc Cancel"));
+    assert!(invalid.text.contains("Enter Save · Esc Cancel"));
     assert!(invalid
         .text
         .contains("Title must be 80 characters or fewer"));
@@ -4571,7 +4621,7 @@ fn title_editor_rejects_81_characters_and_accepts_80() {
     press(&mut ui, &snapshot, KeyCode::Backspace);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let saved = render(&snapshot, &ui, 120, 30);
-    assert!(!saved.text.contains("Enter Save | Esc Cancel"));
+    assert!(!saved.text.contains("Enter Save · Esc Cancel"));
     assert!(saved.text.contains("Session metadata saved"));
 }
 
@@ -4595,7 +4645,7 @@ fn escape_cancels_session_editing_without_persisting_or_prefilling_either_draft(
     assert!(!cancelled.cursor_visible);
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     let reopened = render(&snapshot, &ui, 120, 30);
-    assert!(reopened.text.contains("Enter Save | Esc Cancel"));
+    assert!(reopened.text.contains("Enter Save · Esc Cancel"));
     assert!(!reopened.text.contains("Cancelled draft"));
     assert!(!reopened.text.contains("Cancelled description"));
 }

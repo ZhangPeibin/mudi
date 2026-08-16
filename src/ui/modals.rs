@@ -15,6 +15,8 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 const CODEX_FULL_ACCESS_NOTICE: &str = "Full access · No sandbox · No approvals";
+const PROPERTY_INDICATOR_WIDTH: usize = 2;
+const PROPERTY_LABEL_WIDTH: usize = 14;
 
 /// Whether a modal interaction layer currently owns input over page content.
 pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
@@ -271,28 +273,18 @@ fn draw_managed_resume_confirmation(f: &mut Frame, ui: &Ui) {
 }
 
 fn draw_new_session(f: &mut Frame, ui: &Ui) {
-    const FIELD_INDICATOR_WIDTH: usize = 2;
-    const FIELD_LABEL_WIDTH: usize = 14;
-
     let Some(form) = &ui.new_session else {
         return;
     };
     let theme = ui.theme.palette();
     let area = layout::centered_rect_with_max_size(88, 78, 9, f.area());
     let content_width = usize::from(area.width).saturating_sub(2);
-    let value_width = content_width.saturating_sub(FIELD_INDICATOR_WIDTH + FIELD_LABEL_WIDTH);
+    let value_width = content_width.saturating_sub(PROPERTY_INDICATOR_WIDTH + PROPERTY_LABEL_WIDTH);
     let target = form.targets.get(form.target_index);
     let editing = form.editor.editing();
     let field_line = |label: &str, value: &str, field: NewSessionField, keep_end: bool| {
         let focused = form.editor.focused() == field.index();
         let field_draft = editing.filter(|draft| draft.field() == field.index());
-        let label_style = if focused {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.muted)
-        };
         let empty = value.is_empty() && field_draft.is_none();
         let visible_value = if let Some(draft) = field_draft {
             draft.visible(value_width.saturating_sub(1)).0
@@ -301,27 +293,7 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         } else {
             text::fit(value, value_width, keep_end)
         };
-        let value_style = Style::default()
-            .fg(if empty {
-                theme.muted
-            } else if focused {
-                theme.selected_foreground
-            } else {
-                theme.foreground
-            })
-            .bg(if focused {
-                theme.selected_background
-            } else {
-                theme.background
-            });
-        let padding =
-            " ".repeat(value_width.saturating_sub(UnicodeWidthStr::width(visible_value.as_str())));
-        Line::from(vec![
-            Span::styled(if focused { "› " } else { "  " }, label_style),
-            Span::styled(format!("{label:<FIELD_LABEL_WIDTH$}"), label_style),
-            Span::styled(visible_value, value_style),
-            Span::styled(padding, value_style),
-        ])
+        property_field_line(label, visible_value, focused, empty, value_width, theme)
     };
     let status_line = if let Some(error) = &form.error {
         Line::from(Span::styled(
@@ -389,8 +361,8 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         f.set_cursor_position(Position::new(
             area.x
                 + 1
-                + FIELD_INDICATOR_WIDTH as u16
-                + FIELD_LABEL_WIDTH as u16
+                + PROPERTY_INDICATOR_WIDTH as u16
+                + PROPERTY_LABEL_WIDTH as u16
                 + cursor_column as u16,
             area.y + 2 + draft.field() as u16,
         ));
@@ -407,6 +379,44 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
             _ => {}
         }
     }
+}
+
+fn property_field_line(
+    label: &str,
+    visible_value: String,
+    focused: bool,
+    empty: bool,
+    value_width: usize,
+    theme: Theme,
+) -> Line<'static> {
+    let label_style = if focused {
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.muted)
+    };
+    let value_style = Style::default()
+        .fg(if empty {
+            theme.muted
+        } else if focused {
+            theme.selected_foreground
+        } else {
+            theme.foreground
+        })
+        .bg(if focused {
+            theme.selected_background
+        } else {
+            theme.background
+        });
+    let padding =
+        " ".repeat(value_width.saturating_sub(UnicodeWidthStr::width(visible_value.as_str())));
+    Line::from(vec![
+        Span::styled(if focused { "› " } else { "  " }, label_style),
+        Span::styled(format!("{label:<PROPERTY_LABEL_WIDTH$}"), label_style),
+        Span::styled(visible_value, value_style),
+        Span::styled(padding, value_style),
+    ])
 }
 
 fn draw_provider_choice(f: &mut Frame, form: &super::NewSessionForm, cursor: usize, theme: Theme) {
@@ -800,57 +810,62 @@ pub(super) fn draw_terminal_too_small(f: &mut Frame, theme: Theme) {
 
 /// 绘制 Session 元数据编辑器，并把终端光标放到当前字段的可见输入末尾。
 fn draw_session_editor(f: &mut Frame, ui: &Ui) {
-    const FIELD_INDICATOR_WIDTH: usize = 2;
-    const FIELD_LABEL_WIDTH: usize = 13;
-
     let Some(editor) = &ui.edit_session else {
         return;
     };
     let theme = ui.theme.palette();
-    let area = layout::centered_rect(76, 42, f.area());
-    // Reserve both borders and one cell for the terminal cursor at the input end.
-    let input_width =
-        usize::from(area.width).saturating_sub(3 + FIELD_INDICATOR_WIDTH + FIELD_LABEL_WIDTH);
+    let area = layout::centered_rect_with_max_size(88, 78, 8, f.area());
+    let content_width = usize::from(area.width).saturating_sub(2);
+    let value_width = content_width.saturating_sub(PROPERTY_INDICATOR_WIDTH + PROPERTY_LABEL_WIDTH);
+    let input_width = value_width.saturating_sub(1);
     let title_input = text::visible_input_tail(&editor.title, input_width);
     let description_input = text::visible_input_tail(&editor.description, input_width);
     let short_id = SessionLabels::short_id(&editor.session.native_id);
     let field_line = |label: &str, input: String, field: SessionEditorField| {
         let focused = editor.field == field;
-        let label_style = if focused {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
+        let empty = input.is_empty() && !focused;
+        let visible_value = if empty {
+            text::fit("Not set", value_width, false)
         } else {
-            Style::default().fg(theme.muted)
+            input
         };
-        Line::from(vec![
-            Span::styled(if focused { "> " } else { "  " }, label_style),
-            Span::styled(format!("{label:<FIELD_LABEL_WIDTH$}"), label_style),
-            Span::styled(input, Style::default().fg(theme.foreground)),
-        ])
+        property_field_line(label, visible_value, focused, empty, value_width, theme)
     };
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("Session  ", Style::default().fg(theme.muted)),
-            Span::styled(
-                format!("{} · {short_id}", editor.session.provider.label()),
-                Style::default().fg(theme.foreground),
-            ),
-        ]),
+    let status_line = if let Some(error) = &editor.error {
+        Line::from(Span::styled(
+            text::fit(&format!("! {error}"), content_width, false),
+            Style::default().fg(theme.critical),
+        ))
+    } else {
+        Line::from("")
+    };
+    let lines = vec![
         Line::from(""),
+        property_field_line(
+            "Session",
+            text::fit(
+                &format!("{} · {short_id}", editor.session.provider.label()),
+                value_width,
+                false,
+            ),
+            false,
+            false,
+            value_width,
+            theme,
+        ),
         field_line("Title", title_input.clone(), SessionEditorField::Title),
         field_line(
             "Description",
             description_input.clone(),
             SessionEditorField::Description,
         ),
+        status_line,
+        Line::from(""),
     ];
-    if let Some(error) = &editor.error {
-        lines.push(Line::from(Span::styled(
-            error.clone(),
-            Style::default().fg(theme.critical),
-        )));
-    }
+    f.render_widget(
+        Block::default().style(Style::default().add_modifier(Modifier::DIM)),
+        f.area(),
+    );
     f.render_widget(Clear, area);
     f.render_widget(
         Paragraph::new(lines)
@@ -858,7 +873,7 @@ fn draw_session_editor(f: &mut Frame, ui: &Ui) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.accent))
+                    .border_style(Style::default().fg(theme.border))
                     .title(Span::styled(
                         " Edit Session ",
                         Style::default()
@@ -867,10 +882,10 @@ fn draw_session_editor(f: &mut Frame, ui: &Ui) {
                     ))
                     .title_bottom(
                         Line::from(Span::styled(
-                            " Tab/Shift+Tab Fields | Enter Save | Esc Cancel ",
+                            " Tab/Shift+Tab Fields · Enter Save · Esc Cancel ",
                             Style::default().fg(theme.muted),
                         ))
-                        .right_aligned(),
+                        .centered(),
                     ),
             ),
         area,
@@ -882,8 +897,8 @@ fn draw_session_editor(f: &mut Frame, ui: &Ui) {
     f.set_cursor_position(Position::new(
         area.x
             + 1
-            + FIELD_INDICATOR_WIDTH as u16
-            + FIELD_LABEL_WIDTH as u16
+            + PROPERTY_INDICATOR_WIDTH as u16
+            + PROPERTY_LABEL_WIDTH as u16
             + UnicodeWidthStr::width(visible_input.as_str()) as u16,
         area.y + row_offset,
     ));
