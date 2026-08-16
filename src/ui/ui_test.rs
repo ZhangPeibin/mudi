@@ -720,17 +720,22 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
     assert!(initial.contains("↑/↓ Move · Enter Edit · y Start · Esc/q Close"));
     assert!(!initial.contains("Full access · No sandbox · No approvals"));
     assert!(!initial.contains("Start New"));
-    assert_eq!(rendered_modal_height(&initial, "New"), 11);
+    assert_eq!(rendered_modal_height(&initial, "New"), 9);
     let initial_rows = initial.lines().collect::<Vec<_>>();
+    let modal_top = initial_rows
+        .iter()
+        .position(|row| row.contains("New"))
+        .unwrap();
     let property_rows = ["Provider *", "Location", "Title *", "Description"].map(|label| {
         initial_rows
             .iter()
             .position(|row| row.contains(label))
             .unwrap()
     });
-    assert_eq!(property_rows[1], property_rows[0] + 2);
-    assert_eq!(property_rows[2], property_rows[1] + 2);
-    assert_eq!(property_rows[3], property_rows[2] + 2);
+    assert_eq!(property_rows[0], modal_top + 2);
+    assert_eq!(property_rows[1], property_rows[0] + 1);
+    assert_eq!(property_rows[2], property_rows[1] + 1);
+    assert_eq!(property_rows[3], property_rows[2] + 1);
 
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
@@ -750,7 +755,7 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
         assert!(compact.contains(visible_control));
     }
     assert!(!compact.contains("Start New"));
-    assert_eq!(rendered_modal_height(&compact, "New"), 11);
+    assert_eq!(rendered_modal_height(&compact, "New"), 9);
 
     ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     let provider_choice = rendered_rows_at(&ui, &snapshot, 120, 36);
@@ -960,7 +965,7 @@ fn new_inline_editing_keeps_the_cursor_on_the_spaced_property_row() {
         .position(|row| row.contains("Description"))
         .unwrap() as u16;
     assert_eq!(description_cursor.y, description_row);
-    assert_eq!(description_cursor.y, title_cursor.y + 2);
+    assert_eq!(description_cursor.y, title_cursor.y + 1);
 }
 
 #[test]
@@ -1542,8 +1547,12 @@ fn selected_worktree_new_requires_title_and_does_not_remember_provider() {
         ui.new_session.as_ref().unwrap().field(),
         NewSessionField::Title
     );
-    assert_eq!(rendered_modal_height(&invalid, "New"), 11);
+    assert_eq!(rendered_modal_height(&invalid, "New"), 9);
     let invalid_rows = invalid.lines().collect::<Vec<_>>();
+    let modal_top = invalid_rows
+        .iter()
+        .position(|row| row.contains("New"))
+        .unwrap();
     let description_row = invalid_rows
         .iter()
         .position(|row| row.contains("Description"))
@@ -1552,7 +1561,8 @@ fn selected_worktree_new_requires_title_and_does_not_remember_provider() {
         .iter()
         .position(|row| row.contains("Title is required"))
         .unwrap();
-    assert_eq!(error_row, description_row + 2);
+    assert_eq!(error_row, description_row + 1);
+    assert_eq!(modal_top + 8, error_row + 2);
 
     ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();

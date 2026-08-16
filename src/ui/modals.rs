@@ -278,7 +278,7 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         return;
     };
     let theme = ui.theme.palette();
-    let area = layout::centered_rect_with_max_size(88, 78, 11, f.area());
+    let area = layout::centered_rect_with_max_size(88, 78, 9, f.area());
     let content_width = usize::from(area.width).saturating_sub(2);
     let value_width = content_width.saturating_sub(FIELD_INDICATOR_WIDTH + FIELD_LABEL_WIDTH);
     let target = form.targets.get(form.target_index);
@@ -336,25 +336,23 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         .map(|target| target.working_directory.to_string_lossy())
         .unwrap_or_default();
     let lines = vec![
-        field_line("Provider *", provider, NewSessionField::Provider, false),
         Line::from(""),
+        field_line("Provider *", provider, NewSessionField::Provider, false),
         field_line(
             "Location",
             location.as_ref(),
             NewSessionField::Location,
             true,
         ),
-        Line::from(""),
         field_line("Title *", &form.title, NewSessionField::Title, false),
-        Line::from(""),
         field_line(
             "Description",
             &form.description,
             NewSessionField::Description,
             false,
         ),
-        Line::from(""),
         status_line,
+        Line::from(""),
     ];
     let footer = if editing.is_some() {
         " Enter Save · Esc Cancel "
@@ -394,7 +392,7 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
                 + FIELD_INDICATOR_WIDTH as u16
                 + FIELD_LABEL_WIDTH as u16
                 + cursor_column as u16,
-            area.y + 1 + draft.field() as u16 * 2,
+            area.y + 2 + draft.field() as u16,
         ));
     }
 
