@@ -707,86 +707,95 @@ fn project_context_new_defaults_to_main_and_emits_the_switched_worktree() {
         UiAction::None
     );
     let initial = rendered_rows_at(&ui, &snapshot, 120, 36);
-    assert!(initial.contains("New Session"));
+    assert!(initial.contains("New"));
     assert!(initial.contains("/Users/x/code/mudi"));
-    assert!(initial.contains("◦ Claude Code    ◦ Codex CLI"));
-    assert!(initial.contains("1 of 2"));
-    assert!(!initial.contains("1/2"));
-    assert!(initial.contains("Initialize    Off"));
-    assert!(initial.contains("Required"));
-    assert!(initial.contains("Optional"));
-    assert!(initial.contains("› Provider"));
-    assert!(initial.contains("j/k Move · ←/→ Select · y Start · n Cancel"));
+    assert!(initial.contains("Provider *    Not set"));
+    assert!(initial.contains("Location"));
+    assert!(initial.contains("Title *       Not set"));
+    assert!(initial.contains("Description   Not set"));
+    assert!(!initial.contains("New Session"));
+    assert!(!initial.contains("Create in"));
+    assert!(!initial.contains("Initialize"));
+    assert!(initial.contains("› Provider *"));
+    assert!(initial.contains("↑/↓ Move · Enter Edit · y Start · Esc/q Close"));
     assert!(!initial.contains("Full access · No sandbox · No approvals"));
     assert!(!initial.contains("Start New"));
-    assert_eq!(rendered_modal_height(&initial, "New Session"), 10);
+    assert_eq!(rendered_modal_height(&initial, "New"), 7);
 
     ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    let target_focused = rendered_rows_at(&ui, &snapshot, 120, 36);
-    assert!(target_focused.contains("←/→ Worktree · Enter Directory · y Start · n Cancel"));
-
-    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    assert_eq!(
+        ui.new_session.as_ref().unwrap().field(),
+        NewSessionField::Provider
+    );
     let initial_terminal = render_terminal_at(&ui, &snapshot, 120, 36);
     assert!(rendered_style_at(&initial_terminal, "PROJECT")
         .add_modifier
         .contains(Modifier::DIM));
-    assert!(!rendered_style_at(&initial_terminal, "New Session")
+    assert!(!rendered_style_at(&initial_terminal, "New")
         .add_modifier
         .contains(Modifier::DIM));
     let compact = rendered_rows_at(&ui, &snapshot, 80, 24);
-    for visible_control in [
-        "New Session",
-        "Provider",
-        "Worktree",
-        "Title",
-        "Description",
-        "Initialize",
-    ] {
+    for visible_control in ["New", "Provider *", "Location", "Title *", "Description"] {
         assert!(compact.contains(visible_control));
     }
     assert!(!compact.contains("Start New"));
-    assert_eq!(rendered_modal_height(&compact, "New Session"), 10);
+    assert_eq!(rendered_modal_height(&compact, "New"), 7);
 
-    ui.handle_key(key(KeyCode::Char('j')), &snapshot).unwrap();
-    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("› Worktree"));
-    ui.handle_key(key(KeyCode::Char('k')), &snapshot).unwrap();
-    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("› Provider"));
-    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    let provider_choice = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(provider_choice.contains("Select Provider"));
+    assert!(provider_choice.contains("› ◦ Codex CLI"));
+    assert!(provider_choice.contains("Full access · No sandbox · No approvals"));
+    let compact_provider_choice = rendered_rows_at(&ui, &snapshot, 80, 24);
+    assert!(compact_provider_choice.contains("Select Provider"));
+    assert!(compact_provider_choice.contains("Enter Select · Esc Back"));
+    assert_eq!(ui.new_session.as_ref().unwrap().provider, None);
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     let codex_selected = rendered_rows_at(&ui, &snapshot, 120, 36);
-    assert!(codex_selected.contains("◦ Claude Code    • Codex CLI"));
-    assert!(codex_selected.contains("Full access · No sandbox · No approvals"));
-    assert_eq!(rendered_modal_height(&codex_selected, "New Session"), 10);
+    assert!(codex_selected.contains("Codex CLI"));
+    assert!(!codex_selected.contains("Full access · No sandbox · No approvals"));
     let codex_terminal = render_terminal_at(&ui, &snapshot, 120, 36);
     assert_eq!(
-        rendered_style_at(&codex_terminal, "• Codex CLI").fg,
-        Some(ui.theme.palette().provider_codex)
+        rendered_style_at(&codex_terminal, "Codex CLI").fg,
+        Some(ui.theme.palette().selected_foreground)
     );
+
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    let locations = rendered_rows_at(&ui, &snapshot, 120, 36);
+    assert!(locations.contains("Select Location"));
+    assert!(locations.contains("/Users/x/code/mudi"));
+    assert!(locations.contains("› • /Users/x/code/mudi"));
+    assert!(locations.contains("/Users/x/code/mudi-feature"));
+    assert!(locations.contains("Choose Directory..."));
+    let compact_locations = rendered_rows_at(&ui, &snapshot, 80, 24);
+    assert!(compact_locations.contains("Select Location"));
+    assert!(compact_locations.contains("Choose Directory..."));
+    ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
     assert_eq!(
-        rendered_style_at(&codex_terminal, "• Codex CLI").bg,
-        Some(ui.theme.palette().background)
+        ui.new_session.as_ref().unwrap().targets[ui.new_session.as_ref().unwrap().target_index]
+            .working_directory,
+        PathBuf::from("/Users/x/code/mudi")
     );
-    assert_eq!(
-        rendered_style_at(&codex_terminal, "◦ Claude Code").bg,
-        Some(ui.theme.palette().background)
-    );
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
-    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("2 of 2"));
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    assert!(rendered_rows_at(&ui, &snapshot, 120, 36)
-        .contains("Type to edit · ↑/↓ Move · Enter Next · Esc Cancel"));
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Investigate startup".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Trace launch".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
-    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("Initialize    On"));
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
 
     assert_eq!(
         ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap(),
@@ -829,7 +838,7 @@ fn single_worktree_new_omits_a_meaningless_count() {
 }
 
 #[test]
-fn new_session_shortcut_letters_are_text_inside_inputs() {
+fn new_session_shortcut_letters_are_text_only_while_inline_editing() {
     let snapshot = managed_new_snapshot();
     let mut ui = Ui::default();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
@@ -837,25 +846,34 @@ fn new_session_shortcut_letters_are_text_inside_inputs() {
     ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
 
-    for character in "jkyn".chars() {
+    for character in "yq文".chars() {
         assert_eq!(
             ui.handle_key(key(KeyCode::Char(character)), &snapshot)
                 .unwrap(),
             UiAction::None
         );
     }
-    assert_eq!(ui.new_session.as_ref().unwrap().title, "jkyn");
+    assert_eq!(ui.new_session.as_ref().unwrap().title, "");
+    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Backspace), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Delete), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Char('好')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    assert_eq!(ui.new_session.as_ref().unwrap().title, "y好");
 
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    for character in "nykj".chars() {
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    for character in "q and y".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
-    assert_eq!(ui.new_session.as_ref().unwrap().description, "nykj");
+    ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
+    assert_eq!(ui.new_session.as_ref().unwrap().description, "");
+    assert!(ui.new_session.is_some());
 }
 
 #[test]
@@ -870,7 +888,6 @@ fn selected_session_new_inherits_its_worktree_context() {
         UiAction::None
     );
     let form = ui.new_session.as_ref().unwrap();
-    assert!(!form.directory_context);
     assert_eq!(
         form.targets[form.target_index].working_directory,
         PathBuf::from("/Users/x/code/mudi")
@@ -910,7 +927,9 @@ fn inherited_new_target_opens_an_in_tui_directory_browser() {
     ui.clamp_selections(&snapshot);
 
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
 
     assert_eq!(
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
@@ -957,7 +976,9 @@ fn confirming_the_directory_browser_requests_resolution_of_its_current_directory
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     ui.clamp_selections(&snapshot);
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
 
     assert_eq!(
@@ -1010,15 +1031,17 @@ fn directory_browser_navigates_with_arrow_and_vim_keys_and_cancel_preserves_the_
         worktree_root: None,
         working_directory: root.clone(),
     })));
-    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Preserve this title".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
-    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
     let form_before = ui.new_session.clone();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
 
     ui.handle_key(key(KeyCode::Char('j')), &snapshot).unwrap();
@@ -1057,6 +1080,11 @@ fn empty_target_directory_browser_starts_from_mudi_working_directory() {
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
 
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    let location_choice = rendered_rows_at(&ui, &snapshot, 80, 24);
+    assert!(location_choice.contains("Select Location"));
+    assert!(location_choice.contains("› ◦ Choose Directory..."));
     assert_eq!(
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
         UiAction::None
@@ -1076,20 +1104,24 @@ fn unreadable_directory_browser_start_preserves_the_new_form_and_shows_an_error(
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     ui.clamp_selections(&snapshot);
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Preserve on browser error".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     ui.finish_managed_new_directory_selection(Ok(Some(ManagedLaunchTarget {
         project: ProjectIdentity::CanonicalCwd(missing.clone()),
         project_label: "missing".into(),
         worktree_root: None,
         working_directory: missing,
     })));
-    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
 
     assert_eq!(
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
@@ -1117,6 +1149,8 @@ fn directory_browser_keeps_essential_controls_visible_at_minimum_terminal_size()
     let mut ui = Ui::default();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
 
     let rendered = rendered_rows_at(&ui, &snapshot, 80, 24);
@@ -1135,20 +1169,23 @@ fn replacing_an_inherited_new_target_preserves_form_values() {
     ui.clamp_selections(&snapshot);
 
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Keep title".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Keep description".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
 
     ui.finish_managed_new_directory_selection(Ok(Some(
         crate::managed_sessions::ManagedLaunchTarget {
@@ -1163,7 +1200,7 @@ fn replacing_an_inherited_new_target_preserves_form_values() {
     assert_eq!(form.provider, Some(Provider::CodexCli));
     assert_eq!(form.title, "Keep title");
     assert_eq!(form.description, "Keep description");
-    assert!(form.binding_initializer);
+    assert!(form.request().unwrap().binding_initializer);
     assert_eq!(
         form.targets[form.target_index].working_directory,
         PathBuf::from("/Users/x/code/notes")
@@ -1178,13 +1215,16 @@ fn cancelling_inherited_target_replacement_preserves_the_entire_form() {
     ui.clamp_selections(&snapshot);
 
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Right), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Keep everything".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     let before = ui.new_session.clone();
 
     ui.finish_managed_new_directory_selection(Ok(None));
@@ -1193,35 +1233,38 @@ fn cancelling_inherited_target_replacement_preserves_the_entire_form() {
 }
 
 #[test]
-fn failed_inherited_target_replacement_preserves_inputs_and_blocks_start() {
+fn failed_inherited_target_replacement_preserves_the_valid_location_and_inputs() {
     let snapshot = managed_new_snapshot();
     let mut ui = Ui::default();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     ui.clamp_selections(&snapshot);
 
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Keep title".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     ui.finish_managed_new_directory_selection(Err("ambiguous Git identity".into()));
 
     let form = ui.new_session.as_ref().unwrap();
     assert_eq!(form.provider, Some(Provider::ClaudeCode));
     assert_eq!(form.title, "Keep title");
-    assert!(form.targets.is_empty());
-    assert!(form.directory_context);
-    assert_eq!(form.field, NewSessionField::Target);
+    assert!(!form.targets.is_empty());
+    assert_eq!(form.field(), NewSessionField::Location);
     assert_eq!(form.error.as_deref(), Some("ambiguous Git identity"));
     assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("ambiguous Git identity"));
 
-    assert_eq!(
+    assert!(matches!(
         ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap(),
-        UiAction::None
-    );
+        UiAction::StartManagedNew { .. }
+    ));
 }
 
 #[test]
@@ -1238,9 +1281,10 @@ fn new_without_project_tree_context_opens_the_form_before_the_directory_browser(
         UiAction::None
     );
     let form = ui.new_session.as_ref().unwrap();
-    assert!(form.directory_context);
     assert!(form.targets.is_empty());
 
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     assert_eq!(
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
         UiAction::None
@@ -1286,19 +1330,22 @@ fn directory_context_can_be_reselected_before_new_is_confirmed() {
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
         UiAction::None
     );
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     assert!(ui.directory_browser.is_some());
     ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
 
     ui.finish_managed_new_directory_selection(Err("ambiguous Git identity".into()));
     let rendered = rendered_rows_at(&ui, &snapshot, 120, 36);
-    assert!(rendered.contains("Choose Directory"));
     assert!(rendered.contains("ambiguous Git identity"));
-    assert!(!rendered.contains(directory.to_string_lossy().as_ref()));
+    assert!(rendered.contains(directory.to_string_lossy().as_ref()));
 
     assert_eq!(
         ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap(),
         UiAction::None
     );
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     assert!(ui.directory_browser.is_some());
 }
 
@@ -1313,23 +1360,39 @@ fn selected_worktree_new_requires_title_and_does_not_remember_provider() {
 
     let selected = rendered_rows_at(&ui, &snapshot, 120, 36);
     assert!(selected.contains("/Users/x/code/mudi-feature"));
-    assert!(selected.contains("◦ Claude Code    ◦ Codex CLI"));
-    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
-    for _ in 0..4 {
-        ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    }
+    assert!(selected.contains("Provider *    Not set"));
+    assert_eq!(
+        ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap(),
+        UiAction::None
+    );
+    assert!(rendered_rows_at(&ui, &snapshot, 120, 36).contains("Provider is required"));
+    assert_eq!(
+        ui.new_session.as_ref().unwrap().field(),
+        NewSessionField::Provider
+    );
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    assert_eq!(
+        ui.new_session.as_ref().unwrap().provider,
+        Some(Provider::ClaudeCode)
+    );
     assert_eq!(
         ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap(),
         UiAction::None
     );
     let invalid = rendered_rows_at(&ui, &snapshot, 120, 36);
     assert!(invalid.contains("Title is required"));
-    assert_eq!(rendered_modal_height(&invalid, "New Session"), 10);
+    assert_eq!(
+        ui.new_session.as_ref().unwrap().field(),
+        NewSessionField::Title
+    );
+    assert_eq!(rendered_modal_height(&invalid, "New"), 7);
 
     ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    assert!(!rendered_rows_at(&ui, &snapshot, 120, 36).contains("New Session"));
+    ui.handle_key(key(KeyCode::Char('q')), &snapshot).unwrap();
+    assert!(!rendered_rows_at(&ui, &snapshot, 120, 36).contains("Provider *"));
 }
 
 /// 对总览及可选详情状态执行一次无崩溃渲染。

@@ -19,6 +19,7 @@ mod modals;
 mod overview;
 mod path_display;
 mod project_tree;
+mod property_editor;
 mod provenance_mark;
 mod provider_mark;
 mod selected_session;
@@ -40,6 +41,7 @@ use crate::session_labels::SessionLabels;
 use crate::signals::RecentSignal;
 use crate::tasks::OperationTask;
 use chrono::Local;
+use property_editor::{PropertyActivation, PropertyEditor, PropertyEditorEvent};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Block;
@@ -207,28 +209,28 @@ impl SessionEditor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NewSessionField {
     Provider,
-    Target,
+    Location,
     Title,
     Description,
-    BindingInitializer,
 }
 
 impl NewSessionField {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 4] = [
         Self::Provider,
-        Self::Target,
+        Self::Location,
         Self::Title,
         Self::Description,
-        Self::BindingInitializer,
     ];
 
-    fn move_by(self, offset: isize) -> Self {
-        let index = Self::ALL
+    fn index(self) -> usize {
+        Self::ALL
             .iter()
             .position(|field| *field == self)
-            .unwrap_or(0) as isize;
-        let next = (index + offset).rem_euclid(Self::ALL.len() as isize);
-        Self::ALL[next as usize]
+            .expect("New property belongs to the editor")
+    }
+
+    fn from_index(index: usize) -> Self {
+        Self::ALL[index.min(Self::ALL.len() - 1)]
     }
 }
 
@@ -236,13 +238,17 @@ impl NewSessionField {
 struct NewSessionForm {
     targets: Vec<ManagedLaunchTarget>,
     target_index: usize,
-    directory_context: bool,
     provider: Option<Provider>,
     title: String,
     description: String,
-    binding_initializer: bool,
-    field: NewSessionField,
+    editor: PropertyEditor,
     error: Option<String>,
+}
+
+#[derive(Debug)]
+struct NewSessionValidationError {
+    field: NewSessionField,
+    message: String,
 }
 
 struct DirectoryBrowser {
@@ -287,53 +293,105 @@ impl DirectoryBrowser {
 }
 
 impl NewSessionForm {
-    fn new(
-        targets: Vec<ManagedLaunchTarget>,
-        target_index: usize,
-        directory_context: bool,
-    ) -> Self {
+    fn new(targets: Vec<ManagedLaunchTarget>, target_index: usize) -> Self {
+        let target_index = target_index.min(targets.len().saturating_sub(1));
         Self {
             targets,
             target_index,
-            directory_context,
             provider: None,
             title: String::new(),
             description: String::new(),
-            binding_initializer: false,
-            field: NewSessionField::Provider,
+            editor: PropertyEditor::new(NewSessionField::ALL.len()),
             error: None,
         }
     }
 
-    fn active_input_mut(&mut self) -> Option<&mut String> {
-        match self.field {
-            NewSessionField::Title => Some(&mut self.title),
-            NewSessionField::Description => Some(&mut self.description),
-            _ => None,
+    fn field(&self) -> NewSessionField {
+        NewSessionField::from_index(self.editor.focused())
+    }
+
+    fn activation(&self) -> PropertyActivation {
+        match self.field() {
+            NewSessionField::Provider => PropertyActivation::Choice {
+                option_count: 2,
+                cursor: 0,
+            },
+            NewSessionField::Location => PropertyActivation::Choice {
+                option_count: self.targets.len() + 1,
+                cursor: if self.targets.is_empty() {
+                    0
+                } else {
+                    self.target_index
+                },
+            },
+            NewSessionField::Title => PropertyActivation::Text(self.title.clone()),
+            NewSessionField::Description => PropertyActivation::Text(self.description.clone()),
         }
     }
 
-    fn request(&self) -> Result<ManagedNewRequest, String> {
-        let provider = self.provider.ok_or("Provider is required".to_string())?;
+    fn request(&self) -> Result<ManagedNewRequest, NewSessionValidationError> {
+        let provider = self.provider.ok_or_else(|| NewSessionValidationError {
+            field: NewSessionField::Provider,
+            message: "Provider is required".to_string(),
+        })?;
         if self.title.trim().is_empty() {
-            return Err("Title is required".to_string());
+            return Err(NewSessionValidationError {
+                field: NewSessionField::Title,
+                message: "Title is required".to_string(),
+            });
         }
-        let title = crate::session_labels::validate_alias(&self.title)
-            .map_err(|error| error.to_string())?;
-        let description = crate::session_labels::validate_description(&self.description)
-            .map_err(|error| error.to_string())?;
+        let title = crate::session_labels::validate_alias(&self.title).map_err(|error| {
+            NewSessionValidationError {
+                field: NewSessionField::Title,
+                message: error.to_string(),
+            }
+        })?;
+        let description =
+            crate::session_labels::validate_description(&self.description).map_err(|error| {
+                NewSessionValidationError {
+                    field: NewSessionField::Description,
+                    message: error.to_string(),
+                }
+            })?;
         let target = self
             .targets
             .get(self.target_index)
             .cloned()
-            .ok_or("Target is unavailable".to_string())?;
+            .ok_or_else(|| NewSessionValidationError {
+                field: NewSessionField::Location,
+                message: "Location is unavailable".to_string(),
+            })?;
         Ok(ManagedNewRequest {
             provider,
             target,
             title,
             description,
-            binding_initializer: self.binding_initializer,
+            binding_initializer: true,
         })
+    }
+
+    fn apply_directory_target(&mut self, target: ManagedLaunchTarget) {
+        if self
+            .targets
+            .first()
+            .is_some_and(|known| known.project == target.project)
+        {
+            if let Some(index) = self
+                .targets
+                .iter()
+                .position(|known| known.working_directory == target.working_directory)
+            {
+                self.target_index = index;
+            } else {
+                self.targets.push(target);
+                self.target_index = self.targets.len() - 1;
+            }
+        } else {
+            self.targets = vec![target];
+            self.target_index = 0;
+        }
+        self.editor.focus(NewSessionField::Location.index());
+        self.error = None;
     }
 }
 
@@ -637,25 +695,21 @@ impl Ui {
         match selection {
             Ok(Some(target)) => {
                 if let Some(form) = self.new_session.as_mut() {
-                    form.targets = vec![target];
-                    form.target_index = 0;
-                    form.directory_context = true;
-                    form.error = None;
+                    form.apply_directory_target(target);
                 } else {
-                    self.new_session = Some(NewSessionForm::new(vec![target], 0, true));
+                    let mut form = NewSessionForm::new(Vec::new(), 0);
+                    form.apply_directory_target(target);
+                    self.new_session = Some(form);
                 }
             }
             Ok(None) => {}
             Err(error) => {
                 if let Some(form) = self.new_session.as_mut() {
-                    form.targets.clear();
-                    form.target_index = 0;
-                    form.directory_context = true;
                     form.error = Some(error);
-                    form.field = NewSessionField::Target;
+                    form.editor.focus(NewSessionField::Location.index());
                 } else {
-                    let mut form = NewSessionForm::new(Vec::new(), 0, true);
-                    form.field = NewSessionField::Target;
+                    let mut form = NewSessionForm::new(Vec::new(), 0);
+                    form.editor.focus(NewSessionField::Location.index());
                     form.error = Some(error);
                     self.new_session = Some(form);
                 }
@@ -1056,15 +1110,10 @@ impl Ui {
             crossterm::event::KeyCode::Char('n') => {
                 if self.detail.is_none() {
                     if let Some(selection) = self.project_tree.new_target_selection(snap) {
-                        self.new_session = Some(NewSessionForm::new(
-                            selection.targets,
-                            selection.selected,
-                            false,
-                        ));
+                        self.new_session =
+                            Some(NewSessionForm::new(selection.targets, selection.selected));
                     } else {
-                        let mut form = NewSessionForm::new(Vec::new(), 0, true);
-                        form.field = NewSessionField::Target;
-                        self.new_session = Some(form);
+                        self.new_session = Some(NewSessionForm::new(Vec::new(), 0));
                     }
                 }
             }
@@ -1413,108 +1462,70 @@ impl Ui {
     }
 
     fn handle_new_session_key(&mut self, key: crossterm::event::KeyEvent) -> UiAction {
-        let Some(form) = self.new_session.as_mut() else {
+        let Some(mut form) = self.new_session.take() else {
             return UiAction::None;
         };
         form.error = None;
-        let is_text_field = matches!(
-            form.field,
-            NewSessionField::Title | NewSessionField::Description
-        );
-        match key.code {
-            crossterm::event::KeyCode::Esc => self.new_session = None,
-            crossterm::event::KeyCode::Up => form.field = form.field.move_by(-1),
-            crossterm::event::KeyCode::Down => form.field = form.field.move_by(1),
-            crossterm::event::KeyCode::Tab => form.field = form.field.move_by(1),
-            crossterm::event::KeyCode::BackTab => form.field = form.field.move_by(-1),
-            crossterm::event::KeyCode::Char('k') if !is_text_field => {
-                form.field = form.field.move_by(-1)
-            }
-            crossterm::event::KeyCode::Char('j') if !is_text_field => {
-                form.field = form.field.move_by(1)
-            }
-            crossterm::event::KeyCode::Char('n') if !is_text_field => self.new_session = None,
-            crossterm::event::KeyCode::Char('y') if !is_text_field => match form.request() {
+        let activation = form.activation();
+        let event = form.editor.handle_key(key, activation);
+        match event {
+            PropertyEditorEvent::Close => return UiAction::None,
+            PropertyEditorEvent::Submit => match form.request() {
                 Ok(request) => {
-                    self.new_session = None;
                     return UiAction::StartManagedNew { request };
                 }
-                Err(error) => form.error = Some(error),
+                Err(error) => {
+                    form.editor.focus(error.field.index());
+                    form.error = Some(error.message);
+                }
             },
-            crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right
-                if form.field == NewSessionField::Provider =>
-            {
-                form.provider = match key.code {
-                    crossterm::event::KeyCode::Left => Some(Provider::ClaudeCode),
-                    crossterm::event::KeyCode::Right => Some(Provider::CodexCli),
-                    _ => unreachable!(),
-                };
-            }
-            crossterm::event::KeyCode::Left
-                if form.field == NewSessionField::Target && !form.targets.is_empty() =>
-            {
-                form.target_index = form
-                    .target_index
-                    .checked_sub(1)
-                    .unwrap_or(form.targets.len() - 1);
-            }
-            crossterm::event::KeyCode::Right
-                if form.field == NewSessionField::Target && !form.targets.is_empty() =>
-            {
-                form.target_index = (form.target_index + 1) % form.targets.len();
-            }
-            crossterm::event::KeyCode::Left
-                if form.field == NewSessionField::BindingInitializer =>
-            {
-                form.binding_initializer = false;
-            }
-            crossterm::event::KeyCode::Right
-                if form.field == NewSessionField::BindingInitializer =>
-            {
-                form.binding_initializer = true;
-            }
-            crossterm::event::KeyCode::Char(' ')
-                if form.field == NewSessionField::BindingInitializer =>
-            {
-                form.binding_initializer = !form.binding_initializer;
-            }
-            crossterm::event::KeyCode::Backspace => {
-                if let Some(input) = form.active_input_mut() {
-                    input.pop();
+            PropertyEditorEvent::TextCommitted { field, value } => {
+                match NewSessionField::from_index(field) {
+                    NewSessionField::Title => form.title = value,
+                    NewSessionField::Description => form.description = value,
+                    _ => {}
                 }
             }
-            crossterm::event::KeyCode::Char(character)
-                if !character.is_control()
-                    && !key.modifiers.intersects(
-                        crossterm::event::KeyModifiers::CONTROL
-                            | crossterm::event::KeyModifiers::ALT,
-                    ) =>
-            {
-                if let Some(input) = form.active_input_mut() {
-                    input.push(character);
-                }
-            }
-            crossterm::event::KeyCode::Enter if form.field == NewSessionField::Target => {
-                let start_directory = form
-                    .targets
-                    .get(form.target_index)
-                    .map(|target| target.working_directory.clone())
-                    .or_else(|| std::env::current_dir().ok());
-                match start_directory {
-                    Some(start_directory) => {
-                        match DirectoryBrowser::new(start_directory, self.theme.palette()) {
-                            Ok(browser) => self.directory_browser = Some(browser),
-                            Err(error) => {
-                                form.error = Some(format!("Directory browser failed: {error}"))
+            PropertyEditorEvent::ChoiceConfirmed { field, choice } => {
+                match NewSessionField::from_index(field) {
+                    NewSessionField::Provider => {
+                        form.provider = Some(if choice == 0 {
+                            Provider::CodexCli
+                        } else {
+                            Provider::ClaudeCode
+                        });
+                    }
+                    NewSessionField::Location if choice < form.targets.len() => {
+                        form.target_index = choice;
+                    }
+                    NewSessionField::Location => {
+                        let start_directory = form
+                            .targets
+                            .get(form.target_index)
+                            .map(|target| target.working_directory.clone())
+                            .or_else(|| std::env::current_dir().ok());
+                        match start_directory {
+                            Some(start_directory) => {
+                                match DirectoryBrowser::new(start_directory, self.theme.palette()) {
+                                    Ok(browser) => self.directory_browser = Some(browser),
+                                    Err(error) => {
+                                        form.error =
+                                            Some(format!("Directory browser failed: {error}"));
+                                    }
+                                }
+                            }
+                            None => {
+                                form.error =
+                                    Some("Directory browser has no start directory".into());
                             }
                         }
                     }
-                    None => form.error = Some("Directory browser has no start directory".into()),
+                    _ => {}
                 }
             }
-            crossterm::event::KeyCode::Enter => form.field = form.field.move_by(1),
             _ => {}
         }
+        self.new_session = Some(form);
         UiAction::None
     }
 

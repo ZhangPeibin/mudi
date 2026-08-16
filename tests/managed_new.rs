@@ -69,7 +69,7 @@ impl ManagedLaunchBroker for AssertPersistedBeforeLaunch {
         assert_eq!(persisted.target, registration.target);
         assert_eq!(persisted.session_alias, registration.session_alias);
         assert_eq!(persisted.description, registration.description);
-        assert!(!persisted.binding_initializer);
+        assert!(persisted.binding_initializer);
         assert!(persisted.provider_command.executable.as_os_str().is_empty());
         assert!(persisted.provider_command.arguments.is_empty());
         assert!(persisted.launched_at_ms.is_none());
@@ -165,7 +165,7 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
     );
     assert!(persisted.provider_command.executable.as_os_str().is_empty());
     assert!(persisted.provider_command.arguments.is_empty());
-    assert!(!persisted.binding_initializer);
+    assert!(persisted.binding_initializer);
     assert!(persisted.launched_at_ms.is_some());
     assert_eq!(
         persisted.launch_evidence,
@@ -547,8 +547,8 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         &rescan_tx,
     ));
     let initial = render_ui(&ui, &snapshot);
-    assert!(initial.contains("New Session"));
-    assert!(initial.contains("Choose Directory"));
+    assert!(initial.contains("New"));
+    assert!(initial.contains("Location      Not set"));
 
     assert!(!controller.handle(
         UiAction::ResolveManagedNewDirectory { directory: broken },
@@ -577,10 +577,7 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         &rescan_tx,
     ));
     let rendered = render_ui(&ui, &snapshot);
-    assert!(
-        rendered.contains("New Session"),
-        "form did not open:\n{rendered}"
-    );
+    assert!(rendered.contains("New"), "form did not open:\n{rendered}");
     assert!(
         rendered.contains("notes"),
         "Project was not visible:\n{rendered}"
@@ -611,16 +608,17 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         "replacement context was not visible:\n{switched}"
     );
 
-    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Picked directory launch".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     let start = ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap();
     assert!(matches!(start, UiAction::StartManagedNew { .. }));
     assert!(!controller.handle(start, &snapshot, &mut ui, &mut NoopClipboard, &rescan_tx,));
@@ -637,6 +635,7 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         fs::canonicalize(replacement).unwrap()
     );
     assert_eq!(registration.session_alias, "Picked directory launch");
+    assert!(registration.binding_initializer);
 }
 
 #[test]
@@ -686,27 +685,33 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
     let mut ui = Ui::default();
     ui.clamp_selections(&snapshot);
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Retain launch form".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
-    ui.handle_key(key(KeyCode::BackTab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Up), &snapshot).unwrap();
     let target_focused = render_ui(&ui, &snapshot);
     assert!(
-        target_focused.contains("› Worktree"),
+        target_focused.contains("› Location"),
         "target row was not focused:\n{target_focused}"
     );
 
     let (rescan_tx, mut rescan_rx) = tokio::sync::mpsc::unbounded_channel();
     let cancel = ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     assert_eq!(cancel, UiAction::None);
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     ui.handle_key(key(KeyCode::Esc), &snapshot).unwrap();
     let after_cancel = render_ui(&ui, &snapshot);
     assert!(after_cancel.contains("Retain launch form"));
-    assert!(after_cancel.contains("Create in  project"));
+    assert!(after_cancel.contains(selected.to_string_lossy().as_ref()));
 
     assert!(!controller.handle(
         UiAction::ResolveManagedNewDirectory { directory: broken },
@@ -718,7 +723,7 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
     let after_rejection = render_ui(&ui, &snapshot);
     assert!(after_rejection.contains("Retain launch form"));
     assert!(after_rejection.contains("ambiguous Git identity"));
-    assert!(after_rejection.contains("Choose Directory"));
+    assert!(after_rejection.contains(selected.to_string_lossy().as_ref()));
     assert!(launched.lock().unwrap().is_empty());
     assert!(rescan_rx.try_recv().is_err());
 
@@ -752,6 +757,7 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
         fs::canonicalize(replacement).unwrap()
     );
     assert_eq!(registration.session_alias, "Retain launch form");
+    assert!(registration.binding_initializer);
 }
 
 #[test]
@@ -798,18 +804,20 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
     ui.handle_key(key(KeyCode::Char('n')), &snapshot).unwrap();
     let new_form = render_ui(&ui, &snapshot);
     assert!(
-        new_form.contains("New Session"),
+        new_form.contains("New"),
         "New form did not open:\n{new_form}"
     );
-    ui.handle_key(key(KeyCode::Left), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Down), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     for character in "Application launch".chars() {
         ui.handle_key(key(KeyCode::Char(character)), &snapshot)
             .unwrap();
     }
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
-    ui.handle_key(key(KeyCode::Tab), &snapshot).unwrap();
+    ui.handle_key(key(KeyCode::Enter), &snapshot).unwrap();
     let intent = ui.handle_key(key(KeyCode::Char('y')), &snapshot).unwrap();
     assert!(
         matches!(intent, UiAction::StartManagedNew { .. }),
@@ -830,6 +838,7 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
     assert_eq!(registration.provider, Provider::ClaudeCode);
     assert_eq!(registration.target.working_directory, project_root);
     assert_eq!(registration.session_alias, "Application launch");
+    assert!(registration.binding_initializer);
     assert!(registration
         .provider_command
         .executable

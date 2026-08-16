@@ -1258,6 +1258,7 @@ impl ManagedSessionService {
         mut request: ManagedNewRequest,
         now_ms: i64,
     ) -> Result<ManagedNewOutcome> {
+        request.binding_initializer = true;
         if request.title.trim().is_empty() {
             return Err(anyhow!("New requires a Title"));
         }
@@ -1597,7 +1598,8 @@ const MANAGED_LAUNCH_REGISTRATION_SCHEMA: &str = r#"
         provider_started_at_ms INTEGER,
         terminal_opened_at_ms INTEGER,
         terminal_error TEXT,
-        binding_error TEXT
+        binding_error TEXT,
+        binding_initializer INTEGER NOT NULL DEFAULT 0
     );
 "#;
 
@@ -1616,7 +1618,22 @@ fn add_binding_error_column_if_missing(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn remove_persisted_provider_commands(conn: &mut Connection) -> Result<()> {
+fn add_binding_initializer_column_if_missing(conn: &Connection) -> Result<()> {
+    let mut statement = conn.prepare("PRAGMA table_info(managed_launch_registrations)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    if !columns.iter().any(|column| column == "binding_initializer") {
+        conn.execute(
+            "ALTER TABLE managed_launch_registrations ADD COLUMN binding_initializer INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn remove_persisted_provider_command_content(conn: &mut Connection) -> Result<()> {
     let mut statement = conn.prepare("PRAGMA table_info(managed_launch_registrations)")?;
     let columns = statement
         .query_map([], |row| row.get::<_, String>(1))?
@@ -1625,11 +1642,16 @@ fn remove_persisted_provider_commands(conn: &mut Connection) -> Result<()> {
     if !columns.iter().any(|column| {
         matches!(
             column.as_str(),
-            "binding_initializer" | "provider_executable" | "provider_arguments_json"
+            "provider_executable" | "provider_arguments_json"
         )
     }) {
         return Ok(());
     }
+    let initializer_source = if columns.iter().any(|column| column == "binding_initializer") {
+        "binding_initializer"
+    } else {
+        "0"
+    };
 
     conn.execute_batch("PRAGMA secure_delete = ON;")?;
     let transaction = conn.transaction()?;
@@ -1645,24 +1667,24 @@ fn remove_persisted_provider_commands(conn: &mut Connection) -> Result<()> {
             "managed_launch_registrations_content_safe"
         )
     ))?;
-    transaction.execute_batch(
+    transaction.execute_batch(&format!(
         r#"
         INSERT INTO managed_launch_registrations (
             registration_id, status, provider, project_kind, project_path,
             project_label, worktree_root, working_directory, session_alias,
             description, tmux_socket_name, tmux_session_name, created_at_ms,
             launched_at_ms, tmux_pane_id, provider_pid, provider_started_at_ms,
-            terminal_opened_at_ms, terminal_error, binding_error
+            terminal_opened_at_ms, terminal_error, binding_error, binding_initializer
         )
         SELECT registration_id, status, provider, project_kind, project_path,
                project_label, worktree_root, working_directory, session_alias,
                description, tmux_socket_name, tmux_session_name, created_at_ms,
                launched_at_ms, tmux_pane_id, provider_pid, provider_started_at_ms,
-               terminal_opened_at_ms, terminal_error, binding_error
+               terminal_opened_at_ms, terminal_error, binding_error, {initializer_source}
         FROM managed_launch_registrations_legacy;
         DROP TABLE managed_launch_registrations_legacy;
         "#,
-    )?;
+    ))?;
     transaction.commit()?;
     conn.execute_batch(
         "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
@@ -1759,10 +1781,10 @@ fn insert_registration(conn: &Connection, registration: &ManagedLaunchRegistrati
             project_label, worktree_root, working_directory, session_alias,
             description, tmux_socket_name, tmux_session_name, created_at_ms,
             launched_at_ms, tmux_pane_id, provider_pid, provider_started_at_ms,
-            terminal_opened_at_ms, terminal_error, binding_error
+            terminal_opened_at_ms, terminal_error, binding_error, binding_initializer
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
         )
         "#,
         params![
@@ -1795,6 +1817,7 @@ fn insert_registration(conn: &Connection, registration: &ManagedLaunchRegistrati
             registration.terminal_opened_at_ms,
             registration.terminal_error,
             registration.binding_error,
+            registration.binding_initializer,
         ],
     )?;
     Ok(())
@@ -1840,7 +1863,8 @@ impl ManagedLaunchStore {
                 provider_started_at_ms INTEGER,
                 terminal_opened_at_ms INTEGER,
                 terminal_error TEXT,
-                binding_error TEXT
+                binding_error TEXT,
+                binding_initializer INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS binding_receipts (
                 receipt_id TEXT PRIMARY KEY,
@@ -1892,7 +1916,8 @@ impl ManagedLaunchStore {
             "#,
         )?;
         add_binding_error_column_if_missing(&conn)?;
-        remove_persisted_provider_commands(&mut conn)?;
+        remove_persisted_provider_command_content(&mut conn)?;
+        add_binding_initializer_column_if_missing(&conn)?;
         ensure_managed_current_run_opaque_refs(&conn)?;
         allow_managed_current_run_history(&mut conn)?;
         ensure_managed_current_run_opaque_refs(&conn)?;
@@ -1973,7 +1998,8 @@ impl ManagedLaunchStore {
                    worktree_root, working_directory, session_alias, description,
                    tmux_socket_name, tmux_session_name, created_at_ms, launched_at_ms,
                    tmux_pane_id, provider_pid, provider_started_at_ms,
-                   terminal_opened_at_ms, terminal_error, binding_error
+                   terminal_opened_at_ms, terminal_error, binding_error,
+                   binding_initializer
             FROM managed_launch_registrations
             WHERE registration_id = ?1
             "#,
@@ -2009,6 +2035,7 @@ impl ManagedLaunchStore {
                     row.get::<_, Option<i64>>(16)?,
                     row.get::<_, Option<String>>(17)?,
                     row.get::<_, Option<String>>(18)?,
+                    row.get::<_, bool>(19)?,
                 ))
             })
             .optional()?
@@ -2033,6 +2060,7 @@ impl ManagedLaunchStore {
                     terminal_opened_at_ms,
                     terminal_error,
                     binding_error,
+                    binding_initializer,
                 )| {
                     Ok(ManagedLaunchRegistration {
                         id: registration_id.to_string(),
@@ -2047,7 +2075,7 @@ impl ManagedLaunchStore {
                         },
                         session_alias,
                         description,
-                        binding_initializer: false,
+                        binding_initializer,
                         provider_command: ProviderNewCommand {
                             executable: PathBuf::new(),
                             arguments: Vec::new(),

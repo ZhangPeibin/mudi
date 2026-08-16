@@ -278,29 +278,14 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         return;
     };
     let theme = ui.theme.palette();
-    let shows_codex_warning = form.provider == Some(Provider::CodexCli);
-    let area = layout::centered_rect_with_max_size(88, 78, 10, f.area());
-    let value_width =
-        usize::from(area.width).saturating_sub(3 + FIELD_INDICATOR_WIDTH + FIELD_LABEL_WIDTH);
-    let title_input = text::visible_input_tail(&form.title, value_width);
-    let description_input = text::visible_input_tail(&form.description, value_width);
+    let area = layout::centered_rect_with_max_size(88, 78, 7, f.area());
+    let content_width = usize::from(area.width).saturating_sub(2);
+    let value_width = content_width.saturating_sub(FIELD_INDICATOR_WIDTH + FIELD_LABEL_WIDTH);
     let target = form.targets.get(form.target_index);
-    let target_count = form.targets.len();
-    let target_text = target.map(|target| {
-        let suffix = if form.directory_context || target_count <= 1 {
-            String::new()
-        } else {
-            format!("  {} of {target_count}", form.target_index + 1)
-        };
-        let path_width = value_width.saturating_sub(UnicodeWidthStr::width(suffix.as_str()));
-        format!(
-            "{}{}",
-            text::visible_input_tail(&target.working_directory.to_string_lossy(), path_width),
-            suffix
-        )
-    });
-    let field_line = |label: &str, value: String, placeholder: &str, field: NewSessionField| {
-        let focused = form.field == field;
+    let editing = form.editor.editing();
+    let field_line = |label: &str, value: &str, field: NewSessionField, keep_end: bool| {
+        let focused = form.editor.focused() == field.index();
+        let field_draft = editing.filter(|draft| draft.field() == field.index());
         let label_style = if focused {
             Style::default()
                 .fg(theme.accent)
@@ -308,11 +293,13 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
         } else {
             Style::default().fg(theme.muted)
         };
-        let empty = value.is_empty();
-        let visible_value = if empty {
-            placeholder.to_string()
+        let empty = value.is_empty() && field_draft.is_none();
+        let visible_value = if let Some(draft) = field_draft {
+            draft.visible(value_width.saturating_sub(1)).0
+        } else if empty {
+            text::fit("Not set", value_width, false)
         } else {
-            value
+            text::fit(value, value_width, keep_end)
         };
         let value_style = Style::default()
             .fg(if empty {
@@ -336,133 +323,39 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
             Span::styled(padding, value_style),
         ])
     };
-    let provider_line = || {
-        const CLAUDE_NAME: &str = "Claude Code";
-        const SEPARATOR: &str = "    ";
-        const CODEX_NAME: &str = "Codex CLI";
-
-        let focused = form.field == NewSessionField::Provider;
-        let label_style = Style::default()
-            .fg(if focused { theme.accent } else { theme.muted })
-            .add_modifier(if focused {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            });
-        let provider_name_style = |selected| {
-            Style::default()
-                .fg(theme.foreground)
-                .add_modifier(if selected {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                })
-        };
-        let claude_selected = form.provider == Some(Provider::ClaudeCode);
-        let codex_selected = form.provider == Some(Provider::CodexCli);
-        let used_width = UnicodeWidthStr::width("◦ ")
-            + UnicodeWidthStr::width(CLAUDE_NAME)
-            + UnicodeWidthStr::width(SEPARATOR)
-            + UnicodeWidthStr::width("◦ ")
-            + UnicodeWidthStr::width(CODEX_NAME);
-        let padding = " ".repeat(value_width.saturating_sub(used_width));
-
-        Line::from(vec![
-            Span::styled(if focused { "› " } else { "  " }, label_style),
-            Span::styled(format!("{:<FIELD_LABEL_WIDTH$}", "Provider"), label_style),
-            Span::styled(
-                if claude_selected { "• " } else { "◦ " },
-                Style::default().fg(if claude_selected {
-                    theme.provider_claude
-                } else {
-                    theme.muted
-                }),
-            ),
-            Span::styled(CLAUDE_NAME, provider_name_style(claude_selected)),
-            Span::raw(SEPARATOR),
-            Span::styled(
-                if codex_selected { "• " } else { "◦ " },
-                Style::default().fg(if codex_selected {
-                    theme.provider_codex
-                } else {
-                    theme.muted
-                }),
-            ),
-            Span::styled(CODEX_NAME, provider_name_style(codex_selected)),
-            Span::raw(padding),
-        ])
-    };
     let status_line = if let Some(error) = &form.error {
         Line::from(Span::styled(
-            format!("! {error}"),
+            text::fit(&format!("! {error}"), content_width, false),
             Style::default().fg(theme.critical),
-        ))
-    } else if shows_codex_warning {
-        Line::from(Span::styled(
-            format!("! {CODEX_FULL_ACCESS_NOTICE}"),
-            Style::default()
-                .fg(theme.warning)
-                .add_modifier(Modifier::BOLD),
         ))
     } else {
         Line::from("")
     };
+    let provider = form.provider.map(Provider::label).unwrap_or_default();
+    let location = target
+        .map(|target| target.working_directory.to_string_lossy())
+        .unwrap_or_default();
     let lines = vec![
-        Line::from(vec![
-            Span::styled("Create in  ", Style::default().fg(theme.muted)),
-            Span::styled(
-                target.map_or("Unavailable", |target| target.project_label.as_str()),
-                Style::default().fg(theme.foreground),
-            ),
-        ]),
-        Line::from(""),
-        provider_line(),
+        field_line("Provider *", provider, NewSessionField::Provider, false),
         field_line(
-            if form.directory_context {
-                "Directory"
-            } else {
-                "Worktree"
-            },
-            match target_text {
-                Some(target_text) => target_text,
-                None => "Choose Directory".to_string(),
-            },
-            "Choose Directory",
-            NewSessionField::Target,
+            "Location",
+            location.as_ref(),
+            NewSessionField::Location,
+            true,
         ),
-        field_line(
-            "Title",
-            title_input.clone(),
-            "Required",
-            NewSessionField::Title,
-        ),
+        field_line("Title *", &form.title, NewSessionField::Title, false),
         field_line(
             "Description",
-            description_input.clone(),
-            "Optional",
+            &form.description,
             NewSessionField::Description,
-        ),
-        field_line(
-            "Initialize",
-            if form.binding_initializer {
-                "On".to_string()
-            } else {
-                "Off".to_string()
-            },
-            "",
-            NewSessionField::BindingInitializer,
+            false,
         ),
         status_line,
     ];
-    let footer = match form.field {
-        NewSessionField::Title | NewSessionField::Description => {
-            " Type to edit · ↑/↓ Move · Enter Next · Esc Cancel "
-        }
-        NewSessionField::Target if form.directory_context => {
-            " Enter Choose Directory · y Start · n Cancel "
-        }
-        NewSessionField::Target => " ←/→ Worktree · Enter Directory · y Start · n Cancel ",
-        _ => " j/k Move · ←/→ Select · y Start · n Cancel ",
+    let footer = if editing.is_some() {
+        " Enter Save · Esc Cancel "
+    } else {
+        " ↑/↓ Move · Enter Edit · y Start · Esc/q Close "
     };
     f.render_widget(
         Block::default().style(Style::default().add_modifier(Modifier::DIM)),
@@ -477,7 +370,7 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.border))
                     .title(Span::styled(
-                        " New Session ",
+                        " New ",
                         Style::default()
                             .fg(theme.accent)
                             .add_modifier(Modifier::BOLD),
@@ -489,21 +382,172 @@ fn draw_new_session(f: &mut Frame, ui: &Ui) {
             ),
         area,
     );
-    let (visible_input, row_offset) = match form.field {
-        NewSessionField::Title => (Some(title_input), 5),
-        NewSessionField::Description => (Some(description_input), 6),
-        _ => (None, 0),
-    };
-    if let Some(visible_input) = visible_input {
+    if let Some(draft) = editing {
+        let (_, cursor_column) = draft.visible(value_width.saturating_sub(1));
         f.set_cursor_position(Position::new(
             area.x
                 + 1
                 + FIELD_INDICATOR_WIDTH as u16
                 + FIELD_LABEL_WIDTH as u16
-                + UnicodeWidthStr::width(visible_input.as_str()) as u16,
-            area.y + row_offset,
+                + cursor_column as u16,
+            area.y + 1 + draft.field() as u16,
         ));
     }
+
+    if let Some(choice) = form.editor.choice() {
+        f.render_widget(
+            Block::default().style(Style::default().add_modifier(Modifier::DIM)),
+            f.area(),
+        );
+        match NewSessionField::from_index(choice.field) {
+            NewSessionField::Provider => draw_provider_choice(f, form, choice.cursor, theme),
+            NewSessionField::Location => draw_location_choice(f, form, choice.cursor, theme),
+            _ => {}
+        }
+    }
+}
+
+fn draw_provider_choice(f: &mut Frame, form: &super::NewSessionForm, cursor: usize, theme: Theme) {
+    let area = layout::centered_rect_with_max_size(70, 58, 5, f.area());
+    let content_width = usize::from(area.width).saturating_sub(2);
+    let choices = [
+        ("Codex CLI", Provider::CodexCli, theme.provider_codex),
+        ("Claude Code", Provider::ClaudeCode, theme.provider_claude),
+    ];
+    let mut lines = choices
+        .iter()
+        .enumerate()
+        .map(|(index, (label, provider, color))| {
+            property_choice_line(
+                label,
+                index == cursor,
+                form.provider == Some(*provider),
+                content_width,
+                *color,
+                theme,
+            )
+        })
+        .collect::<Vec<_>>();
+    lines.push(
+        if cursor == 0 || form.provider == Some(Provider::CodexCli) {
+            Line::from(Span::styled(
+                text::fit(CODEX_FULL_ACCESS_NOTICE, content_width, false),
+                Style::default()
+                    .fg(theme.warning)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else {
+            Line::from("")
+        },
+    );
+    draw_property_choice_dialog(f, area, " Select Provider ", lines, theme);
+}
+
+fn draw_location_choice(f: &mut Frame, form: &super::NewSessionForm, cursor: usize, theme: Theme) {
+    const MAX_VISIBLE_OPTIONS: usize = 8;
+
+    let option_count = form.targets.len() + 1;
+    let visible_count = option_count.clamp(1, MAX_VISIBLE_OPTIONS);
+    let area = layout::centered_rect_with_max_size(
+        88,
+        78,
+        u16::try_from(visible_count + 2).unwrap_or(10),
+        f.area(),
+    );
+    let content_width = usize::from(area.width).saturating_sub(2);
+    let start = cursor
+        .saturating_sub(visible_count - 1)
+        .min(option_count.saturating_sub(visible_count));
+    let lines = (start..start + visible_count)
+        .map(|index| {
+            if let Some(target) = form.targets.get(index) {
+                property_choice_line(
+                    &target.working_directory.to_string_lossy(),
+                    index == cursor,
+                    index == form.target_index,
+                    content_width,
+                    theme.foreground,
+                    theme,
+                )
+            } else {
+                property_choice_line(
+                    "Choose Directory...",
+                    index == cursor,
+                    false,
+                    content_width,
+                    theme.accent,
+                    theme,
+                )
+            }
+        })
+        .collect();
+    draw_property_choice_dialog(f, area, " Select Location ", lines, theme);
+}
+
+fn property_choice_line(
+    label: &str,
+    focused: bool,
+    selected: bool,
+    width: usize,
+    accent: ratatui::style::Color,
+    theme: Theme,
+) -> Line<'static> {
+    let prefix = format!(
+        "{}{} ",
+        if focused { "› " } else { "  " },
+        if selected { "•" } else { "◦" }
+    );
+    let label = text::fit(
+        label,
+        width.saturating_sub(UnicodeWidthStr::width(prefix.as_str())),
+        true,
+    );
+    let style = Style::default()
+        .fg(if selected { accent } else { theme.foreground })
+        .bg(if focused {
+            theme.selected_background
+        } else {
+            theme.background
+        })
+        .add_modifier(if focused || selected {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        });
+    Line::from(Span::styled(format!("{prefix}{label}"), style))
+}
+
+fn draw_property_choice_dialog(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    title: &'static str,
+    lines: Vec<Line<'static>>,
+    theme: Theme,
+) {
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(theme.foreground).bg(theme.background))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.accent))
+                    .title(Span::styled(
+                        title,
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .title_bottom(
+                        Line::from(Span::styled(
+                            " ↑/↓ Move · Enter Select · Esc Back ",
+                            Style::default().fg(theme.muted),
+                        ))
+                        .centered(),
+                    ),
+            ),
+        area,
+    );
 }
 
 /// 绘制 Retry 的重新授权确认框。

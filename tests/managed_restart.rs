@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
-fn managed_launch_persistence_omits_provider_commands_and_initializer_content() {
+fn managed_launch_persistence_records_initializer_without_provider_command_content() {
     let temp = TempDir::new("content-safe-persistence");
     let store_path = temp.path().join("managed.db");
     let private_initializer = "private initializer conversation content";
@@ -36,7 +36,7 @@ fn managed_launch_persistence_omits_provider_commands_and_initializer_content() 
 
     let reopened = ManagedLaunchStore::open(&store_path).unwrap();
     let persisted = reopened.get(&registration.id).unwrap().unwrap();
-    assert!(!persisted.binding_initializer);
+    assert!(persisted.binding_initializer);
     assert!(persisted.provider_command.executable.as_os_str().is_empty());
     assert!(persisted.provider_command.arguments.is_empty());
     drop(reopened);
@@ -52,7 +52,7 @@ fn managed_launch_persistence_omits_provider_commands_and_initializer_content() 
         .unwrap();
     drop(statement);
     drop(connection);
-    assert!(!columns.iter().any(|column| column == "binding_initializer"));
+    assert!(columns.iter().any(|column| column == "binding_initializer"));
     assert!(!columns.iter().any(|column| column == "provider_executable"));
     assert!(!columns
         .iter()
@@ -90,8 +90,6 @@ fn legacy_store_migration_preserves_management_but_erases_persisted_commands() {
     connection
         .execute_batch(
             r#"
-            ALTER TABLE managed_launch_registrations
-                ADD COLUMN binding_initializer INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE managed_launch_registrations
                 ADD COLUMN provider_executable BLOB NOT NULL DEFAULT X'';
             ALTER TABLE managed_launch_registrations
@@ -145,7 +143,7 @@ fn legacy_store_migration_preserves_management_but_erases_persisted_commands() {
         pending.description.as_deref(),
         Some("Legacy pending description")
     );
-    assert!(!pending.binding_initializer);
+    assert!(pending.binding_initializer);
     assert!(pending.provider_command.executable.as_os_str().is_empty());
     assert!(pending.provider_command.arguments.is_empty());
     drop(migrated);
