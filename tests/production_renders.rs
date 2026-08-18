@@ -1,17 +1,19 @@
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use mudi::app::Snapshot;
-use mudi::attention::{AttentionEngine, SessionIdentity};
+use mudi::adapters::providers::state::ProcessIdentity;
+use mudi::application::attention::{AttentionEngine, SessionIdentity};
+use mudi::application::session_labels::{CurationDisposition, SessionLabels};
+use mudi::application::signals::{
+    ContextAlertLevel, RecentSignal, RecentSignalKind, SharedProjectRiskChange,
+};
+use mudi::application::tasks::{OperationTask, OperationTaskState, SuccessorLaunchPlan};
 use mudi::domain::{
     Compaction, ContextState, ModelUsage, Project, ProjectIdentity, Provider, Session,
-    SessionState, SourceFormat, SourceMetadata, Usage, UsageSummary, Worktree,
+    SessionState, SourceFormat, SourceMetadata, Usage, UsageSummary,
 };
-use mudi::providers::state::ProcessIdentity;
-use mudi::session_labels::{CurationDisposition, SessionLabels};
-use mudi::signals::{ContextAlertLevel, RecentSignal, RecentSignalKind, SharedWorktreeRiskChange};
-use mudi::tasks::{OperationTask, OperationTaskState, SuccessorLaunchPlan};
-use mudi::ui::{draw, Ui, UiAction};
+use mudi::presentation::app::Snapshot;
+use mudi::presentation::tui::{draw, Ui, UiAction};
 use ratatui::backend::{Backend, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Size};
@@ -231,9 +233,13 @@ fn fixture_session(
     state: SessionState,
     context_tokens: u64,
     last_activity_ms: i64,
-    worktree: (&str, &str),
+    working_directory: &str,
 ) -> Session {
-    let (worktree_root, branch) = worktree;
+    let project_path = PathBuf::from(working_directory);
+    let project_label = project_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| working_directory.to_string());
     let usage = Usage {
         input: 12_345,
         output: 2_345,
@@ -249,15 +255,10 @@ fn fixture_session(
             format: SourceFormat::JsonLines,
         },
         project: Some(Project {
-            identity: ProjectIdentity::GitCommonDir(PathBuf::from("/Users/fixture/code/mudi/.git")),
-            label: "mudi".into(),
+            identity: ProjectIdentity::new(project_path),
+            label: project_label,
         }),
-        worktree: Some(Worktree {
-            root: PathBuf::from(worktree_root),
-            branch: Some(branch.into()),
-            writable: true,
-        }),
-        cwd: Some(worktree_root.into()),
+        cwd: Some(working_directory.into()),
         latest_model: Some(model.into()),
         state,
         context: ContextState {
@@ -306,7 +307,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         180_000,
         NOW - 30_000,
-        (shared_root, "main"),
+        shared_root,
     );
     critical.compactions = vec![
         Compaction {
@@ -330,7 +331,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         80_000,
         NOW - 60_000,
-        (shared_root, "main"),
+        shared_root,
     );
     let warning = fixture_session(
         Provider::ClaudeCode,
@@ -339,7 +340,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         150_000,
         NOW - 120_000,
-        ("/Users/fixture/code/mudi-warning", "warning"),
+        "/Users/fixture/code/mudi-warning",
     );
     let idle = fixture_session(
         Provider::CodexCli,
@@ -348,7 +349,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Idle,
         60_000,
         NOW - 180_000,
-        ("/Users/fixture/code/mudi-idle", "idle"),
+        "/Users/fixture/code/mudi-idle",
     );
     let healthy = fixture_session(
         Provider::ClaudeCode,
@@ -357,7 +358,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Busy,
         40_000,
         NOW - 240_000,
-        ("/Users/fixture/code/mudi-healthy", "healthy"),
+        "/Users/fixture/code/mudi-healthy",
     );
     let older = fixture_session(
         Provider::ClaudeCode,
@@ -366,7 +367,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Exited,
         50_000,
         NOW - 8 * DAY,
-        ("/Users/fixture/code/mudi-older", "archive"),
+        "/Users/fixture/code/mudi-older",
     );
     let recent_exited = fixture_session(
         Provider::CodexCli,
@@ -375,7 +376,7 @@ fn production_snapshot() -> Snapshot {
         SessionState::Exited,
         70_000,
         NOW - DAY,
-        ("/Users/fixture/code/mudi-exited", "done"),
+        "/Users/fixture/code/mudi-exited",
     );
     let sessions = vec![
         critical,
@@ -392,10 +393,10 @@ fn production_snapshot() -> Snapshot {
         native_id: native_id.into(),
     };
     let recent_signals = vec![
-        RecentSignal::Worktree {
+        RecentSignal::Project {
             observed_at_ms: NOW - 5_000,
-            worktree_root: PathBuf::from(shared_root),
-            change: SharedWorktreeRiskChange::Detected,
+            project_path: PathBuf::from(shared_root),
+            change: SharedProjectRiskChange::Detected,
             before: vec![session_identity(Provider::ClaudeCode, "claude-critical")],
             after: vec![
                 session_identity(Provider::ClaudeCode, "claude-critical"),
@@ -524,7 +525,7 @@ fn assert_overview_focus(rendered: &ProductionRender, focused_index: usize) {
         rendered.style_at("TASKS"),
     ];
     let title_counts = [
-        rendered.style_at_in_row("PROJECT", "1"),
+        rendered.style_at_in_row("PROJECT", "4"),
         rendered.style_at_in_row("RECENT SIGNALS", "5"),
         rendered.style_at_in_row("TASKS", "1"),
     ];
@@ -576,7 +577,7 @@ fn assert_overview_focus(rendered: &ProductionRender, focused_index: usize) {
     }
 }
 
-fn assert_fixture(rendered: &ProductionRender, fixture: &str) {
+fn assert_fixture(rendered: &ProductionRender, fixture: &str, fixture_path: &str) {
     assert_eq!(rendered.text.lines().count(), rendered.height as usize);
     for (row_index, row) in rendered.text.lines().enumerate() {
         assert_eq!(
@@ -590,12 +591,29 @@ fn assert_fixture(rendered: &ProductionRender, fixture: &str) {
         .chars()
         .any(|character| !character.is_whitespace()));
 
+    if std::env::var_os("MUDI_UPDATE_RENDER_FIXTURES").is_some() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join(fixture_path);
+        std::fs::write(path, format!("{}\n", rendered.visible_text())).unwrap();
+        return;
+    }
     assert_eq!(rendered.visible_text(), fixture.trim_end_matches('\n'));
 }
 
 fn press(ui: &mut Ui, snapshot: &Snapshot, code: KeyCode) {
     ui.handle_key(KeyEvent::new(code, KeyModifiers::NONE), snapshot)
         .unwrap();
+}
+
+fn save_selected_session_title(ui: &mut Ui, snapshot: &Snapshot, title: &str) {
+    press(ui, snapshot, KeyCode::Char('e'));
+    press(ui, snapshot, KeyCode::Enter);
+    for character in title.chars() {
+        press(ui, snapshot, KeyCode::Char(character));
+    }
+    press(ui, snapshot, KeyCode::Enter);
+    press(ui, snapshot, KeyCode::Char('y'));
 }
 
 #[test]
@@ -622,7 +640,7 @@ fn exited_session_hide_is_confirmed_persisted_and_removed_from_the_normal_tree()
     open.state = SessionState::Busy;
     open.last_activity_ms = snapshot.generated_ms;
     snapshot.sessions = vec![open, exited.clone()];
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Right);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -707,7 +725,7 @@ fn hide_confirmation_revalidates_that_the_session_is_still_exited() {
         ready: true,
         ..Snapshot::default()
     };
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Right);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -758,7 +776,6 @@ fn project_hide_is_a_snapshot_that_skips_and_reports_open_sessions() {
         .unwrap()
         .clone();
     first_exited.project = open.project.clone();
-    first_exited.worktree = open.worktree.clone();
     first_exited.cwd = open.cwd.clone();
     first_exited.last_activity_ms = source.generated_ms - 1_000;
     let mut second_exited = first_exited.clone();
@@ -771,7 +788,7 @@ fn project_hide_is_a_snapshot_that_skips_and_reports_open_sessions() {
         ready: true,
         ..Snapshot::default()
     };
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Left);
 
     press(&mut ui, &snapshot, KeyCode::Char('H'));
@@ -846,9 +863,7 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
         .unwrap()
         .clone();
     first.project = Some(Project {
-        identity: ProjectIdentity::GitCommonDir(PathBuf::from(
-            "/Users/fixture/code/mudi-exited/.git",
-        )),
+        identity: ProjectIdentity::new(PathBuf::from("/Users/fixture/code/mudi-exited")),
         label: "mudi-exited".into(),
     });
     let mut second_project = snapshot
@@ -858,9 +873,7 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
         .unwrap()
         .clone();
     second_project.project = Some(Project {
-        identity: ProjectIdentity::GitCommonDir(PathBuf::from(
-            "/Users/fixture/code/mudi-older/.git",
-        )),
+        identity: ProjectIdentity::new(PathBuf::from("/Users/fixture/code/mudi-older")),
         label: "mudi-older".into(),
     });
     let mut newer = first.clone();
@@ -883,7 +896,7 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
             SessionIdentity::from(&second_project),
         ])
         .unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
 
     press(&mut ui, &snapshot, KeyCode::Char('h'));
     let collapsed = render(&snapshot, &ui, 120, 30).text;
@@ -903,22 +916,7 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
         newest < older,
         "newest Session should render first\n{expanded}"
     );
-    assert!(expanded.contains("done"));
-    press(&mut ui, &snapshot, KeyCode::Left);
-    assert!(render(&snapshot, &ui, 120, 30)
-        .text
-        .contains("Newest hidden"));
-    press(&mut ui, &snapshot, KeyCode::Right);
-    assert!(render(&snapshot, &ui, 120, 30)
-        .text
-        .contains("Newest hidden"));
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Char('d'));
-    assert!(!render(&snapshot, &ui, 120, 30)
-        .text
-        .contains("Permanently Exclude"));
-
-    let mut restarted = Ui::load(&profile_path, None).unwrap();
+    let mut restarted = Ui::load(&profile_path).unwrap();
     press(&mut restarted, &snapshot, KeyCode::Char('h'));
     let restarted = render(&snapshot, &restarted, 120, 30).text;
     assert!(!restarted.contains("Newest hidden"));
@@ -947,7 +945,7 @@ fn session_detail_hidden_list_entry_opens_the_same_tree_and_restores_its_origin(
     SessionLabels::load(directory.join("session-labels.json"))
         .hide_sessions(&[SessionIdentity::from(hidden)])
         .unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
 
     press(&mut ui, &snapshot, KeyCode::Enter);
     let detail = render(&snapshot, &ui, 120, 30).text;
@@ -997,7 +995,7 @@ fn hidden_tree_u_restores_the_selected_session_to_its_origin_inventory() {
     SessionLabels::load(&label_path)
         .hide_sessions(&[SessionIdentity::from(&hidden)])
         .unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Char('h'));
     press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -1058,7 +1056,7 @@ fn hidden_tree_d_permanently_excludes_metadata_without_touching_provider_jsonl()
     labels
         .hide_sessions(&[SessionIdentity::from(&hidden)])
         .unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Char('h'));
     press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -1131,7 +1129,7 @@ fn hidden_tree_project_delete_applies_to_all_current_hidden_sessions() {
             SessionIdentity::from(&second),
         ])
         .unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Char('h'));
 
     press(&mut ui, &snapshot, KeyCode::Char('d'));
@@ -1185,7 +1183,7 @@ fn hidden_tree_project_restore_applies_to_all_current_hidden_sessions() {
             SessionIdentity::from(&second),
         ])
         .unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Char('h'));
 
     press(&mut ui, &snapshot, KeyCode::Char('u'));
@@ -1239,7 +1237,7 @@ fn hidden_exited_visibility_is_consistent_and_only_validated_open_overrides_it()
     SessionLabels::load(directory.join("session-labels.json"))
         .hide_sessions(&[SessionIdentity::from(&session)])
         .unwrap();
-    let ui = Ui::load(&profile_path, None).unwrap();
+    let ui = Ui::load(&profile_path).unwrap();
 
     let all_hidden = render(&snapshot, &ui, 120, 30).text;
     assert!(!all_hidden.contains("x-exited"));
@@ -1287,7 +1285,7 @@ fn hidden_curation_is_dormant_while_source_evidence_is_absent_and_resumes_on_ret
     SessionLabels::load(&label_path)
         .hide_sessions(&[SessionIdentity::from(&hidden)])
         .unwrap();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     let absent = Snapshot {
         generated_ms: source.generated_ms,
         ready: true,
@@ -1331,7 +1329,7 @@ fn ui_with_theme(theme: &str) -> Ui {
         format!(r#"{{"help_seen":true,"theme":"{theme}"}}"#),
     )
     .unwrap();
-    let ui = Ui::load(&profile_path, None).unwrap();
+    let ui = Ui::load(&profile_path).unwrap();
     std::fs::remove_file(profile_path).unwrap();
     ui
 }
@@ -1878,12 +1876,8 @@ fn task_rows_resolve_the_current_session_alias_without_changing_task_identity() 
         deletion_requested_at_ms: None,
         deletion_failure_code: None,
     }];
-    let mut ui = Ui::load(&profile_path, None).unwrap();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Release coordinator".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    let mut ui = Ui::load(&profile_path).unwrap();
+    save_selected_session_title(&mut ui, &snapshot, "Release coordinator");
     press(&mut ui, &snapshot, KeyCode::Tab);
     press(&mut ui, &snapshot, KeyCode::Tab);
 
@@ -2147,7 +2141,7 @@ fn waiting_task_detail_shows_its_reason_and_fixed_authorization_deadline() {
         "Waiting reason",
         "Source Current Run is Busy",
         "Authorization deadline",
-        &mudi::app::fmt_datetime(deadline_ms),
+        &mudi::presentation::app::fmt_datetime(deadline_ms),
     ] {
         assert!(detail.contains(expected), "missing {expected:?}\n{detail}");
     }
@@ -2329,6 +2323,7 @@ fn terminal_below_the_hard_minimum_renders_only_the_too_small_state() {
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/too_small_79x23.txt"),
+        "fixtures/production-renders/too_small_79x23.txt",
     );
 }
 
@@ -2340,7 +2335,7 @@ fn global_header_combines_identity_with_indexed_usage_and_project_totals() {
     let wide_header = wide.text.lines().next().unwrap();
     assert!(wide_header.contains(&format!("Mudi | v{}", env!("CARGO_PKG_VERSION"))));
     assert!(!wide_header.contains("1 2 3"));
-    assert!(wide_header.contains("In 86.4k  Out 16.4k | 1 Project"));
+    assert!(wide_header.contains("In 86.4k  Out 16.4k | 4 Projects"));
     let tasks_row = wide
         .text
         .lines()
@@ -2362,7 +2357,7 @@ fn global_header_combines_identity_with_indexed_usage_and_project_totals() {
     let compact = render(&snapshot, &Ui::default(), 80, 24);
     let compact_header = compact.text.lines().next().unwrap();
     assert!(compact_header.contains(&format!("Mudi | v{}", env!("CARGO_PKG_VERSION"))));
-    assert!(compact_header.contains("In 86.4k Out 16.4k | P 1"));
+    assert!(compact_header.contains("In 86.4k Out 16.4k | P 4"));
     assert!(compact
         .text
         .lines()
@@ -2384,7 +2379,7 @@ fn global_header_combines_identity_with_indexed_usage_and_project_totals() {
 fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
     let snapshot = production_snapshot();
     let rendered = render(&snapshot, &Ui::default(), 120, 30);
-    for expected in ["PROJECT 1", "5 OPEN", "RECENT SIGNALS 5", "latest 5s"] {
+    for expected in ["PROJECT 4", "5 OPEN", "RECENT SIGNALS 5", "latest 5s"] {
         assert!(
             rendered.text.lines().any(|line| line.contains(expected)),
             "missing frame summary: {expected}"
@@ -2489,23 +2484,28 @@ fn all_page_current_context_percentages_use_one_color_for_each_semantic_role() {
 }
 
 #[test]
-fn all_page_keeps_multiple_worktrees_below_the_project_without_context() {
+fn all_page_renders_sessions_directly_below_the_project() {
     let rendered = render(&production_snapshot(), &Ui::default(), 120, 30);
-    let worktree = rendered
+    let project_index = rendered
         .text
         .lines()
-        .find(|line| line.contains("▾ main !2"))
-        .expect("All page should render the shared Worktree below its Project");
+        .position(|line| line.contains("▾ mudi"))
+        .expect("All page should render the Project");
+    let session_index = rendered
+        .text
+        .lines()
+        .position(|line| {
+            line.split_once('│')
+                .is_some_and(|(tree, _)| tree.contains("> ✳ critical"))
+        })
+        .expect("All page should render a direct Session row");
 
-    assert!(worktree.starts_with("  "));
-    assert!(!worktree.starts_with('│'));
-    assert!(worktree.contains("main"));
-    assert!(!worktree.contains("/Users"));
-    assert!(!worktree.contains("Context"));
+    assert!(project_index < session_index);
+    assert!(!rendered.text.contains("▾ main"));
 }
 
 #[test]
-fn all_page_abbreviates_the_current_users_home_in_worktree_paths() {
+fn all_page_abbreviates_the_current_users_home_in_working_directory_paths() {
     let home = dirs::home_dir().expect("test environment should have a home directory");
     let root = home.join("code/mudi");
     let root_text = root.to_string_lossy();
@@ -2516,7 +2516,7 @@ fn all_page_abbreviates_the_current_users_home_in_worktree_paths() {
         SessionState::Busy,
         100_000,
         1_700_000_000_000,
-        (&root_text, "main"),
+        &root_text,
     );
     let snapshot = Snapshot {
         sessions: vec![session],
@@ -2528,7 +2528,7 @@ fn all_page_abbreviates_the_current_users_home_in_worktree_paths() {
     let rendered = render(&snapshot, &Ui::default(), 120, 30);
 
     assert!(rendered.text.contains("▾ mudi (1)"));
-    assert!(rendered.text.contains("~/code/mudi @ main"));
+    assert!(rendered.text.contains("~/code/mudi"));
     assert!(!rendered
         .text
         .lines()
@@ -2548,15 +2548,8 @@ fn production_render_uses_the_snapshot_time_for_relative_session_age() {
             provenance: mudi::domain::SessionProvenance::Observed,
             source: Default::default(),
             project: Some(Project {
-                identity: ProjectIdentity::GitCommonDir(PathBuf::from(
-                    "/fixtures/stable-clock/.git",
-                )),
+                identity: ProjectIdentity::new(PathBuf::from("/fixtures/stable-clock")),
                 label: "stable-clock".into(),
-            }),
-            worktree: Some(Worktree {
-                root: PathBuf::from("/fixtures/stable-clock"),
-                branch: Some("main".into()),
-                writable: true,
             }),
             cwd: Some("/fixtures/stable-clock".into()),
             latest_model: Some("stable-clock-model".into()),
@@ -2616,7 +2609,7 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
     }
     for required in [
         "90%",
-        "main !2",
+        "x-shared",
         "75%",
         "◦",
         "Conversation unavailable.",
@@ -2636,6 +2629,7 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/all_populated_120x30.txt"),
+        "fixtures/production-renders/all_populated_120x30.txt",
     );
 }
 
@@ -2672,7 +2666,7 @@ fn workspace_and_details_headings_keep_horizontal_section_rules() {
         .take(55)
         .collect::<String>();
 
-    assert!(project_header.contains("PROJECT 1"), "{project_header:?}");
+    assert!(project_header.contains("PROJECT 4"), "{project_header:?}");
     assert!(
         !project_header.contains("PROJECT TREE"),
         "{project_header:?}"
@@ -2758,12 +2752,10 @@ fn minimum_width_header_keeps_four_digit_project_and_open_counts_distinct() {
                 SessionState::Busy,
                 10_000,
                 1_700_000_000_000 - i64::from(index),
-                (&format!("/fixtures/project-{index}"), "main"),
+                &format!("/fixtures/project-{index}"),
             );
             session.project = Some(Project {
-                identity: ProjectIdentity::GitCommonDir(PathBuf::from(format!(
-                    "/fixtures/project-{index}/.git"
-                ))),
+                identity: ProjectIdentity::new(PathBuf::from(format!("/fixtures/project-{index}"))),
                 label: format!("project-{index}"),
             });
             session
@@ -2991,7 +2983,7 @@ fn keyboard_resize_adjusts_the_preference_after_the_effective_width_is_clamped()
     )
     .unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
 
     ui.handle_event(
         Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT)),
@@ -3000,7 +2992,7 @@ fn keyboard_resize_adjusts_the_preference_after_the_effective_width_is_clamped()
     )
     .unwrap();
 
-    let reloaded = Ui::load(&profile_path, None).unwrap();
+    let reloaded = Ui::load(&profile_path).unwrap();
     let restored = render(&snapshot, &reloaded, 120, 30);
     assert!(restored
         .text
@@ -3025,7 +3017,7 @@ fn completed_drag_persists_the_preferred_width_across_terminal_sizes() {
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     let snapshot = production_snapshot();
     let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
 
     for kind in [
         MouseEventKind::Down(MouseButton::Left),
@@ -3049,7 +3041,7 @@ fn completed_drag_persists_the_preferred_width_across_terminal_sizes() {
         .unwrap();
     }
 
-    let reloaded = Ui::load(&profile_path, None).unwrap();
+    let reloaded = Ui::load(&profile_path).unwrap();
     let compact = render(&snapshot, &reloaded, 80, 24);
     assert!(compact
         .text
@@ -3083,6 +3075,7 @@ fn compact_all_page_matches_the_reviewed_production_fixture() {
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/all_populated_80x24.txt"),
+        "fixtures/production-renders/all_populated_80x24.txt",
     );
 }
 
@@ -3096,6 +3089,7 @@ fn compact_all_page_with_no_signals_matches_the_reviewed_production_fixture() {
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/all_empty_signals_80x24.txt"),
+        "fixtures/production-renders/all_empty_signals_80x24.txt",
     );
 }
 
@@ -3103,7 +3097,7 @@ fn compact_all_page_with_no_signals_matches_the_reviewed_production_fixture() {
 fn session_tree_keeps_open_sessions_visible_and_discloses_exited_age_bands() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
-    let worktree = ("/Users/fixture/code/inventory", "main");
+    let location = "/Users/fixture/code/inventory";
     let open = fixture_session(
         Provider::ClaudeCode,
         "open-session",
@@ -3111,7 +3105,7 @@ fn session_tree_keeps_open_sessions_visible_and_discloses_exited_age_bands() {
         SessionState::Busy,
         20_000,
         NOW - 8 * DAY_MS,
-        worktree,
+        location,
     );
     let recent = fixture_session(
         Provider::CodexCli,
@@ -3120,7 +3114,7 @@ fn session_tree_keeps_open_sessions_visible_and_discloses_exited_age_bands() {
         SessionState::Exited,
         20_000,
         NOW - 3 * DAY_MS,
-        worktree,
+        location,
     );
     let older = fixture_session(
         Provider::ClaudeCode,
@@ -3129,7 +3123,7 @@ fn session_tree_keeps_open_sessions_visible_and_discloses_exited_age_bands() {
         SessionState::Exited,
         20_000,
         NOW - 3 * DAY_MS - 1,
-        worktree,
+        location,
     );
     let snapshot = Snapshot {
         sessions: vec![open, recent, older],
@@ -3151,7 +3145,7 @@ fn session_tree_keeps_open_sessions_visible_and_discloses_exited_age_bands() {
 fn historical_session_tree_disclosures_render_at_supported_sizes() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
-    let worktree = ("/Users/fixture/code/responsive-history", "main");
+    let location = "/Users/fixture/code/responsive-history";
     let open = fixture_session(
         Provider::ClaudeCode,
         "open-session",
@@ -3159,7 +3153,7 @@ fn historical_session_tree_disclosures_render_at_supported_sizes() {
         SessionState::Busy,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let recent = fixture_session(
         Provider::CodexCli,
@@ -3168,7 +3162,7 @@ fn historical_session_tree_disclosures_render_at_supported_sizes() {
         SessionState::Exited,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let older = fixture_session(
         Provider::ClaudeCode,
@@ -3177,7 +3171,7 @@ fn historical_session_tree_disclosures_render_at_supported_sizes() {
         SessionState::Exited,
         20_000,
         NOW - 8 * DAY_MS,
-        worktree,
+        location,
     );
     let snapshot = Snapshot {
         sessions: vec![open, recent, older],
@@ -3219,7 +3213,7 @@ fn historical_session_tree_disclosures_render_at_supported_sizes() {
 fn session_tree_age_disclosures_expand_independently() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
-    let worktree = ("/Users/fixture/code/disclosures", "main");
+    let location = "/Users/fixture/code/disclosures";
     let open = fixture_session(
         Provider::ClaudeCode,
         "open-session",
@@ -3227,7 +3221,7 @@ fn session_tree_age_disclosures_expand_independently() {
         SessionState::Busy,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let recent = fixture_session(
         Provider::CodexCli,
@@ -3236,7 +3230,7 @@ fn session_tree_age_disclosures_expand_independently() {
         SessionState::Exited,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let older = fixture_session(
         Provider::ClaudeCode,
@@ -3245,7 +3239,7 @@ fn session_tree_age_disclosures_expand_independently() {
         SessionState::Exited,
         20_000,
         NOW - 8 * DAY_MS,
-        worktree,
+        location,
     );
     let snapshot = Snapshot {
         sessions: vec![open, recent, older],
@@ -3304,7 +3298,7 @@ fn session_tree_age_disclosures_expand_independently() {
 fn selecting_an_exited_session_targets_the_inspector_and_workspace() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
-    let worktree = ("/Users/fixture/code/selected-exited", "main");
+    let location = "/Users/fixture/code/selected-exited";
     let open = fixture_session(
         Provider::ClaudeCode,
         "open",
@@ -3312,7 +3306,7 @@ fn selecting_an_exited_session_targets_the_inspector_and_workspace() {
         SessionState::Busy,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let exited = fixture_session(
         Provider::CodexCli,
@@ -3321,7 +3315,7 @@ fn selecting_an_exited_session_targets_the_inspector_and_workspace() {
         SessionState::Exited,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let snapshot = Snapshot {
         sessions: vec![open, exited],
@@ -3354,7 +3348,7 @@ fn selecting_an_exited_session_targets_the_inspector_and_workspace() {
 fn exited_session_tree_selection_opens_transcript_lifetime_detail_and_returns() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
-    let worktree = ("/Users/fixture/code/exited-detail", "main");
+    let location = "/Users/fixture/code/exited-detail";
     let open = fixture_session(
         Provider::ClaudeCode,
         "open",
@@ -3362,7 +3356,7 @@ fn exited_session_tree_selection_opens_transcript_lifetime_detail_and_returns() 
         SessionState::Busy,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let exited = fixture_session(
         Provider::CodexCli,
@@ -3371,7 +3365,7 @@ fn exited_session_tree_selection_opens_transcript_lifetime_detail_and_returns() 
         SessionState::Exited,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let snapshot = Snapshot {
         sessions: vec![open, exited],
@@ -3406,10 +3400,9 @@ fn project_tree_hides_unresolved_and_system_temporary_sessions() {
         SessionState::Busy,
         20_000,
         NOW - DAY_MS,
-        ("/Users/fixture/code/missing", "main"),
+        "/Users/fixture/code/missing",
     );
     unavailable.project = None;
-    unavailable.worktree = None;
     unavailable.cwd = Some("/deleted/project".into());
 
     let mut temporary = unavailable.clone();
@@ -3435,7 +3428,7 @@ fn project_tree_hides_unresolved_and_system_temporary_sessions() {
 fn historical_tree_selection_survives_refresh_by_provider_and_native_id() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
-    let worktree = ("/Users/fixture/code/identity", "main");
+    let location = "/Users/fixture/code/identity";
     let open = fixture_session(
         Provider::ClaudeCode,
         "open",
@@ -3443,7 +3436,7 @@ fn historical_tree_selection_survives_refresh_by_provider_and_native_id() {
         SessionState::Busy,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let codex = fixture_session(
         Provider::CodexCli,
@@ -3452,7 +3445,7 @@ fn historical_tree_selection_survives_refresh_by_provider_and_native_id() {
         SessionState::Exited,
         20_000,
         NOW - DAY_MS,
-        worktree,
+        location,
     );
     let claude = fixture_session(
         Provider::ClaudeCode,
@@ -3461,7 +3454,7 @@ fn historical_tree_selection_survives_refresh_by_provider_and_native_id() {
         SessionState::Exited,
         20_000,
         NOW - 2 * DAY_MS,
-        worktree,
+        location,
     );
     let mut snapshot = Snapshot {
         sessions: vec![open, codex, claude],
@@ -3500,13 +3493,12 @@ fn session_tree_keeps_non_git_history_directly_under_its_project() {
         SessionState::Exited,
         20_000,
         NOW - DAY_MS,
-        ("/Users/fixture/code/non-git", "main"),
+        "/Users/fixture/code/non-git",
     );
     session.project = Some(Project {
-        identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/Users/fixture/code/non-git")),
+        identity: ProjectIdentity::new(PathBuf::from("/Users/fixture/code/non-git")),
         label: "non-git-project".into(),
     });
-    session.worktree = None;
     let mut open = session.clone();
     open.id = "non-git-open".into();
     open.latest_model = Some("non-git-open-model".into());
@@ -3531,7 +3523,7 @@ fn session_tree_keeps_non_git_history_directly_under_its_project() {
 }
 
 #[test]
-fn session_tree_worktree_disclosures_keep_independent_state() {
+fn session_tree_age_disclosures_keep_independent_state() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
     let alpha = fixture_session(
@@ -3541,7 +3533,7 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
         SessionState::Exited,
         20_000,
         NOW - DAY_MS,
-        ("/Users/fixture/code/mudi-alpha", "alpha"),
+        "/Users/fixture/code/mudi-alpha",
     );
     let beta = fixture_session(
         Provider::CodexCli,
@@ -3550,7 +3542,7 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
         SessionState::Exited,
         20_000,
         NOW - 9 * DAY_MS,
-        ("/Users/fixture/code/mudi-beta", "beta"),
+        "/Users/fixture/code/mudi-beta",
     );
     let mut alpha_open = alpha.clone();
     alpha_open.id = "alpha-open".into();
@@ -3571,26 +3563,24 @@ fn session_tree_worktree_disclosures_keep_independent_state() {
     let mut ui = Ui::default();
 
     press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let alpha_expanded = render(&snapshot, &ui, 120, 30);
     assert!(alpha_expanded.text.contains("✳ alpha"));
     assert!(!alpha_expanded.text.contains("⬡ beta"));
 
-    press(&mut ui, &snapshot, KeyCode::Up);
-    press(&mut ui, &snapshot, KeyCode::Up);
-    press(&mut ui, &snapshot, KeyCode::Up);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let both_expanded = render(&snapshot, &ui, 120, 30);
     assert!(both_expanded.text.contains("✳ alpha"));
     assert!(both_expanded.text.contains("⬡ beta"));
 
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Up);
+    press(&mut ui, &snapshot, KeyCode::Up);
+    press(&mut ui, &snapshot, KeyCode::Up);
+    press(&mut ui, &snapshot, KeyCode::Up);
     press(&mut ui, &snapshot, KeyCode::Enter);
     let only_beta_expanded = render(&snapshot, &ui, 120, 30);
     assert!(!only_beta_expanded.text.contains("✳ alpha"));
@@ -3670,11 +3660,7 @@ fn now_session_row_uses_the_saved_alias_as_its_title() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
 
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Auth fix".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Auth fix");
 
     let rendered = render(&snapshot, &ui, 120, 30);
     let critical_row = rendered
@@ -3693,11 +3679,7 @@ fn compact_now_renders_a_readable_unicode_session_title() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
 
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Dao 文档整理".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Dao 文档整理");
 
     for (width, height) in [(80, 24), (120, 30)] {
         let rendered = render(&snapshot, &ui, width, height);
@@ -3721,11 +3703,7 @@ fn compact_now_uses_every_title_cell_before_operational_evidence() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
 
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "0123456789abcdefghijklmnop".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "0123456789abcdefghijklmnop");
 
     let rendered = render(&snapshot, &ui, 80, 24);
     let critical_row = rendered
@@ -3735,7 +3713,7 @@ fn compact_now_uses_every_title_cell_before_operational_evidence() {
         .expect("critical NOW Session should render");
 
     assert!(
-        critical_row.contains("✳ ...hijklmnop ↗ ! •  90%│"),
+        critical_row.contains("✳ ...fghijklmnop ↗ ! •  90%│"),
         "Session Title should use every cell before operational evidence:\n{critical_row}"
     );
 }
@@ -3760,10 +3738,15 @@ fn wide_now_aligns_all_operational_evidence_for_supported_context_values() {
                 SessionState::Busy,
                 *tokens,
                 NOW - index as i64 * 1_000,
-                ("/Users/fixture/code/aligned", "main"),
+                "/Users/fixture/code/aligned",
             );
             session.context.window = *window;
-            session.worktree.as_mut().unwrap().writable = false;
+            session.project = Some(Project {
+                identity: ProjectIdentity::new(PathBuf::from(format!(
+                    "/Users/fixture/code/aligned/{id}"
+                ))),
+                label: id.to_string(),
+            });
             session
         })
         .collect::<Vec<_>>();
@@ -3819,11 +3802,7 @@ fn wide_editor_keeps_the_complete_session_title_in_the_inspector() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
 
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Architecture cleanup".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Architecture cleanup");
 
     let rendered = render(&snapshot, &ui, 160, 30);
     let critical_row = rendered
@@ -3848,11 +3827,7 @@ fn long_unicode_now_title_does_not_move_operational_evidence() {
         .expect("baseline critical NOW Session should render");
 
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Dao 文档整理和项目路线图".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Dao 文档整理和项目路线图");
     let aliased = render(&snapshot, &ui, 80, 24);
     let aliased_row = aliased
         .text
@@ -3890,11 +3865,7 @@ fn renaming_a_session_does_not_reorder_visible_session_identities() {
         .into_iter()
         .map(|session| (session.provider, session.id))
         .collect::<Vec<_>>();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "ZZZ title".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "ZZZ title");
 
     let after = ui
         .visible(&snapshot)
@@ -3909,11 +3880,7 @@ fn existing_recent_signal_resolves_the_current_session_title() {
     let snapshot = production_snapshot();
     let signal_count = snapshot.recent_signals.len();
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Auth".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Auth");
 
     let rendered = render(&snapshot, &ui, 120, 30);
     let context_signal = rendered
@@ -3926,55 +3893,43 @@ fn existing_recent_signal_resolves_the_current_session_title() {
 }
 
 #[test]
-fn worktree_signal_members_resolve_current_provider_qualified_titles() {
+fn project_signal_members_resolve_current_provider_qualified_titles() {
     let mut snapshot = production_snapshot();
     snapshot.recent_signals.truncate(1);
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Auth".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Auth");
 
     let rendered = render(&snapshot, &ui, 160, 30);
     let before = rendered
         .text
         .lines()
         .find(|line| line.contains("Before 1:"))
-        .expect("Worktree Signal before-members should render");
+        .expect("Project Signal before-members should render");
     let after = rendered
         .text
         .lines()
         .find(|line| line.contains("After 2:"))
-        .expect("Worktree Signal after-members should render");
+        .expect("Project Signal after-members should render");
     assert!(before.contains("✳:Auth"));
     assert!(after.contains("✳:Auth"));
     assert!(after.contains("⬡:x-shared"));
 }
 
 #[test]
-fn worktree_signal_disambiguates_duplicate_member_aliases() {
+fn project_signal_disambiguates_duplicate_member_aliases() {
     let mut snapshot = production_snapshot();
     snapshot.recent_signals.truncate(1);
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Pair".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Pair");
     press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Pair".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Pair");
 
     let rendered = render(&snapshot, &ui, 160, 30);
     let after = rendered
         .text
         .lines()
         .find(|line| line.contains("After 2:"))
-        .expect("Worktree Signal after-members should render");
+        .expect("Project Signal after-members should render");
     assert!(after.contains("✳:Pair · critical"));
     assert!(after.contains("⬡:Pair · x-shared"));
 }
@@ -3987,19 +3942,11 @@ fn session_signals_disambiguate_duplicate_visible_aliases() {
         snapshot.recent_signals[3].clone(),
     ];
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Pair".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Pair");
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Pair".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Pair");
 
     let rendered = render(&snapshot, &ui, 160, 30);
     let critical = rendered
@@ -4020,19 +3967,11 @@ fn session_signals_disambiguate_duplicate_visible_aliases() {
 fn wide_now_keeps_duplicate_aliases_distinguishable() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Pair".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Pair");
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Pair".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Pair");
 
     let rendered = render(&snapshot, &ui, 120, 30);
     let critical = rendered
@@ -4075,6 +4014,7 @@ fn compact_open_detail_matches_the_reviewed_production_fixture() {
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/detail_open_80x24.txt"),
+        "fixtures/production-renders/detail_open_80x24.txt",
     );
 }
 
@@ -4082,11 +4022,7 @@ fn compact_open_detail_matches_the_reviewed_production_fixture() {
 fn session_detail_separates_the_title_from_the_complete_session_id() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Auth fix".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Auth fix");
     press(&mut ui, &snapshot, KeyCode::Enter);
 
     let rendered = render(&snapshot, &ui, 80, 24);
@@ -4108,11 +4044,7 @@ fn session_detail_separates_the_title_from_the_complete_session_id() {
 fn wide_session_detail_separates_the_title_from_the_complete_session_id() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
-    press(&mut ui, &snapshot, KeyCode::Char('e'));
-    for character in "Auth fix".chars() {
-        press(&mut ui, &snapshot, KeyCode::Char(character));
-    }
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    save_selected_session_title(&mut ui, &snapshot, "Auth fix");
     press(&mut ui, &snapshot, KeyCode::Enter);
 
     let rendered = render(&snapshot, &ui, 160, 30);
@@ -4152,6 +4084,7 @@ fn compact_detail_field_navigation_reveals_complete_compaction_history() {
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/detail_open_scrolled_80x24.txt"),
+        "fixtures/production-renders/detail_open_scrolled_80x24.txt",
     );
 }
 
@@ -4169,10 +4102,10 @@ fn full_open_detail_matches_the_reviewed_production_fixture() {
         "Occupancy",
         "Attention Conditions",
         "CRITICAL Current Context",
-        "Shared Worktree Risk",
+        "Shared Project Risk",
         "Source log",
         "Session ID",
-        "fields 1/17",
+        "fields 1/15",
     ] {
         assert!(
             rendered.text.contains(required),
@@ -4182,6 +4115,7 @@ fn full_open_detail_matches_the_reviewed_production_fixture() {
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/detail_open_120x30.txt"),
+        "fixtures/production-renders/detail_open_120x30.txt",
     );
 }
 
@@ -4194,25 +4128,24 @@ fn edit_session_opens_for_the_selected_session_with_identity_evidence() {
     for (width, height, expected_width) in [(80, 24, 70), (120, 36, 78)] {
         let rendered = render(&snapshot, &ui, width, height);
         for required in [
-            "Edit Session",
+            "Edit",
             "Claude Code · critical",
             "Session",
             "Title",
             "Description",
             "Not set",
-            "Tab/Shift+Tab Fields · Enter Save · Esc Cancel",
+            "↑/↓ or j/k Move · Enter Edit · y Save · Esc/q Close",
         ] {
             assert!(
                 rendered.text.contains(required),
-                "Edit Session should contain {required:?}:\n{}",
+                "Edit should contain {required:?}:\n{}",
                 rendered.visible_text()
             );
         }
-        assert_eq!(
-            rendered.bordered_region_size("Edit Session"),
-            (expected_width, 8)
-        );
-        let modal_top = rendered.position_of("Edit Session").y;
+        assert!(!rendered.text.contains("Edit Session"));
+        assert!(!rendered.cursor_visible);
+        assert_eq!(rendered.bordered_region_size("Edit"), (expected_width, 8));
+        let modal_top = rendered.position_of("Edit").y;
         let session_row = rendered.position_of("Claude Code · critical").y;
         let title_row = rendered.position_of("Title").y;
         let description_row = rendered.position_of("Description").y;
@@ -4227,28 +4160,36 @@ fn edit_session_opens_for_the_selected_session_with_identity_evidence() {
 }
 
 #[test]
-fn tab_and_shift_tab_move_session_editor_focus_between_fields() {
+fn arrow_and_vim_keys_move_session_editor_focus_while_tab_is_ignored() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
 
     let title = render(&snapshot, &ui, 80, 24);
     assert!(title.text.contains("› Title"));
-    let title_cursor = title.cursor_position;
+    assert!(!title.cursor_visible);
 
     press(&mut ui, &snapshot, KeyCode::Tab);
-    let description = render(&snapshot, &ui, 80, 24);
-    assert!(description.text.contains("› Description"));
-    assert_eq!(description.cursor_position.y, title_cursor.y + 1);
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("› Title"));
 
     ui.handle_key(
         KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
         &snapshot,
     )
     .unwrap();
-    let title_again = render(&snapshot, &ui, 80, 24);
-    assert!(title_again.text.contains("› Title"));
-    assert_eq!(title_again.cursor_position, title_cursor);
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("› Title"));
+
+    for (key, focused) in [
+        (KeyCode::Down, "› Description"),
+        (KeyCode::Up, "› Title"),
+        (KeyCode::Char('j'), "› Description"),
+        (KeyCode::Char('k'), "› Title"),
+    ] {
+        press(&mut ui, &snapshot, key);
+        let rendered = render(&snapshot, &ui, 80, 24);
+        assert!(rendered.text.contains(focused));
+        assert!(!rendered.cursor_visible);
+    }
 }
 
 #[test]
@@ -4257,20 +4198,22 @@ fn description_editor_accepts_unicode_and_enforces_the_240_character_limit() {
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     let initial = render(&snapshot, &ui, 120, 30);
-    assert_eq!(initial.bordered_region_size("Edit Session"), (78, 8));
-    press(&mut ui, &snapshot, KeyCode::Tab);
+    assert_eq!(initial.bordered_region_size("Edit"), (78, 8));
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "界".repeat(241).chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
 
     press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('y'));
     let invalid = render(&snapshot, &ui, 120, 30);
     assert!(invalid
         .text
         .contains("Description must be 240 characters or fewer"));
-    assert!(invalid.cursor_visible);
-    assert_eq!(invalid.bordered_region_size("Edit Session"), (78, 8));
-    let modal_top = invalid.position_of("Edit Session").y;
+    assert!(!invalid.cursor_visible);
+    assert_eq!(invalid.bordered_region_size("Edit"), (78, 8));
+    let modal_top = invalid.position_of("Edit").y;
     let description_row = invalid.position_of("Description").y;
     let error_row = invalid
         .position_of("Description must be 240 characters or fewer")
@@ -4278,27 +4221,35 @@ fn description_editor_accepts_unicode_and_enforces_the_240_character_limit() {
     assert_eq!(error_row, description_row + 1);
     assert_eq!(modal_top + 7, error_row + 2);
 
+    press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Backspace);
     press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('y'));
     let saved = render(&snapshot, &ui, 120, 30);
     assert!(!saved.cursor_visible);
     assert!(saved.text.contains("Session metadata saved"));
 }
 
 #[test]
-fn empty_session_editor_places_the_cursor_after_the_title_field_label() {
+fn empty_session_editor_shows_the_title_cursor_only_after_enter() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
 
-    let rendered = render(&snapshot, &ui, 80, 24);
-    let label = rendered.position_of("Title");
+    let browsing = render(&snapshot, &ui, 80, 24);
+    assert!(!browsing.cursor_visible);
+    assert!(browsing.text.contains("Not set"));
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    let editing = render(&snapshot, &ui, 80, 24);
+    let label = editing.position_of("Title");
 
     assert_eq!(
-        rendered.cursor_position,
+        editing.cursor_position,
         Position::new(label.x + 14, label.y)
     );
-    assert!(rendered.cursor_visible);
+    assert!(editing.cursor_visible);
+    assert!(editing.text.contains("Enter Save · Esc Cancel"));
 }
 
 #[test]
@@ -4306,6 +4257,7 @@ fn title_editor_keeps_the_cursor_after_ascii_input() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Auth fix".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
@@ -4324,6 +4276,7 @@ fn title_editor_places_the_cursor_after_double_width_unicode_input() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "登录".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
@@ -4342,6 +4295,7 @@ fn backspace_moves_the_title_editor_cursor_to_the_new_input_end() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "登录".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
@@ -4361,6 +4315,7 @@ fn long_title_input_keeps_the_cursor_inside_the_editor() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in format!("{}TAIL_END", "x".repeat(72)).chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
@@ -4375,7 +4330,7 @@ fn long_title_input_keeps_the_cursor_inside_the_editor() {
         .skip(label.x as usize + 13)
         .find(|(_, cell)| cell.symbol() == "│")
         .map(|(x, _)| x as u16)
-        .expect("Edit Session should retain its right border");
+        .expect("Edit should retain its right border");
 
     assert_eq!(
         rendered.cursor_position,
@@ -4394,11 +4349,38 @@ fn cancelling_session_editing_hides_the_terminal_cursor() {
     let mut terminal = Terminal::new(CursorBackend::new(80, 24)).unwrap();
 
     terminal.draw(|frame| draw(frame, &snapshot, &ui)).unwrap();
-    assert!(terminal.backend().cursor_visible);
+    assert!(!terminal.backend().cursor_visible);
 
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    terminal.draw(|frame| draw(frame, &snapshot, &ui)).unwrap();
+    assert!(terminal.backend().cursor_visible);
     press(&mut ui, &snapshot, KeyCode::Esc);
     terminal.draw(|frame| draw(frame, &snapshot, &ui)).unwrap();
     assert!(!terminal.backend().cursor_visible);
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("y Save"));
+
+    press(&mut ui, &snapshot, KeyCode::Esc);
+    assert!(!render(&snapshot, &ui, 80, 24).text.contains("y Save"));
+}
+
+#[test]
+fn edit_session_treats_y_q_j_and_k_as_text_while_editing() {
+    let snapshot = production_snapshot();
+    let mut ui = Ui::default();
+    press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
+
+    for character in "yqjk".chars() {
+        press(&mut ui, &snapshot, KeyCode::Char(character));
+    }
+
+    let editing = render(&snapshot, &ui, 80, 24);
+    assert!(editing.text.contains("yqjk"));
+    assert!(editing.text.contains("Enter Save · Esc Cancel"));
+    assert!(editing.cursor_visible);
+
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    assert!(render(&snapshot, &ui, 80, 24).text.contains("yqjk"));
 }
 
 #[test]
@@ -4413,23 +4395,27 @@ fn edit_session_metadata_survives_reloading_the_ui() {
     let profile_path = directory.join("profile.json");
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
 
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Auth fix".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
-    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Auth boundary 登录".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
     press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('y'));
     let saved = render(&snapshot, &ui, 120, 30);
     assert!(!saved.cursor_visible);
     assert!(saved.text.contains("Auth fix"));
     assert!(saved.text.contains("Auth boundary"));
 
-    let mut reloaded = Ui::load(&profile_path, None).unwrap();
+    let mut reloaded = Ui::load(&profile_path).unwrap();
     press(&mut reloaded, &snapshot, KeyCode::Char('e'));
     let rendered = render(&snapshot, &reloaded, 80, 24);
     assert!(rendered.text.contains("Auth fix"));
@@ -4451,23 +4437,27 @@ fn deleting_an_existing_alias_and_confirming_clears_the_title() {
     let profile_path = directory.join("profile.json");
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Auth fix".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
     press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('y'));
 
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for _ in "Auth fix".chars() {
         press(&mut ui, &snapshot, KeyCode::Backspace);
     }
     let cleared = render(&snapshot, &ui, 80, 24);
     assert!(cleared.text.contains("Enter Save"));
     press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('y'));
     assert!(!render(&snapshot, &ui, 80, 24).cursor_visible);
 
-    let mut reloaded = Ui::load(&profile_path, None).unwrap();
+    let mut reloaded = Ui::load(&profile_path).unwrap();
     press(&mut reloaded, &snapshot, KeyCode::Char('e'));
     let rendered = render(&snapshot, &reloaded, 80, 24);
     assert!(rendered.text.contains("Title"));
@@ -4490,18 +4480,22 @@ fn malformed_label_store_disables_editing_until_rescan_reloads_it() {
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     std::fs::write(&label_path, b"broken").unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
 
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     let degraded = render(&snapshot, &ui, 160, 30);
-    assert!(!degraded.text.contains("Edit Session"));
+    assert!(!degraded
+        .text
+        .contains("↑/↓ or j/k Move · Enter Edit · y Save"));
     assert!(degraded.text.contains("Label Store error"));
     assert!(degraded.text.contains("session-labels.json"));
 
     std::fs::remove_file(&label_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Char('r'));
     press(&mut ui, &snapshot, KeyCode::Char('e'));
-    assert!(render(&snapshot, &ui, 80, 24).text.contains("Edit Session"));
+    assert!(render(&snapshot, &ui, 80, 24)
+        .text
+        .contains("↑/↓ or j/k Move · Enter Edit · y Save"));
 
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -4537,7 +4531,7 @@ fn malformed_label_store_disables_curation_until_rescan_reloads_it() {
         ready: true,
         ..Snapshot::default()
     };
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Right);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -4575,25 +4569,31 @@ fn failed_metadata_save_preserves_both_editor_inputs_for_a_successful_retry() {
     let label_path = directory.join("session-labels.json");
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path, None).unwrap();
+    let mut ui = Ui::load(&profile_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Retry title".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
-    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Retry description".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
+    press(&mut ui, &snapshot, KeyCode::Enter);
     std::fs::write(&label_path, b"broken during edit").unwrap();
 
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('y'));
     let failed = render(&snapshot, &ui, 120, 30);
-    assert!(failed.text.contains("Edit Session"));
+    assert!(failed
+        .text
+        .contains("↑/↓ or j/k Move · Enter Edit · y Save"));
     assert!(failed.text.contains("Retry title"));
     assert!(failed.text.contains("Retry description"));
 
     std::fs::remove_file(&label_path).unwrap();
-    press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('y'));
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     let retried = render(&snapshot, &ui, 120, 30);
     assert!(retried.text.contains("Retry title"));
@@ -4607,33 +4607,44 @@ fn title_editor_rejects_81_characters_and_accepts_80() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for _ in 0..81 {
         press(&mut ui, &snapshot, KeyCode::Char('a'));
     }
 
     press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('y'));
     let invalid = render(&snapshot, &ui, 120, 30);
-    assert!(invalid.text.contains("Enter Save · Esc Cancel"));
+    assert!(invalid.text.contains("Enter Edit · y Save"));
     assert!(invalid
         .text
         .contains("Title must be 80 characters or fewer"));
 
+    press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Backspace);
     press(&mut ui, &snapshot, KeyCode::Enter);
+    press(&mut ui, &snapshot, KeyCode::Char('y'));
     let saved = render(&snapshot, &ui, 120, 30);
-    assert!(!saved.text.contains("Enter Save · Esc Cancel"));
+    assert!(!saved.text.contains("Enter Edit · y Save"));
     assert!(saved.text.contains("Session metadata saved"));
 }
 
 #[test]
-fn escape_cancels_session_editing_without_persisting_or_prefilling_either_draft() {
+fn escape_cancels_each_field_draft_before_closing_the_session_editor() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Cancelled draft".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
-    press(&mut ui, &snapshot, KeyCode::Tab);
+    press(&mut ui, &snapshot, KeyCode::Esc);
+    let title_cancelled = render(&snapshot, &ui, 120, 30);
+    assert!(!title_cancelled.text.contains("Cancelled draft"));
+    assert!(title_cancelled.text.contains("Enter Edit · y Save"));
+
+    press(&mut ui, &snapshot, KeyCode::Down);
+    press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Cancelled description".chars() {
         press(&mut ui, &snapshot, KeyCode::Char(character));
     }
@@ -4643,9 +4654,15 @@ fn escape_cancels_session_editing_without_persisting_or_prefilling_either_draft(
     assert!(!cancelled.text.contains("Cancelled draft"));
     assert!(!cancelled.text.contains("Cancelled description"));
     assert!(!cancelled.cursor_visible);
+    assert!(cancelled.text.contains("Enter Edit · y Save"));
+
+    press(&mut ui, &snapshot, KeyCode::Esc);
+    assert!(!render(&snapshot, &ui, 120, 30)
+        .text
+        .contains("Enter Edit · y Save"));
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     let reopened = render(&snapshot, &ui, 120, 30);
-    assert!(reopened.text.contains("Enter Save · Esc Cancel"));
+    assert!(reopened.text.contains("Enter Edit · y Save"));
     assert!(!reopened.text.contains("Cancelled draft"));
     assert!(!reopened.text.contains("Cancelled description"));
 }
@@ -4665,7 +4682,7 @@ fn edit_session_shortcut_is_shown_only_for_a_concrete_session_target() {
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     assert!(!render(&snapshot, &ui, 120, 30)
         .text
-        .contains("Edit Session"));
+        .contains("Enter Edit · y Save"));
 
     press(&mut ui, &snapshot, KeyCode::Tab);
     press(&mut ui, &snapshot, KeyCode::Tab);
@@ -4697,6 +4714,7 @@ fn compact_guide_opens_with_all_categories() {
     assert_fixture(
         &rendered,
         include_str!("fixtures/production-renders/guide_80x24.txt"),
+        "fixtures/production-renders/guide_80x24.txt",
     );
 }
 
@@ -4829,13 +4847,13 @@ fn signals_guide_explains_every_recent_signal_and_retention_rule() {
         "Warning starts at 70%; Critical starts at 85%.",
         "✳ session1 Cmp auto 188.0k>100.0k",
         "✳ session1 Cmp auto 188.0k>100.0k -Critical",
-        "WT /project  Risk detected",
-        "WT /project  Risk cleared",
+        "PJ /project  Risk detected",
+        "PJ /project  Risk cleared",
         "Before 1: ✳:session1",
         "After 2: ✳:session1, ⬡:session2",
         "✳  Claude Code",
         "⬡  Codex CLI",
-        "WT  Worktree",
+        "PJ  Project",
         "Idle -> Busy is not recorded.",
         "ordinary Current Context percentage changes",
         "source timestamps",
@@ -4869,7 +4887,7 @@ fn signals_guide_explains_context_evidence_and_scope() {
 }
 
 #[test]
-fn signals_guide_explains_shared_worktree_risk_evidence_and_scope() {
+fn signals_guide_explains_shared_project_risk_evidence_and_scope() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Tab);
@@ -4878,7 +4896,7 @@ fn signals_guide_explains_shared_worktree_risk_evidence_and_scope() {
     let rendered = render(&snapshot, &ui, 120, 80);
 
     for required in [
-        "Two Open Sessions trigger Shared Worktree Risk.",
+        "Two Open Sessions trigger Shared Project Risk.",
         "Open Session membership before -> after",
         "not proof of a file-level or Git conflict",
     ] {
@@ -5073,7 +5091,7 @@ fn sessions_guide_explains_titles_aliases_fallbacks_and_editing() {
 }
 
 #[test]
-fn theme_guide_explains_the_active_theme_built_ins_and_process_override() {
+fn theme_guide_explains_the_active_theme_and_built_ins() {
     let snapshot = production_snapshot();
     let mut ui = Ui::default();
     press(&mut ui, &snapshot, KeyCode::Char('?'));
@@ -5090,8 +5108,6 @@ fn theme_guide_explains_the_active_theme_built_ins_and_process_override() {
         "gruvbox",
         "light",
         "high-contrast",
-        "--theme <name>",
-        "Applies to one process and does not change the saved Theme.",
         "Theme changes presentation, never Session state or thresholds.",
     ] {
         assert!(
@@ -5272,7 +5288,7 @@ fn all_six_themes_render_readable_distinct_semantic_roles() {
                 "Theme {expected_theme} did not distinguish the selected Tree {role}"
             );
         }
-        let selected_row_end = rendered.buffer[(54, 12)].style();
+        let selected_row_end = rendered.style_before_right_border_in_row(selected_row);
         assert_eq!(
             selected_row_end.bg, selected_cursor.bg,
             "Theme {expected_theme} did not extend the selected Tree background through its row"

@@ -1,30 +1,30 @@
-┌ Mudi | v0.1.0 ────────────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
+┌ Mudi | v2.0.0 ───────────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 4 Projects ┐
                                         ┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
-                                        │WT /Users/fixture/co...  Risk detected││                                      │
+                                        │PJ /Users/fixture/co...  Risk detected││                                      │
                                         │✳ critical Ctx +Critical 160.0k>180.0k││                                      │
                                         │✳ ... Cmp auto 188.0k>100.0k -Critical││                                      │
                                         │✳ -warning Ctx +Warning 120.0k>150.0k ││                                      │
                                         │⬡ dex-idle Busy -> Idle               ││                                      │
                                         │                                      ││                                      │
                                         └──────────────────────────────────────┘└──────────────────────────────────────┘
- PROJECT 1 ─────────────────────────────────── 5 OPEN  │ Session Workspace ─────────────────────────────────────────────
- ▾ mudi (7)                                            │Session Claude Code / critical
-   ▾ main !2                                           │Conversation unavailable.
-    > ✳ critical ↗                        ! •  90%  30s│
-      ⬡ x-shared ↗                        ! •  40%   1m│
-   ▾ warning                                           │
-      ✳ -warning ↗                        ! •  75%   2m│
-   ▾ idle                                              │
-      ⬡ dex-idle ↗                          ◦  30%   3m│
-   ▾ healthy                                           │
-      ✳ -healthy ↗                          •  20%   4m│
+ PROJECT 4 ─────────────────────────────────── 5 OPEN  │ Session Workspace ─────────────────────────────────────────────
+ ▾ mudi (2)                                            │Session Claude Code / critical
+  > ✳ critical ↗                          ! •  90%  30s│Conversation unavailable.
+    ⬡ x-shared ↗                          ! •  40%   1m│
+ ▾ mudi-warning (1)                                    │
+    ✳ -warning ↗                          ! •  75%   2m│
+ ▾ mudi-idle (1)                                       │
+    ⬡ dex-idle ↗                            ◦  30%   3m│
+ ▾ mudi-healthy (1)                                    │
+    ✳ -healthy ↗                            •  20%   4m│
+                                                       │
  DETAILS ──────────────────────────────────────────────│
  Title       critical                                  │
  Description N/A                                       │
  Context     [###########-] 90.0%                      │
  Attention   Critical Context · 90% · +1               │
  Provider    Claude Code -> claude-opus-4-8            │
- Worktree    /Users/fixture/code/mudi @ main           │
+ Directory   /Users/fixture/code/mudi                  │
  Run usage   in 1.2k | out 230                         │
 ───────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────
 j/k | Left/Right | Enter | e Edit session | r | ? | q Quit                  watching · 0 sessions · 0 parsed / 0 skipped

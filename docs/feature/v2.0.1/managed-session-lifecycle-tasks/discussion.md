@@ -121,7 +121,7 @@ acknowledgement behavior remain open.
 - A New Task is created before a native Session ID exists, so its target cannot initially be
   a Session identity.
 - A Resume Task targets an existing Session while a New Task targets Provider, Project, and
-  Worktree.
+  Project working directory.
 - A Binding Receipt is issued while the corresponding New or Resume Task remains durable.
 - Multiple `Binding` and `Needs Review` records coexist.
 - New, Resume, and Handoff Tasks run concurrently against different targets.
@@ -192,8 +192,8 @@ acknowledgement behavior remain open.
 - `feature/v2.0.0/diagrams/05-managed-start-ui.excalidraw` places a single pending
   Registration in the top status strip and illustrates `Needs Review`, but does not define
   `Failed`, multiple-record, empty-state, or retention behavior.
-- `src/ui/mod.rs` retains selection by Registration identity across snapshot reorderings.
-- `src/managed_sessions.rs` gives `Failed` no available recovery action and removes a
+- `src/presentation/tui/mod.rs` retains selection by Registration identity across snapshot reorderings.
+- `src/application/managed_sessions.rs` gives `Failed` no available recovery action and removes a
   successful Binding Registration after Receipt issuance.
 - `tests/managed_binding.rs` currently locks stable identity selection and the
   `No recovery action` rendering for `Failed`.

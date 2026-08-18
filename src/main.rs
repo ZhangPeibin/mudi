@@ -12,76 +12,161 @@ use crossterm::style::Print;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use mudi::application::ApplicationController;
-use mudi::clipboard::{Clipboard, MacosClipboard};
-use mudi::config::{theme_override_from_args, Config};
-use mudi::handoff::{
-    DetachedWorkerLauncher, HandoffPaths, HandoffService, MacosCurrentRunControl,
-    ProviderExecutables, WorkerLauncher,
+use mudi::adapters::config::Config;
+use mudi::adapters::macos::clipboard::{Clipboard, MacosClipboard};
+use mudi::adapters::skills::handoff::ManagedHandoffSkills;
+
+use mudi::application::handoff::{
+    run_worker_from_args, DetachedWorkerLauncher, HandoffPaths, HandoffService,
+    MacosCurrentRunControl, ProviderExecutables, WorkerLauncher,
 };
-use mudi::handoff_skill::ManagedHandoffSkills;
-use mudi::managed_sessions::{
+use mudi::application::managed_sessions::{
     discover_tmux_executable, run_attach_from_args, MacosManagedTerminalAccess,
     ManagedCurrentRunAccessService, ManagedCurrentRunVerifier, ManagedLaunchStore,
     ManagedResumeVerifier, ManagedSessionService, SystemManagedCurrentRunEvidence,
     SystemManagedResumeEvidence, TmuxLaunchBroker,
 };
-use mudi::read_model::{InMemoryReadModelCache, ReadModelCache};
-use mudi::refresh::RefreshService;
-use mudi::successor::{MacosTerminalLauncher, TerminalLauncher};
-use mudi::ui::{draw, Ui};
+use mudi::application::observation::read_model::{InMemoryReadModelCache, ReadModelCache};
+use mudi::application::observation::refresh::RefreshService;
+use mudi::application::successor::{
+    run_successor_from_args, MacosTerminalLauncher, TerminalLauncher,
+};
+use mudi::application::ApplicationController;
+use mudi::presentation::tui::{draw, Ui};
 
 /// Shared read-only projection published by refresh and consumed by the UI.
-type Shared = Arc<dyn ReadModelCache>;
+type SharedReadModelCache = Arc<dyn ReadModelCache>;
+type TuiController = ApplicationController<DetachedWorkerLauncher, MacosTerminalLauncher>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if run_non_tui_mode()? {
+        return Ok(());
+    }
+
+    let runtime = TuiRuntime::build(Config::load())?;
+    runtime.run()
+}
+
+/// Dispatch process modes that do not start the TUI.
+fn run_non_tui_mode() -> Result<bool> {
     if run_attach_from_args(std::env::args_os())? {
-        return Ok(());
+        return Ok(true);
     }
-    if mudi::successor::run_successor_from_args(std::env::args_os())? {
-        return Ok(());
+    if run_successor_from_args(std::env::args_os())? {
+        return Ok(true);
     }
-    if mudi::handoff::run_worker_from_args(std::env::args_os())? {
-        return Ok(());
+    if run_worker_from_args(std::env::args_os())? {
+        return Ok(true);
     }
-    let cfg = Config::load()?;
-    let theme_override = theme_override_from_args(std::env::args());
-    let ui = Ui::load(cfg.profile_path(), theme_override.as_deref())?;
+    Ok(false)
+}
+
+struct TuiRuntime {
+    config: Config,
+    ui: Ui,
+    controller: TuiController,
+    read_model: SharedReadModelCache,
+}
+
+impl TuiRuntime {
+    fn build(config: Config) -> Result<Self> {
+        let ui = Ui::load(config.profile_path())?;
+        let controller = build_tui_controller(&config)?;
+        let read_model: SharedReadModelCache = Arc::new(InMemoryReadModelCache::default());
+
+        Ok(Self {
+            config,
+            ui,
+            controller,
+            read_model,
+        })
+    }
+
+    fn run(self) -> Result<()> {
+        let Self {
+            config,
+            ui,
+            mut controller,
+            read_model,
+        } = self;
+
+        let (rescan_tx, rescan_rx) = mpsc::unbounded_channel::<()>();
+        let collector = tokio::spawn(collector_loop(config, read_model.clone(), rescan_rx));
+
+        let result = run_tui(read_model, rescan_tx, ui, &mut controller);
+
+        collector.abort();
+        result
+    }
+}
+
+fn build_tui_controller(config: &Config) -> Result<TuiController> {
     let handoff_paths = HandoffPaths {
-        task_store: cfg.task_store_path(),
-        artifact_root: cfg.artifact_root(),
+        task_store: config.task_store_path(),
+        artifact_root: config.artifact_root(),
     };
     let mudi_executable = std::env::current_exe()?;
     let terminal_launcher =
         MacosTerminalLauncher::new(mudi_executable.clone(), handoff_paths.task_store.clone());
     let provider_executables = ProviderExecutables::discover();
+
     let tmux_executable = discover_tmux_executable().unwrap_or_default();
+    let (managed_sessions, managed_current_runs) =
+        build_managed_session_services(config, &provider_executables, tmux_executable)?;
+    let handoff =
+        build_handoff_service(config, mudi_executable, handoff_paths, provider_executables)?;
+
+    let mut controller = ApplicationController::new(handoff, terminal_launcher, managed_sessions)
+        .with_managed_current_run_access(managed_current_runs);
+    controller.reconcile_tasks(chrono::Utc::now().timestamp_millis())?;
+    Ok(controller)
+}
+
+fn build_managed_session_services(
+    config: &Config,
+    provider_executables: &ProviderExecutables,
+    tmux_executable: PathBuf,
+) -> Result<(ManagedSessionService, ManagedCurrentRunAccessService)> {
     let managed_sessions = ManagedSessionService::new(
-        ManagedLaunchStore::open(cfg.managed_launch_store_path())?,
+        ManagedLaunchStore::open(config.managed_launch_store_path())?,
         provider_executables.clone(),
         Box::new(TmuxLaunchBroker::new(tmux_executable.clone())),
         Box::new(MacosManagedTerminalAccess::new(tmux_executable.clone())),
     )
     .with_resume_verifier(ManagedResumeVerifier::new(
-        cfg.clone(),
+        config.clone(),
         Box::new(SystemManagedResumeEvidence::default()),
     ));
     let managed_current_runs = ManagedCurrentRunAccessService::new(
-        ManagedLaunchStore::open(cfg.managed_launch_store_path())?,
-        ManagedCurrentRunVerifier::new(cfg.clone(), Box::new(SystemManagedCurrentRunEvidence)),
+        ManagedLaunchStore::open(config.managed_launch_store_path())?,
+        ManagedCurrentRunVerifier::new(config.clone(), Box::new(SystemManagedCurrentRunEvidence)),
         Box::new(MacosManagedTerminalAccess::new(tmux_executable)),
     );
-    let claude_sessions_dir = cfg.claude_sessions_dir();
-    let user_home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let managed_handoff_skills = ManagedHandoffSkills::for_user_home(&user_home, &cfg.claude_dir);
+
+    Ok((managed_sessions, managed_current_runs))
+}
+
+fn build_handoff_service(
+    config: &Config,
+    mudi_executable: PathBuf,
+    handoff_paths: HandoffPaths,
+    provider_executables: ProviderExecutables,
+) -> Result<HandoffService<DetachedWorkerLauncher>> {
+    let claude_sessions_dir = config.claude_sessions_dir();
+    let user_home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let managed_handoff_skills =
+        ManagedHandoffSkills::for_user_home(&user_home, &config.claude_dir);
     let worker_launcher = DetachedWorkerLauncher::new(
         mudi_executable,
         handoff_paths.clone(),
@@ -97,25 +182,15 @@ async fn main() -> Result<()> {
         Arc::new(MacosCurrentRunControl::new(claude_sessions_dir)),
     )?
     .with_managed_handoff_skills(managed_handoff_skills);
-    let mut controller = ApplicationController::new(handoff, terminal_launcher, managed_sessions)
-        .with_managed_current_run_access(managed_current_runs);
-    controller.reconcile_tasks(chrono::Utc::now().timestamp_millis())?;
-    let shared: Shared = Arc::new(InMemoryReadModelCache::default());
-    // Channel to request an out-of-band rescan (the `r` key).
-    let (rescan_tx, rescan_rx) = mpsc::unbounded_channel::<()>();
-
-    // Background collector task.
-    let bg = tokio::spawn(collector_loop(cfg.clone(), shared.clone(), rescan_rx));
-
-    // Run the TUI on the current thread.
-    let result = run_tui(shared.clone(), rescan_tx, ui, &mut controller);
-
-    bg.abort();
-    result
+    Ok(handoff)
 }
 
 /// Background loop: refresh and publish a structured projection every ~2s.
-async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::UnboundedReceiver<()>) {
+async fn collector_loop(
+    cfg: Config,
+    shared: SharedReadModelCache,
+    mut rescan_rx: mpsc::UnboundedReceiver<()>,
+) {
     let mut refresh = RefreshService::new(cfg);
 
     loop {
@@ -130,7 +205,7 @@ async fn collector_loop(cfg: Config, shared: Shared, mut rescan_rx: mpsc::Unboun
 }
 
 fn run_tui<L: WorkerLauncher, T: TerminalLauncher>(
-    shared: Shared,
+    shared: SharedReadModelCache,
     rescan_tx: mpsc::UnboundedSender<()>,
     mut ui: Ui,
     controller: &mut ApplicationController<L, T>,
@@ -204,7 +279,7 @@ fn leave_tui_screen(writer: &mut impl io::Write) -> io::Result<()> {
 fn event_loop<B: ratatui::backend::Backend, L: WorkerLauncher, T: TerminalLauncher>(
     terminal: &mut Terminal<B>,
     ui: &mut Ui,
-    shared: &Shared,
+    shared: &SharedReadModelCache,
     rescan_tx: &mpsc::UnboundedSender<()>,
     clipboard: &mut dyn Clipboard,
     controller: &mut ApplicationController<L, T>,

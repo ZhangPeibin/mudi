@@ -1,24 +1,24 @@
-┌ Mudi | v0.1.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ Mudi | v2.0.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 4 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
         ┌ Session Detail ──────────────────────────────────────────────┐       │
         │Provider        Claude Code -> claude-opus-4-8                │       │
         │Project         mudi                                          │       │
-        │Worktree        /Users/fixture/code/mudi                      │       │
-        │Branch          main                                          │       │
         │cwd             /Users/fixture/code/mudi                      │       │
-        │Source log                                                    │───────┘
- PROJECT│/Users/fixture/.claude/projects/-Users-fixture-code-mudi/claud│────────
- ▾ mudi │e-critical.jsonl                                              │n select
-   ▾ mai│Source format   JSONL                                         │
-    > ✳ │Title           critical                                      │
-      ⬡ │Session ID      claude-critical                               │
-   ▾ war│State           Busy                                          │
- DETAILS│                                                              │
- Title  │Current Context                                               │
- Descrip│Occupancy        180.0k / 200.0k (90.0%)                      │
- Context│                                                              │
- Attenti│Attention Conditions                                          │
- Provide│  CRITICAL Current Context 90.0% >= 85%                       │
- Worktre└ Up/Down Select | c Copy | h Handoff | Esc Close  fields 1/17 ┘
+        │Source log                                                    │       │
+        │/Users/fixture/.claude/projects/-Users-fixture-code-mudi/claud│       │
+        │e-critical.jsonl                                              │───────┘
+ PROJECT│Source format   JSONL                                         │────────
+ ▾ mudi │Title           critical                                      │n select
+  > ✳ cr│Session ID      claude-critical                               │
+    ⬡ x-│State           Busy                                          │
+ ▾ mudi-│                                                              │
+    ✳ -w│Current Context                                               │
+ DETAILS│Occupancy        180.0k / 200.0k (90.0%)                      │
+ Title  │                                                              │
+ Descrip│Attention Conditions                                          │
+ Context│  CRITICAL Current Context 90.0% >= 85%                       │
+ Attenti│  WARNING Shared Project Risk x2                              │
+ Provide│                                                              │
+ Directo└ Up/Down Select | c Copy | h Handoff | Esc Close  fields 1/15 ┘
 ───────────────────────────────┴────────────────────────────────────────────────
 Esc | j/k Fields | c Copy | e Edit | h Handoff | ? | q Quit Estimated using API

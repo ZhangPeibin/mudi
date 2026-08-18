@@ -1,14 +1,11 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mudi::application::ApplicationController;
-use mudi::clipboard::Clipboard;
-use mudi::config::Config;
-use mudi::domain::{
-    ContextState, Project, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
-    SourceFormat, SourceMetadata, Usage,
-};
-use mudi::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
-use mudi::managed_sessions::{
+use mudi::adapters::config::Config;
+use mudi::adapters::macos::clipboard::Clipboard;
+use mudi::adapters::providers::state::ProcessIdentity;
+use mudi::adapters::providers::{registry, ProviderBindingEvidence, ProviderExecutables};
+use mudi::application::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
+use mudi::application::managed_sessions::{
     BindingOutcome, EvidenceBinder, ManagedCurrentRunLifecycle, ManagedLaunchBroker,
     ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStore,
     ManagedLaunchTarget, ManagedResumeEvidence, ManagedResumeEvidenceCandidate,
@@ -16,12 +13,15 @@ use mudi::managed_sessions::{
     ManagedSessionRecord, ManagedSessionService, ManagedTerminalAccess, ProcessEvidence,
     ProviderProcessObservation, SystemManagedResumeEvidence, SystemProcessEvidence,
 };
-use mudi::providers::state::ProcessIdentity;
-use mudi::providers::{registry, ProviderBindingEvidence, ProviderExecutables};
-use mudi::read_model::{ManagedResumeSummary, RefreshSnapshot};
-use mudi::refresh::RefreshService;
-use mudi::successor::TerminalLauncher;
-use mudi::ui::{draw, Ui, UiAction};
+use mudi::application::observation::read_model::{ManagedResumeSummary, RefreshSnapshot};
+use mudi::application::observation::refresh::RefreshService;
+use mudi::application::successor::TerminalLauncher;
+use mudi::application::ApplicationController;
+use mudi::domain::{
+    ContextState, Project, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
+    SourceFormat, SourceMetadata, Usage,
+};
+use mudi::presentation::tui::{draw, Ui, UiAction};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use std::fs;
@@ -747,7 +747,7 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
 fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
     let temp = TempDir::new("system-exit-evidence");
     let config = temp.config();
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let transcript_dir = config.claude_dir.join("projects/project");
     fs::create_dir_all(&transcript_dir).unwrap();
     let source = transcript_dir.join("native-session-49.jsonl");
@@ -758,7 +758,7 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
             serde_json::json!({
                 "type": "assistant",
                 "sessionId": "native-session-49",
-                "cwd": worktree,
+                "cwd": working_directory,
                 "timestamp": "2026-08-11T00:00:00Z",
                 "message": {
                     "id": "message-1",
@@ -774,7 +774,7 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
         pid: u32::MAX,
         started_at_ms: 41_000,
     };
-    let receipt = mudi::managed_sessions::BindingReceipt {
+    let receipt = mudi::application::managed_sessions::BindingReceipt {
         id: "receipt-prior".into(),
         registration_id: "launch-prior".into(),
         provider: Provider::ClaudeCode,
@@ -789,23 +789,18 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
     let session = ManagedSessionRecord {
         provider: Provider::ClaudeCode,
         native_session_id: "native-session-49".into(),
-        target: ManagedLaunchTarget {
-            project: ProjectIdentity::CanonicalCwd(worktree.clone()),
-            project_label: "worktree".into(),
-            worktree_root: None,
-            working_directory: worktree,
-        },
+        target: ManagedLaunchTarget { working_directory },
         session_alias: "Resume target".into(),
         description: None,
         binding_receipt_id: receipt.id.clone(),
     };
-    let run = mudi::managed_sessions::ManagedCurrentRunRecord {
+    let run = mudi::application::managed_sessions::ManagedCurrentRunRecord {
         id: "run-prior".into(),
         opaque_ref: "run_0123456789abcdef0123456789abcdef".into(),
         provider: Provider::ClaudeCode,
         native_session_id: "native-session-49".into(),
         provider_process: prior_process,
-        tmux: mudi::managed_sessions::PrivateTmuxEnvironment {
+        tmux: mudi::application::managed_sessions::PrivateTmuxEnvironment {
             socket_name: "mudi-prior".into(),
             session_name: "managed".into(),
         },
@@ -1227,10 +1222,9 @@ fn display_session(state: SessionState, provenance: SessionProvenance) -> Sessio
         provenance,
         source: SourceMetadata::default(),
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/mudi")),
+            identity: ProjectIdentity::new(PathBuf::from("/workspace/mudi")),
             label: "mudi".into(),
         }),
-        worktree: None,
         cwd: Some("/workspace/mudi".into()),
         latest_model: Some("claude-sonnet".into()),
         state,
@@ -1321,9 +1315,9 @@ impl ManagedResumeProviderEvidence for CountingProviderEvidence {
     fn observe(
         &self,
         _config: &Config,
-        _run: &mudi::managed_sessions::ManagedCurrentRunRecord,
+        _run: &mudi::application::managed_sessions::ManagedCurrentRunRecord,
         _session: &ManagedSessionRecord,
-        _receipt: &mudi::managed_sessions::BindingReceipt,
+        _receipt: &mudi::application::managed_sessions::BindingReceipt,
     ) -> Result<ManagedCurrentRunLifecycle> {
         self.single.fetch_add(1, Ordering::SeqCst);
         Ok(ManagedCurrentRunLifecycle::Exited)
@@ -1346,9 +1340,9 @@ impl ManagedResumeEvidence for FixedResumeEvidence {
     fn observe(
         &self,
         _config: &Config,
-        run: &mudi::managed_sessions::ManagedCurrentRunRecord,
+        run: &mudi::application::managed_sessions::ManagedCurrentRunRecord,
         session: &ManagedSessionRecord,
-        _receipt: &mudi::managed_sessions::BindingReceipt,
+        _receipt: &mudi::application::managed_sessions::BindingReceipt,
     ) -> Result<ManagedCurrentRunLifecycle> {
         self.verified.lock().unwrap().push((
             session.provider,
@@ -1456,26 +1450,23 @@ fn bind_initial_managed_session(
     native_session_id: &str,
     process: ProcessIdentity,
 ) -> String {
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let source = temp.file("source.jsonl", "{}\n");
     let registration = ManagedLaunchRegistration {
         id: format!("launch-initial-{native_session_id}"),
-        status: mudi::managed_sessions::ManagedLaunchStatus::Binding,
+        status: mudi::application::managed_sessions::ManagedLaunchStatus::Binding,
         provider,
         target: ManagedLaunchTarget {
-            project: ProjectIdentity::CanonicalCwd(worktree.clone()),
-            project_label: "worktree".into(),
-            worktree_root: None,
-            working_directory: worktree.clone(),
+            working_directory: working_directory.clone(),
         },
         session_alias: "Resume target".into(),
         description: Some("Keep local metadata".into()),
         binding_initializer: false,
-        provider_command: mudi::managed_sessions::ProviderNewCommand {
+        provider_command: mudi::application::managed_sessions::ProviderNewCommand {
             executable: PathBuf::new(),
             arguments: Vec::new(),
         },
-        tmux: mudi::managed_sessions::PrivateTmuxEnvironment {
+        tmux: mudi::application::managed_sessions::PrivateTmuxEnvironment {
             socket_name: format!("mudi-launch-initial-{native_session_id}"),
             session_name: "managed".into(),
         },
@@ -1507,7 +1498,7 @@ fn bind_initial_managed_session(
                         path: source.canonicalize().unwrap(),
                         format: SourceFormat::JsonLines,
                     },
-                    working_directory: worktree,
+                    working_directory,
                     launch_process: process,
                     provider_process: process,
                 }),

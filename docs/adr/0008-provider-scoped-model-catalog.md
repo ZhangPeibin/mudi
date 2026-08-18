@@ -50,7 +50,7 @@ entries under `MUDI_DATA_DIR`.
 ## Consequences
 
 - `pricing/models.json`, `src/pricing.rs`, `RateCard`, and `pricing.json` are replaced by
-  `models/catalog.json`, `src/models.rs`, `ModelCatalog`, and `models.json`.
+  `models/catalog.json`, `src/adapters/models.rs`, `ModelCatalog`, and `models.json`.
 - Context Window inference leaves `ProviderAdapter`; provider-native parsing remains there.
 - Session Provider and Model Provider remain distinct domain concepts.
 - Adding prices or a Context Window is a data change rather than an adapter code change.

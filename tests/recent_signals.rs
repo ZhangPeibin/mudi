@@ -1,11 +1,9 @@
-use mudi::attention::SessionIdentity;
+use mudi::application::attention::SessionIdentity;
+use mudi::application::signals::{
+    ContextAlertLevel, RecentSignal, RecentSignalKind, RecentSignalsEngine, SharedProjectRiskChange,
+};
 use mudi::domain::{
     Compaction, ContextState, Project, ProjectIdentity, Provider, Session, SessionState, Usage,
-    Worktree,
-};
-use mudi::signals::{
-    ContextAlertLevel, RecentSignal, RecentSignalKind, RecentSignalsEngine,
-    SharedWorktreeRiskChange,
 };
 
 fn session(id: &str, state: SessionState, context_tokens: u64) -> Session {
@@ -15,10 +13,9 @@ fn session(id: &str, state: SessionState, context_tokens: u64) -> Session {
         provenance: mudi::domain::SessionProvenance::Observed,
         source: Default::default(),
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd("/tmp/mudi".into()),
+            identity: ProjectIdentity::new("/tmp/mudi".into()),
             label: "mudi".into(),
         }),
-        worktree: None,
         cwd: Some("/tmp/mudi".into()),
         latest_model: Some("claude-opus-4-1".into()),
         state,
@@ -43,7 +40,7 @@ fn session_signal(signal: &RecentSignal) -> (i64, Provider, &str, &RecentSignalK
             session_id,
             kind,
         } => (*observed_at_ms, *provider, session_id, kind),
-        RecentSignal::Worktree { .. } => panic!("expected Session Signal"),
+        RecentSignal::Project { .. } => panic!("expected Session Signal"),
     }
 }
 
@@ -60,16 +57,10 @@ fn initial_snapshot_establishes_a_silent_baseline() {
 }
 
 #[test]
-fn shared_worktree_risk_detection_emits_one_worktree_scoped_signal() {
+fn shared_project_risk_detection_emits_one_project_scoped_signal() {
     let mut engine = RecentSignalsEngine::default();
-    let worktree_root = "/tmp/mudi-shared";
-    let mut claude = session("claude-session", SessionState::Busy, 80_000);
-    claude.worktree = Some(Worktree {
-        root: worktree_root.into(),
-        branch: Some("main".into()),
-        writable: true,
-    });
-    engine.update(&[claude.clone()], 1_000);
+    let claude = session("claude-session", SessionState::Busy, 80_000);
+    engine.update(std::slice::from_ref(&claude), 1_000);
 
     let mut codex = claude.clone();
     codex.provider = Provider::CodexCli;
@@ -78,10 +69,10 @@ fn shared_worktree_risk_detection_emits_one_worktree_scoped_signal() {
 
     assert_eq!(
         signals,
-        &[RecentSignal::Worktree {
+        &[RecentSignal::Project {
             observed_at_ms: 2_000,
-            worktree_root: worktree_root.into(),
-            change: SharedWorktreeRiskChange::Detected,
+            project_path: "/tmp/mudi".into(),
+            change: SharedProjectRiskChange::Detected,
             before: vec![SessionIdentity {
                 provider: Provider::ClaudeCode,
                 native_id: "claude-session".into(),
@@ -101,25 +92,19 @@ fn shared_worktree_risk_detection_emits_one_worktree_scoped_signal() {
 }
 
 #[test]
-fn shared_worktree_risk_clear_emits_once_with_remaining_open_membership() {
+fn shared_project_risk_clear_emits_once_with_remaining_open_membership() {
     let mut engine = RecentSignalsEngine::default();
-    let worktree_root = "/tmp/mudi-shared";
-    let mut claude = session("claude-session", SessionState::Busy, 80_000);
-    claude.worktree = Some(Worktree {
-        root: worktree_root.into(),
-        branch: Some("main".into()),
-        writable: true,
-    });
+    let claude = session("claude-session", SessionState::Busy, 80_000);
     let mut codex = claude.clone();
     codex.provider = Provider::CodexCli;
     codex.id = "codex-session".into();
     engine.update(&[claude.clone(), codex.clone()], 1_000);
 
     codex.state = SessionState::Exited;
-    let expected = RecentSignal::Worktree {
+    let expected = RecentSignal::Project {
         observed_at_ms: 2_000,
-        worktree_root: worktree_root.into(),
-        change: SharedWorktreeRiskChange::Cleared,
+        project_path: "/tmp/mudi".into(),
+        change: SharedProjectRiskChange::Cleared,
         before: vec![
             SessionIdentity {
                 provider: Provider::ClaudeCode,
@@ -141,7 +126,7 @@ fn shared_worktree_risk_clear_emits_once_with_remaining_open_membership() {
     assert_eq!(
         signals
             .iter()
-            .filter(|signal| matches!(signal, RecentSignal::Worktree { .. }))
+            .filter(|signal| matches!(signal, RecentSignal::Project { .. }))
             .count(),
         1
     );
@@ -151,21 +136,16 @@ fn shared_worktree_risk_clear_emits_once_with_remaining_open_membership() {
     assert_eq!(
         unchanged
             .iter()
-            .filter(|signal| matches!(signal, RecentSignal::Worktree { .. }))
+            .filter(|signal| matches!(signal, RecentSignal::Project { .. }))
             .count(),
         1
     );
 }
 
 #[test]
-fn membership_changes_while_worktree_risk_remains_do_not_emit_a_signal() {
+fn membership_changes_while_project_risk_remains_do_not_emit_a_signal() {
     let mut engine = RecentSignalsEngine::default();
-    let mut first = session("first", SessionState::Busy, 80_000);
-    first.worktree = Some(Worktree {
-        root: "/tmp/mudi-shared".into(),
-        branch: Some("main".into()),
-        writable: true,
-    });
+    let first = session("first", SessionState::Busy, 80_000);
     let mut second = first.clone();
     second.id = "second".into();
     engine.update(&[first.clone(), second.clone()], 1_000);
@@ -178,15 +158,14 @@ fn membership_changes_while_worktree_risk_remains_do_not_emit_a_signal() {
 }
 
 #[test]
-fn worktree_signals_share_the_five_entry_newest_first_retention() {
+fn project_signals_share_the_five_entry_newest_first_retention() {
     let mut engine = RecentSignalsEngine::default();
     let mut sessions = (0..6)
         .map(|index| {
             let mut observed = session(&format!("claude-{index}"), SessionState::Busy, 80_000);
-            observed.worktree = Some(Worktree {
-                root: format!("/tmp/worktree-{index}").into(),
-                branch: Some("main".into()),
-                writable: true,
+            observed.project = Some(Project {
+                identity: ProjectIdentity::new(format!("/tmp/project-{index}").into()),
+                label: format!("project-{index}"),
             });
             observed
         })
@@ -207,18 +186,18 @@ fn worktree_signals_share_the_five_entry_newest_first_retention() {
         retained
             .iter()
             .map(|signal| match signal {
-                RecentSignal::Worktree { worktree_root, .. } => {
-                    worktree_root.display().to_string()
+                RecentSignal::Project { project_path, .. } => {
+                    project_path.display().to_string()
                 }
-                RecentSignal::Session { .. } => panic!("expected Worktree Signal"),
+                RecentSignal::Session { .. } => panic!("expected Project Signal"),
             })
             .collect::<Vec<_>>(),
         vec![
-            "/tmp/worktree-5",
-            "/tmp/worktree-4",
-            "/tmp/worktree-3",
-            "/tmp/worktree-2",
-            "/tmp/worktree-1",
+            "/tmp/project-5",
+            "/tmp/project-4",
+            "/tmp/project-3",
+            "/tmp/project-2",
+            "/tmp/project-1",
         ]
     );
 }

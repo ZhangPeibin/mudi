@@ -22,10 +22,10 @@ The primary question answered is: **what can the next Session safely do now?**
 ## Included
 
 - Create a local checkpoint only after the developer explicitly requests it for a selected
-  Session with a resolved Project and, when applicable, Worktree.
-- Preserve the checkpoint's source Session identity, Project, Worktree, Provider, observed
-  Current Run state, repository revision, and allowed working-tree evidence needed to orient
-  the developer later.
+  Session with a resolved Project.
+- Preserve the checkpoint's source Session identity, exact working directory, Provider,
+  observed Current Run state, repository revision, and allowed working-tree evidence needed
+  to orient the developer later. Derive Project from the working directory when displayed.
 - Let the developer add bounded, local objective, constraint, and next-action metadata.
   This is separate from the Session Description, which continues to explain why the Session
   exists rather than its transient work state.
@@ -38,6 +38,10 @@ The primary question answered is: **what can the next Session safely do now?**
 - Refine `New` into a reusable keyboard-first property editor with explicit Provider and
   Location choices plus inline Title and Description editing. Every `New` enables the
   system-owned Binding Initializer without exposing it as a property.
+- Associate the Title supplied through `New` with the exact Session Provider and native
+  Session ID as soon as conclusive Provider source and launched-process evidence identifies
+  the Session. Persist it as a first-writer-wins Session Alias before and independently of
+  the later Managed Binding outcome.
 - Reopen a checkpoint to show whether its source Session can be precisely resumed, is still
   Open, is Exited, or has unlinked evidence.
 - Offer the correct continuation route without conflating identities:
@@ -65,6 +69,10 @@ The primary question answered is: **what can the next Session safely do now?**
 - The v2.0.1 `New` workflow supersedes v2.0.0's opt-in Binding Initializer presentation:
   the initializer is always enabled for `New`, remains system-owned rather than developer
   task content, and keeps its Provider-specific command details inside Provider adapters.
+- Title association and Managed Binding consume the same conclusive launch-identity contract
+  but establish different relationships. A Session Alias grants no Binding Receipt, Managed
+  Session, Managed Current Run, management provenance, or control authority, and later launch
+  reconciliation never replaces an existing or user-edited Alias.
 - Inventory curation is Session-scoped and developer-directed. A validated Open Session
   temporarily overrides Hide, while permanent exclusion never deletes Provider-native logs
   or cascades into independently owned control, task, Handoff, or Successor records.
@@ -109,6 +117,8 @@ v2.0.0  Managed Session Core
 - [`Inventory Curation requirements discussion`](../../docs/feature/v2.0.1/inventory-curation/discussion.md)
 - [`Inventory Curation PRD`](https://github.com/ZhangPeibin/mudi/issues/55)
 - [`New property editor delivery issue`](https://github.com/ZhangPeibin/mudi/issues/63)
-- [`legacy Assisted Handoff record`](../../docs/legacy/v1/assisted-handoff-prd.md)
+- [`Session Title lifecycle PRD`](https://github.com/ZhangPeibin/mudi/issues/65)
+- [`Early Title association delivery issue`](https://github.com/ZhangPeibin/mudi/issues/67)
+- [`Title reconciliation delivery issue`](https://github.com/ZhangPeibin/mudi/issues/68)
 - [`docs/adr/0005-keep-handoff-artifacts-outside-projects.md`](../../docs/adr/0005-keep-handoff-artifacts-outside-projects.md)
 - [`docs/adr/0007-link-successors-through-launched-process-evidence.md`](../../docs/adr/0007-link-successors-through-launched-process-evidence.md)

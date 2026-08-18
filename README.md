@@ -58,9 +58,7 @@ cargo run --release        # opens the TUI
 cargo run --release -- --theme dracula  # one-process Theme override
 ```
 
-The primary installed command is `mudi`. A transitional `sessionmesh` executable is
-built from the same entry point so previously copied `sessionmesh attach <opaque-ref>`
-commands continue to work.
+The primary installed command is `mudi`.
 
 Keys: `1-3` open pages · `Tab`/`Shift+Tab` move focus within a page · `Up/Down` or `j/k`
 move selection or scroll Detail · `Enter` inspects a Session or Operation Task, or toggles
@@ -154,29 +152,27 @@ future Settings feature.
 
 ```
 src/
-  domain.rs         normalized types (Session, Usage, ContextState, …)
-  config.rs         paths + env overrides + thresholds
-  models.rs         Model-Provider-scoped prices + Context Window catalog
-  providers/        deep adapters behind one interface
-    claude.rs         transcript parser (dedup streamed records)
-    codex.rs          rollout parser (cumulative deltas, never summed)
-    state.rs          macOS Busy/Idle/exited detection
-  index/            disposable, incremental SQLite index
-  tasks.rs          authoritative Operation Task Store
-  handoff.rs        explicit authorization + detached Handoff Worker
-  successor.rs      validated Launch Plans, commands, helper, and Terminal adapter
-  collector.rs      discover → index → build normalized snapshot
-  alerts.rs         threshold crossings + macOS notifications
-  app.rs            tabs, snapshot, formatting
-  ui/               Ratatui rendering (All / provider / detail)
-  main.rs           tokio background loop + crossterm event loop
+  domain/           normalized domain types
+    provider.rs       Session Provider + source metadata
+    usage.rs          Context, Usage, and Compaction
+    project.rs        canonical Project-directory identity
+    session.rs        normalized Session aggregate
+  application/      use-case orchestration and read-model publication
+    observation/      discover -> index -> normalized snapshot
+    handoff/           explicit authorization + detached Handoff Worker
+  adapters/         provider, persistence, macOS, config, and Skill adapters
+    providers/        Claude Code and Codex CLI adapters
+    persistence/      disposable incremental Session index
+  presentation/     UI-facing formatting and Ratatui TUI
+  lib.rs            four top-level layered modules
+  main.rs           dependency composition + runtime loops
 ```
 
 See `CONTEXT.md` for domain vocabulary and `docs/` for the spec and plan.
 
 ## Scope (v1)
 
-macOS only; source Projects and Worktrees stay read-only; no always-on background daemon
+macOS only; source Projects stay read-only; no always-on background daemon
 (an explicitly authorized Handoff Worker may outlive the TUI); no subscription quota; no
 prompt/tool/file analysis in either database; no JSON output; Claude Code + Codex CLI only.
 

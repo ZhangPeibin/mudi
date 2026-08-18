@@ -1,0 +1,388 @@
+//! Refresh application service: the sole publisher of the UI read model.
+
+use crate::adapters::config::Config;
+use crate::adapters::models::ModelCatalog;
+use crate::adapters::persistence::index::Index;
+use crate::adapters::providers::registry;
+use crate::application::alerts::{self, AlertEngine};
+use crate::application::attention::AttentionEngine;
+use crate::application::managed_sessions::{
+    discover_tmux_executable, BindingOutcome, EvidenceBinder, LaunchIdentityAssociationOutcome,
+    ManagedCurrentRunEvidence, ManagedCurrentRunVerifier, ManagedLaunchRegistration,
+    ManagedLaunchStore, ManagedResumeEvidence, ManagedResumeVerifier,
+    SystemManagedCurrentRunEvidence, SystemManagedResumeEvidence, SystemProcessEvidence,
+    TmuxManagedLaunchCleanup,
+};
+use crate::application::observation::collector::{self, ProjectResolverCache, ScanStats};
+use crate::application::observation::read_model::{
+    ReadModelCache, RefreshDiagnostic, RefreshHealth, RefreshSnapshot,
+};
+use crate::application::session_labels::SessionLabels;
+use crate::application::signals::RecentSignalsEngine;
+use crate::application::tasks::TaskStore;
+use std::collections::HashSet;
+
+/// Owns source discovery, disposable indexing, derived signals, and read-model publication.
+pub struct RefreshService {
+    cfg: Config,
+    index: std::result::Result<Index, String>,
+    task_store: std::result::Result<TaskStore, String>,
+    managed_store: std::result::Result<ManagedLaunchStore, String>,
+    restart_binding_registrations: HashSet<String>,
+    managed_binding_reconciler: EvidenceBinder,
+    managed_current_run_verifier: ManagedCurrentRunVerifier,
+    managed_resume_verifier: ManagedResumeVerifier,
+    models: ModelCatalog,
+    alert_engine: AlertEngine,
+    attention_engine: AttentionEngine,
+    recent_signals_engine: RecentSignalsEngine,
+    project_resolver: ProjectResolverCache,
+    revision: u64,
+}
+
+impl RefreshService {
+    pub fn new(cfg: Config) -> Self {
+        let index = Index::open(&cfg.index_path()).map_err(|error| error.to_string());
+        let task_store = TaskStore::open(&cfg.task_store_path()).map_err(|error| error.to_string());
+        let managed_store = ManagedLaunchStore::open(cfg.managed_launch_store_path())
+            .map_err(|error| error.to_string());
+        let restart_binding_registrations = managed_store
+            .as_ref()
+            .ok()
+            .and_then(|store| store.binding_registrations().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|registration| registration.id)
+            .collect();
+        Self {
+            managed_binding_reconciler: EvidenceBinder::new(
+                Box::new(SystemProcessEvidence),
+                Box::new(TmuxManagedLaunchCleanup::new(
+                    discover_tmux_executable().unwrap_or_default(),
+                )),
+            ),
+            managed_current_run_verifier: ManagedCurrentRunVerifier::new(
+                cfg.clone(),
+                Box::new(SystemManagedCurrentRunEvidence),
+            ),
+            managed_resume_verifier: ManagedResumeVerifier::new(
+                cfg.clone(),
+                Box::new(SystemManagedResumeEvidence::default()),
+            ),
+            models: ModelCatalog::load(Some(&cfg.model_catalog_override_path())),
+            alert_engine: AlertEngine::new(cfg.label_store_path()),
+            cfg,
+            index,
+            task_store,
+            managed_store,
+            restart_binding_registrations,
+            attention_engine: AttentionEngine::default(),
+            recent_signals_engine: RecentSignalsEngine::default(),
+            project_resolver: ProjectResolverCache,
+            revision: 0,
+        }
+    }
+
+    pub fn with_managed_current_run_evidence(
+        mut self,
+        evidence: Box<dyn ManagedCurrentRunEvidence>,
+    ) -> Self {
+        self.managed_current_run_verifier =
+            ManagedCurrentRunVerifier::new(self.cfg.clone(), evidence);
+        self
+    }
+
+    pub fn with_managed_resume_evidence(
+        mut self,
+        evidence: Box<dyn ManagedResumeEvidence>,
+    ) -> Self {
+        self.managed_resume_verifier = ManagedResumeVerifier::new(self.cfg.clone(), evidence);
+        self
+    }
+
+    pub fn with_managed_binding_reconciler(mut self, reconciler: EvidenceBinder) -> Self {
+        self.managed_binding_reconciler = reconciler;
+        self
+    }
+
+    /// Build one snapshot even when a persistence dependency is unavailable.
+    pub fn refresh(&mut self) -> RefreshSnapshot {
+        self.revision = self.revision.saturating_add(1);
+        let now = chrono::Local::now().timestamp_millis();
+        let mut diagnostics = Vec::new();
+        let mut stats = ScanStats::default();
+        let mut sessions = Vec::new();
+        let mut managed_launches = Vec::new();
+        let mut verified_managed_current_runs = Vec::new();
+        let mut resumable_managed_sessions = Vec::new();
+
+        match self.index.as_mut() {
+            Ok(index) => match collector::refresh_checked(&self.cfg, index) {
+                Ok(scanned) => {
+                    stats = scanned;
+                    match collector::build_sessions_with_resolver(
+                        &self.cfg,
+                        index,
+                        &self.models,
+                        &mut self.project_resolver,
+                    ) {
+                        Ok(built) => {
+                            sessions = built.sessions;
+                            diagnostics.extend(built.project_diagnostics.into_iter().map(
+                                |diagnostic| {
+                                    RefreshDiagnostic::new(
+                                        "Project Resolver",
+                                        format!("{}: {}", diagnostic.cwd, diagnostic.message),
+                                    )
+                                },
+                            ));
+                        }
+                        Err(error) => diagnostics
+                            .push(RefreshDiagnostic::new("Index read", error.to_string())),
+                    }
+                }
+                Err(error) => {
+                    diagnostics.push(RefreshDiagnostic::new("Index refresh", error.to_string()));
+                    if let Ok(built) = collector::build_sessions_with_resolver(
+                        &self.cfg,
+                        index,
+                        &self.models,
+                        &mut self.project_resolver,
+                    ) {
+                        sessions = built.sessions;
+                        diagnostics.extend(built.project_diagnostics.into_iter().map(
+                            |diagnostic| {
+                                RefreshDiagnostic::new(
+                                    "Project Resolver",
+                                    format!("{}: {}", diagnostic.cwd, diagnostic.message),
+                                )
+                            },
+                        ));
+                    }
+                }
+            },
+            Err(error) => diagnostics.push(RefreshDiagnostic::new("Index", error.clone())),
+        }
+
+        match self.managed_store.as_mut() {
+            Ok(store) => {
+                let mut labels = SessionLabels::load(self.cfg.label_store_path());
+                match store.binding_registrations() {
+                    Ok(registrations) => {
+                        for registration in registrations {
+                            let Some(process) = registration
+                                .launch_evidence
+                                .as_ref()
+                                .map(|evidence| evidence.provider_process)
+                            else {
+                                continue;
+                            };
+                            let evidence = registry()
+                                .runtime_control(registration.provider)
+                                .ok()
+                                .and_then(|adapter| adapter.binding_evidence(&self.cfg, process));
+                            let outcome = if self
+                                .restart_binding_registrations
+                                .contains(&registration.id)
+                            {
+                                self.managed_binding_reconciler
+                                    .reconcile_after_restart_with_identity_association(
+                                        store,
+                                        &registration.id,
+                                        evidence,
+                                        now,
+                                        |store, launch, session| {
+                                            associate_launch_title(
+                                                store,
+                                                &mut labels,
+                                                launch,
+                                                session,
+                                            )
+                                        },
+                                    )
+                            } else {
+                                self.managed_binding_reconciler
+                                    .bind_with_identity_association(
+                                        store,
+                                        &registration.id,
+                                        evidence,
+                                        now,
+                                        |store, launch, session| {
+                                            associate_launch_title(
+                                                store,
+                                                &mut labels,
+                                                launch,
+                                                session,
+                                            )
+                                        },
+                                    )
+                            };
+                            match outcome {
+                                Ok(BindingOutcome::Bound(_))
+                                | Ok(BindingOutcome::NeedsReview)
+                                | Ok(BindingOutcome::Failed) => {
+                                    self.restart_binding_registrations.remove(&registration.id);
+                                }
+                                Ok(BindingOutcome::Waiting) => {}
+                                Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                                    "Managed Binding",
+                                    error.to_string(),
+                                )),
+                            }
+                        }
+                    }
+                    Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Registration Store",
+                        error.to_string(),
+                    )),
+                }
+                if let Err(error) = sync_managed_metadata(&self.cfg, store) {
+                    diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Session Metadata",
+                        error.to_string(),
+                    ));
+                }
+                if let Err(error) = store.apply_provenance(&mut sessions) {
+                    diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Session Registry",
+                        error.to_string(),
+                    ));
+                }
+                match self.managed_current_run_verifier.verified_runs(store) {
+                    Ok(runs) => {
+                        verified_managed_current_runs = runs
+                            .iter()
+                            .map(crate::application::observation::read_model::ManagedCurrentRunSummary::from)
+                            .collect();
+                    }
+                    Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Current Run Registry",
+                        error.to_string(),
+                    )),
+                }
+                match self.managed_resume_verifier.verified_exited_sessions(store) {
+                    Ok(sessions) => {
+                        resumable_managed_sessions = sessions
+                            .iter()
+                            .map(crate::application::observation::read_model::ManagedResumeSummary::from)
+                            .collect();
+                    }
+                    Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Resume Registry",
+                        error.to_string(),
+                    )),
+                }
+                match store.registrations() {
+                    Ok(registrations) => {
+                        managed_launches = registrations
+                            .iter()
+                            .map(crate::application::observation::read_model::ManagedLaunchSummary::from)
+                            .collect();
+                    }
+                    Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                        "Managed Registration Store",
+                        error.to_string(),
+                    )),
+                }
+            }
+            Err(error) => diagnostics.push(RefreshDiagnostic::new(
+                "Managed Session Registry",
+                error.clone(),
+            )),
+        }
+
+        collector::sort_for_display(&mut sessions);
+        self.alert_engine.update(&sessions);
+        let alerts = alerts::counts(&sessions);
+        let attention = self.attention_engine.update(&sessions, now);
+        let recent_signals = self.recent_signals_engine.update(&sessions, now).to_vec();
+        let tasks = match self.task_store.as_ref() {
+            Ok(store) => match store.list() {
+                Ok(tasks) => tasks,
+                Err(error) => {
+                    diagnostics.push(RefreshDiagnostic::new("Task Store", error.to_string()));
+                    Vec::new()
+                }
+            },
+            Err(error) => {
+                diagnostics.push(RefreshDiagnostic::new("Task Store", error.clone()));
+                Vec::new()
+            }
+        };
+        let health = RefreshHealth::from_diagnostics(diagnostics);
+        RefreshSnapshot {
+            revision: self.revision,
+            generated_at_ms: now,
+            health,
+            sessions,
+            tasks,
+            managed_launches,
+            verified_managed_current_runs,
+            resumable_managed_sessions,
+            recent_signals,
+            attention: Some(attention),
+            stats,
+            alerts,
+            generated_ms: now,
+            ready: true,
+        }
+    }
+
+    pub fn refresh_and_publish(&mut self, cache: &dyn ReadModelCache) {
+        cache.publish(self.refresh());
+    }
+}
+
+fn associate_launch_title(
+    store: &mut ManagedLaunchStore,
+    labels: &mut SessionLabels,
+    launch: &ManagedLaunchRegistration,
+    session: &crate::domain::SessionIdentity,
+) -> anyhow::Result<LaunchIdentityAssociationOutcome> {
+    if store.managed_resume_target(&launch.id)?.is_some() {
+        return Ok(LaunchIdentityAssociationOutcome::ContinueBinding);
+    }
+    if let Some(associated) = store.launch_title_association(&launch.id)? {
+        if associated == *session {
+            return Ok(LaunchIdentityAssociationOutcome::ContinueBinding);
+        }
+        store.mark_needs_review(
+            &launch.id,
+            "Provider evidence disagrees with the Session identity already associated with the Title",
+        )?;
+        return Ok(LaunchIdentityAssociationOutcome::NeedsReview);
+    }
+    labels.associate_alias(session.provider, &session.native_id, &launch.session_alias)?;
+    store.record_launch_title_association(&launch.id, session)?;
+    Ok(LaunchIdentityAssociationOutcome::ContinueBinding)
+}
+
+fn sync_managed_metadata(cfg: &Config, store: &ManagedLaunchStore) -> anyhow::Result<()> {
+    let mut labels = SessionLabels::load(cfg.label_store_path());
+    if let Some(error) = labels.error() {
+        anyhow::bail!(error.to_string());
+    }
+    for session in store.managed_sessions()? {
+        if store.managed_metadata_is_synchronized(session.provider, &session.native_session_id)? {
+            continue;
+        }
+        let description = session.description.as_deref().unwrap_or_default();
+        if labels
+            .alias(session.provider, &session.native_session_id)
+            .is_none()
+        {
+            labels.associate_alias(
+                session.provider,
+                &session.native_session_id,
+                &session.session_alias,
+            )?;
+        }
+        if labels.description(session.provider, &session.native_session_id)
+            != session.description.as_deref()
+        {
+            labels.set_description(session.provider, &session.native_session_id, description)?;
+        }
+        store.mark_managed_metadata_synchronized(session.provider, &session.native_session_id)?;
+    }
+    Ok(())
+}

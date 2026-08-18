@@ -1,4 +1,4 @@
-┌ Mudi | v0.1.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ Mudi | v2.0.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 4 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
         ┌ Session Detail ──────────────────────────────────────────────┐       │
         │Output          230                                           │       │
@@ -9,16 +9,16 @@
         │                                                              │───────┘
  PROJECT│Transcript Lifetime Usage                                     │────────
  ▾ mudi │Input           12.3k                                         │n select
-   ▾ mai│Output          2.3k                                          │
-    > ✳ │Est. API cost   $0.42                                         │
-      ⬡ │                                                              │
-   ▾ war│Transcript Lifetime per-model Usage                           │
+  > ✳ cr│Output          2.3k                                          │
+    ⬡ x-│Est. API cost   $0.42                                         │
+ ▾ mudi-│                                                              │
+    ✳ -w│Transcript Lifetime per-model Usage                           │
  DETAILS│  claude-opus-4-8      in 12.3k out 2.3k  $0.42               │
  Title  │                                                              │
  Descrip│Compactions (2)                                               │
  Context│  11-15 06:11  trigger=auto  pre=188.0k                       │
  Attenti│  11-15 06:12  trigger=manual  pre=181.0k                     │
  Provide│Compaction count2                                             │
- Worktre└ Up/Down Select | c Copy | h Handoff | Esc Close fields 17/17 ┘
+ Directo└ Up/Down Select | c Copy | h Handoff | Esc Close fields 15/15 ┘
 ───────────────────────────────┴────────────────────────────────────────────────
 Esc | j/k Fields | c Copy | e Edit | h Handoff | ? | q Quit Estimated using API

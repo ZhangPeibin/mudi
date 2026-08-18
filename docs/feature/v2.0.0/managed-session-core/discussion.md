@@ -287,10 +287,10 @@ Provider 特例相互穿透。每个模块只接受其所需的结构化输入�
   on 2026-08-10: `codex` is the interactive new-session entry and `codex resume` restores an
   interactive Session. The documented command reference has no general empty-session
   initialization command, so Binding Initializer behavior must remain Provider-adapter-specific.
-- `src/providers/state.rs` - current read-only live-process evidence and PID-reuse defense.
-- `src/project.rs` - current Project/Worktree resolution.
-- `src/tasks.rs`, `src/handoff.rs`, and `tests/handoff_tasks.rs` - existing Operation Task and
-  Handoff infrastructure that v2.0.0 must not redefine.
+- `src/adapters/providers/state.rs` - current read-only live-process evidence and PID-reuse defense.
+- `src/adapters/project.rs` - current Project/Worktree resolution.
+- `src/application/tasks.rs`, `src/application/handoff/`, and `tests/handoff_tasks.rs` - existing
+  Operation Task and Handoff infrastructure that v2.0.0 must not redefine.
 
 ## Session Log
 

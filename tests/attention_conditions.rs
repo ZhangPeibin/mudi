@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use mudi::attention::{AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity};
-use mudi::domain::{
-    ContextState, Project, ProjectIdentity, Provider, Session, SessionState, Worktree,
+use mudi::application::attention::{
+    AttentionCondition, AttentionEngine, AttentionRank, AttentionSeverity,
 };
+use mudi::domain::{ContextState, Project, ProjectIdentity, Provider, Session, SessionState};
 
 fn session(
     id: &str,
@@ -11,7 +11,7 @@ fn session(
     state: SessionState,
     context_percent: u64,
     project_path: &str,
-    worktree_path: Option<&str>,
+    working_directory: Option<&str>,
 ) -> Session {
     Session {
         provider,
@@ -19,19 +19,14 @@ fn session(
         provenance: mudi::domain::SessionProvenance::Observed,
         source: Default::default(),
         project: Some(Project {
-            identity: ProjectIdentity::GitCommonDir(PathBuf::from(project_path).join(".git")),
+            identity: ProjectIdentity::new(PathBuf::from(project_path)),
             label: PathBuf::from(project_path)
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
                 .into_owned(),
         }),
-        worktree: worktree_path.map(|root| Worktree {
-            root: PathBuf::from(root),
-            branch: Some("main".into()),
-            writable: true,
-        }),
-        cwd: worktree_path.map(str::to_string),
+        cwd: working_directory.map(str::to_string),
         latest_model: Some("test-model".into()),
         state,
         context: ContextState {
@@ -122,7 +117,7 @@ fn now_orders_critical_shared_warning_idle_then_healthy_busy() {
 }
 
 #[test]
-fn shared_worktree_risk_identifies_the_worktree_and_every_contributor() {
+fn shared_project_risk_identifies_the_project_and_every_contributor() {
     let shared_root = "/projects/shared";
     let sessions = vec![
         session(
@@ -144,11 +139,11 @@ fn shared_worktree_risk_identifies_the_worktree_and_every_contributor() {
     ];
 
     let attention = AttentionEngine::default().update(&sessions, 2_000);
-    let [risk] = attention.shared_worktree_risks() else {
-        panic!("expected exactly one Shared Worktree Risk");
+    let [risk] = attention.shared_project_risks() else {
+        panic!("expected exactly one Shared Project Risk");
     };
 
-    assert_eq!(risk.worktree_root, PathBuf::from(shared_root));
+    assert_eq!(risk.project_path, PathBuf::from(shared_root));
     assert_eq!(risk.severity, AttentionSeverity::Warning);
     assert_eq!(
         risk.contributing_sessions
@@ -163,7 +158,7 @@ fn shared_worktree_risk_identifies_the_worktree_and_every_contributor() {
 }
 
 #[test]
-fn shared_worktree_risk_clears_when_only_one_open_session_remains() {
+fn shared_project_risk_clears_when_only_one_open_session_remains() {
     let shared_root = "/projects/shared";
     let sessions = vec![
         session(
@@ -186,20 +181,17 @@ fn shared_worktree_risk_clears_when_only_one_open_session_remains() {
     let mut engine = AttentionEngine::default();
 
     assert_eq!(
-        engine
-            .update(&sessions, 2_000)
-            .shared_worktree_risks()
-            .len(),
+        engine.update(&sessions, 2_000).shared_project_risks().len(),
         1
     );
     assert!(engine
         .update(&sessions[..1], 3_000)
-        .shared_worktree_risks()
+        .shared_project_risks()
         .is_empty());
 }
 
 #[test]
-fn shared_worktree_risk_requires_distinct_open_sessions_on_one_writable_resolved_worktree() {
+fn shared_project_risk_requires_distinct_open_sessions_on_one_resolved_project() {
     let duplicate = session(
         "same-native-id",
         Provider::ClaudeCode,
@@ -217,25 +209,6 @@ fn shared_worktree_risk_requires_distinct_open_sessions_on_one_writable_resolved
         Some("/projects/exited"),
     );
     exited.last_activity_ms = 2_000;
-    let mut read_only_a = session(
-        "read-only-a",
-        Provider::ClaudeCode,
-        SessionState::Busy,
-        40,
-        "/projects/read-only",
-        Some("/projects/read-only"),
-    );
-    let mut read_only_b = session(
-        "read-only-b",
-        Provider::CodexCli,
-        SessionState::Idle,
-        40,
-        "/projects/read-only",
-        Some("/projects/read-only"),
-    );
-    read_only_a.worktree.as_mut().unwrap().writable = false;
-    read_only_b.worktree.as_mut().unwrap().writable = false;
-
     let sessions = vec![
         duplicate.clone(),
         duplicate,
@@ -264,10 +237,8 @@ fn shared_worktree_risk_requires_distinct_open_sessions_on_one_writable_resolved
             "/projects/unresolved-b",
             None,
         ),
-        read_only_a,
-        read_only_b,
         session(
-            "worktree-a",
+            "linked-directory-a",
             Provider::ClaudeCode,
             SessionState::Busy,
             40,
@@ -275,7 +246,7 @@ fn shared_worktree_risk_requires_distinct_open_sessions_on_one_writable_resolved
             Some("/projects/one-project/a"),
         ),
         session(
-            "worktree-b",
+            "linked-directory-b",
             Provider::CodexCli,
             SessionState::Idle,
             40,
@@ -286,46 +257,50 @@ fn shared_worktree_risk_requires_distinct_open_sessions_on_one_writable_resolved
 
     let attention = AttentionEngine::default().update(&sessions, 3_000);
 
-    assert!(attention.shared_worktree_risks().is_empty());
+    let [risk] = attention.shared_project_risks() else {
+        panic!("expected linked working directories in one Project to share risk");
+    };
+    assert_eq!(risk.project_path, PathBuf::from("/projects/one-project"));
+    assert_eq!(risk.contributing_sessions.len(), 2);
 }
 
 #[test]
-fn shared_worktree_risk_does_not_attach_to_a_non_contributing_session() {
-    let shared_root = "/projects/mixed-writability";
-    let writable_a = session(
-        "writable-a",
+fn shared_project_risk_ignores_unresolved_sessions() {
+    let shared_root = "/projects/resolved";
+    let resolved_a = session(
+        "resolved-a",
         Provider::ClaudeCode,
         SessionState::Busy,
         40,
         shared_root,
         Some(shared_root),
     );
-    let writable_b = session(
-        "writable-b",
+    let resolved_b = session(
+        "resolved-b",
         Provider::CodexCli,
         SessionState::Busy,
         40,
         shared_root,
         Some(shared_root),
     );
-    let mut read_only = session(
-        "read-only",
+    let mut unresolved = session(
+        "unresolved",
         Provider::ClaudeCode,
         SessionState::Busy,
         40,
         shared_root,
         Some(shared_root),
     );
-    read_only.worktree.as_mut().unwrap().writable = false;
-    let sessions = vec![writable_a, writable_b, read_only.clone()];
+    unresolved.project = None;
+    let sessions = vec![resolved_a, resolved_b, unresolved.clone()];
 
     let attention = AttentionEngine::default().update(&sessions, 3_000);
 
-    assert_eq!(attention.rank_for(&read_only), AttentionRank::HealthyBusy);
+    assert_eq!(attention.rank_for(&unresolved), AttentionRank::HealthyBusy);
     assert!(!attention
-        .conditions_for(&read_only)
+        .conditions_for(&unresolved)
         .iter()
-        .any(|condition| matches!(condition, AttentionCondition::SharedWorktreeRisk { .. })));
+        .any(|condition| matches!(condition, AttentionCondition::SharedProjectRisk { .. })));
 }
 
 #[test]
@@ -411,7 +386,7 @@ fn session_retains_every_condition_while_ranking_by_the_highest_priority() {
     )));
     assert!(conditions.iter().any(|condition| matches!(
         condition,
-        AttentionCondition::SharedWorktreeRisk {
+        AttentionCondition::SharedProjectRisk {
             contributing_sessions: 2,
             ..
         }
@@ -462,77 +437,33 @@ fn context_conditions_expose_exact_percentage_threshold_and_severity() {
 }
 
 #[test]
-fn warning_ties_use_strength_recency_paths_provider_then_native_id() {
-    let warning = |id, provider, percent, last_activity_ms, project, worktree| {
+fn warning_ties_use_strength_recency_project_path_provider_then_native_id() {
+    let warning = |id, provider, percent, last_activity_ms, project| {
         let mut value = session(
             id,
             provider,
             SessionState::Busy,
             percent,
             project,
-            Some(worktree),
+            Some(project),
         );
         value.last_activity_ms = last_activity_ms;
-        value.worktree.as_mut().unwrap().writable = false;
         value
     };
     let sessions = vec![
+        warning("project-b", Provider::ClaudeCode, 75, 2_000, "/projects/f"),
+        warning("codex-a", Provider::CodexCli, 75, 2_000, "/projects/c"),
+        warning("stronger", Provider::CodexCli, 80, 1_000, "/projects/y"),
         warning(
-            "project-b",
+            "directory-b",
             Provider::ClaudeCode,
             75,
             2_000,
-            "/projects/b",
-            "/worktrees/a",
+            "/projects/e",
         ),
-        warning(
-            "codex-a",
-            Provider::CodexCli,
-            75,
-            2_000,
-            "/projects/a",
-            "/worktrees/a",
-        ),
-        warning(
-            "stronger",
-            Provider::CodexCli,
-            80,
-            1_000,
-            "/projects/z",
-            "/worktrees/z",
-        ),
-        warning(
-            "worktree-b",
-            Provider::ClaudeCode,
-            75,
-            2_000,
-            "/projects/a",
-            "/worktrees/b",
-        ),
-        warning(
-            "claude-b",
-            Provider::ClaudeCode,
-            75,
-            2_000,
-            "/projects/a",
-            "/worktrees/a",
-        ),
-        warning(
-            "recent",
-            Provider::CodexCli,
-            75,
-            3_000,
-            "/projects/z",
-            "/worktrees/z",
-        ),
-        warning(
-            "claude-a",
-            Provider::ClaudeCode,
-            75,
-            2_000,
-            "/projects/a",
-            "/worktrees/a",
-        ),
+        warning("claude-b", Provider::ClaudeCode, 75, 2_000, "/projects/b"),
+        warning("recent", Provider::CodexCli, 75, 3_000, "/projects/z"),
+        warning("claude-a", Provider::ClaudeCode, 75, 2_000, "/projects/a"),
     ];
 
     let attention = AttentionEngine::default().update(&sessions, 5_000);
@@ -550,14 +481,14 @@ fn warning_ties_use_strength_recency_paths_provider_then_native_id() {
             "claude-a",
             "claude-b",
             "codex-a",
-            "worktree-b",
+            "directory-b",
             "project-b",
         ]
     );
 }
 
 #[test]
-fn shared_worktree_risk_ties_use_contributor_count_first() {
+fn shared_project_risk_ties_use_contributor_count_first() {
     let sessions = vec![
         session(
             "two-claude",

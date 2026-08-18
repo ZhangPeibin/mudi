@@ -1,6 +1,6 @@
-┌ Mudi | v0.1.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ Mudi | v2.0.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 4 ┐
                           ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
-                          │WT /Use...  Risk detected││                         │
+                          │PJ /Use...  Risk detected││                         │
         ┌ Guide ───────────────────────────────────────────────────────┐       │
         │> Overview    │Overview                                       │       │
         │  Navigation  │Mudi is local to this Mac.                     │       │
@@ -9,16 +9,16 @@
         │  Theme       │authorization.                                 │───────┘
  PROJECT│              │Current and recent                             │────────
  ▾ mudi │              │NOW shows current conditions.                  │
-   ▾ mai│              │Recent Signals show transitions.               │
-    > ✳ │              │                                               │
-      ⬡ │              │                                               │
-   ▾ war│              │                                               │
+  > ✳ cr│              │Recent Signals show transitions.               │
+    ⬡ x-│              │                                               │
+ ▾ mudi-│              │                                               │
+    ✳ -w│              │                                               │
  DETAILS│              │                                               │
  Title  │              │                                               │
  Descrip│              │                                               │
  Context│              │                                               │
  Attenti│              │                                               │
  Provide└ j/k Categories | Tab/Right Content | Esc Close ──────────────┘
- Worktree    ...ode/mudi @ main│
+ Directory   ...xture/code/mudi│
 ───────────────────────────────┴────────────────────────────────────────────────
 j/k | Left/Right | Enter | e Edit | ? | q Quit watching · 0 sessions · 0 parsed

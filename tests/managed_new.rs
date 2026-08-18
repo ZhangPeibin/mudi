@@ -1,23 +1,23 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mudi::app::Snapshot;
-use mudi::application::ApplicationController;
-use mudi::clipboard::Clipboard;
-use mudi::domain::{
-    ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceMetadata, Usage,
-};
-use mudi::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
-use mudi::managed_sessions::{
+use mudi::adapters::macos::clipboard::Clipboard;
+use mudi::adapters::providers::state::ProcessIdentity;
+use mudi::adapters::providers::ProviderExecutables;
+use mudi::adapters::providers::{registry, BINDING_INITIALIZER};
+use mudi::application::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
+use mudi::application::managed_sessions::{
     MacosManagedTerminalAccess, ManagedLaunchBroker, ManagedLaunchEvidence,
     ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget,
     ManagedNewRequest, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
     ProviderNewCommand, TmuxLaunchBroker,
 };
-use mudi::providers::state::ProcessIdentity;
-use mudi::providers::ProviderExecutables;
-use mudi::providers::{registry, BINDING_INITIALIZER};
-use mudi::successor::TerminalLauncher;
-use mudi::ui::{draw, Ui, UiAction};
+use mudi::application::successor::TerminalLauncher;
+use mudi::application::ApplicationController;
+use mudi::domain::{
+    ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceMetadata, Usage,
+};
+use mudi::presentation::app::Snapshot;
+use mudi::presentation::tui::{draw, Ui, UiAction};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use std::fs;
@@ -106,8 +106,8 @@ impl ManagedTerminalAccess for AssertLaunchPersistedBeforeTerminal {
 #[test]
 fn selected_context_new_persists_binding_launch_before_opening_terminal() {
     let temp = TempDir::new("selected-context");
-    let worktree = temp.path().join("worktree");
-    fs::create_dir(&worktree).unwrap();
+    let working_directory = temp.path().join("working_directory");
+    fs::create_dir(&working_directory).unwrap();
     let claude = executable(temp.path(), "claude");
     let codex = executable(temp.path(), "codex");
     let store_path = temp.path().join("managed-launches.db");
@@ -128,10 +128,7 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
     let request = ManagedNewRequest {
         provider: Provider::CodexCli,
         target: ManagedLaunchTarget {
-            project: ProjectIdentity::GitCommonDir(temp.path().join("project/.git")),
-            project_label: "project".into(),
-            worktree_root: Some(worktree.clone()),
-            working_directory: worktree.clone(),
+            working_directory: working_directory.clone(),
         },
         title: "Investigate startup".into(),
         description: Some("Trace the selected-context path".into()),
@@ -157,7 +154,7 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
         .unwrap();
     assert_eq!(persisted.status.as_str(), "binding");
     assert_eq!(persisted.provider, Provider::CodexCli);
-    assert_eq!(persisted.target.working_directory, worktree);
+    assert_eq!(persisted.target.working_directory, working_directory);
     assert_eq!(persisted.session_alias, "Investigate startup");
     assert_eq!(
         persisted.description.as_deref(),
@@ -187,10 +184,10 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
 }
 
 #[test]
-fn private_tmux_broker_runs_the_selected_native_command_in_the_target_worktree() {
+fn private_tmux_broker_runs_the_selected_native_command_in_the_target_working_directory() {
     let temp = TempDir::new("tmux-command");
-    let worktree = temp.path().join("worktree");
-    fs::create_dir(&worktree).unwrap();
+    let working_directory = temp.path().join("working_directory");
+    fs::create_dir(&working_directory).unwrap();
     let captured_args = temp.path().join("tmux-args");
     let tmux = temp.path().join("tmux");
     fs::write(
@@ -221,10 +218,7 @@ fn private_tmux_broker_runs_the_selected_native_command_in_the_target_worktree()
             ManagedNewRequest {
                 provider: Provider::ClaudeCode,
                 target: ManagedLaunchTarget {
-                    project: ProjectIdentity::CanonicalCwd(worktree.clone()),
-                    project_label: "worktree".into(),
-                    worktree_root: None,
-                    working_directory: worktree.clone(),
+                    working_directory: working_directory.clone(),
                 },
                 title: title.into(),
                 description: Some(description.into()),
@@ -256,7 +250,7 @@ fn private_tmux_broker_runs_the_selected_native_command_in_the_target_worktree()
             "-n".to_string(),
             "Inspect ##W startup".to_string(),
             "-c".to_string(),
-            worktree.to_string_lossy().into_owned(),
+            working_directory.to_string_lossy().into_owned(),
             "--".to_string(),
             claude.to_string_lossy().into_owned(),
             BINDING_INITIALIZER.to_string(),
@@ -309,8 +303,8 @@ impl ManagedTerminalAccess for FailTerminal {
 #[test]
 fn terminal_failure_preserves_the_single_running_binding_registration() {
     let temp = TempDir::new("terminal-failure");
-    let worktree = temp.path().join("worktree");
-    fs::create_dir(&worktree).unwrap();
+    let working_directory = temp.path().join("working_directory");
+    fs::create_dir(&working_directory).unwrap();
     let claude = executable(temp.path(), "claude");
     let codex = executable(temp.path(), "codex");
     let store_path = temp.path().join("managed-launches.db");
@@ -329,12 +323,7 @@ fn terminal_failure_preserves_the_single_running_binding_registration() {
         .start_new(
             ManagedNewRequest {
                 provider: Provider::CodexCli,
-                target: ManagedLaunchTarget {
-                    project: ProjectIdentity::CanonicalCwd(worktree.clone()),
-                    project_label: "worktree".into(),
-                    worktree_root: None,
-                    working_directory: worktree,
-                },
+                target: ManagedLaunchTarget { working_directory },
                 title: "Keep launch alive".into(),
                 description: None,
                 binding_initializer: false,
@@ -356,8 +345,8 @@ fn terminal_failure_preserves_the_single_running_binding_registration() {
 #[test]
 fn terminal_access_only_attaches_to_the_existing_private_tmux_environment() {
     let temp = TempDir::new("terminal-attach");
-    let worktree = temp.path().join("worktree");
-    fs::create_dir(&worktree).unwrap();
+    let working_directory = temp.path().join("working_directory");
+    fs::create_dir(&working_directory).unwrap();
     let claude = executable(temp.path(), "claude");
     let codex = executable(temp.path(), "codex");
     let tmux = executable(temp.path(), "tmux");
@@ -376,12 +365,7 @@ fn terminal_access_only_attaches_to_the_existing_private_tmux_environment() {
         .start_new(
             ManagedNewRequest {
                 provider: Provider::CodexCli,
-                target: ManagedLaunchTarget {
-                    project: ProjectIdentity::CanonicalCwd(worktree.clone()),
-                    project_label: "worktree".into(),
-                    worktree_root: None,
-                    working_directory: worktree,
-                },
+                target: ManagedLaunchTarget { working_directory },
                 title: "Attach only".into(),
                 description: None,
                 binding_initializer: false,
@@ -491,7 +475,7 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
     let selected = temp.path().join("notes");
     let selected_alias = temp.path().join("notes-alias");
     let replacement = temp.path().join("replacement-notes");
-    let broken = temp.path().join("broken-worktree");
+    let broken = temp.path().join("broken-working_directory");
     fs::create_dir(&selected).unwrap();
     fs::create_dir(&replacement).unwrap();
     fs::create_dir(&broken).unwrap();
@@ -643,7 +627,7 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
     let temp = TempDir::new("replace-inherited-directory");
     let selected = std::env::current_dir().unwrap();
     let replacement = temp.path().join("replacement-project");
-    let broken = temp.path().join("broken-worktree");
+    let broken = temp.path().join("broken-working_directory");
     fs::create_dir(&replacement).unwrap();
     fs::create_dir(&broken).unwrap();
     fs::write(broken.join(".git"), "gitdir: ../missing-git-dir\n").unwrap();
@@ -1034,10 +1018,9 @@ fn session_in_project(project_root: &Path) -> Session {
         provenance: mudi::domain::SessionProvenance::Observed,
         source: SourceMetadata::default(),
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd(project_root.to_path_buf()),
+            identity: ProjectIdentity::new(project_root.to_path_buf()),
             label: "project".into(),
         }),
-        worktree: None,
         cwd: Some(project_root.to_string_lossy().into_owned()),
         latest_model: None,
         state: SessionState::Idle,
@@ -1062,9 +1045,6 @@ fn recovery_registration(
         status,
         provider: Provider::CodexCli,
         target: ManagedLaunchTarget {
-            project: ProjectIdentity::CanonicalCwd(working_directory.to_path_buf()),
-            project_label: "mudi".into(),
-            worktree_root: None,
             working_directory: working_directory.to_path_buf(),
         },
         session_alias: "Recover launch".into(),

@@ -1,13 +1,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mudi::application::ApplicationController;
-use mudi::clipboard::Clipboard;
-use mudi::config::Config;
-use mudi::domain::{
-    ContextState, Project, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
-    SourceFormat, SourceMetadata, Usage,
-};
-use mudi::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
-use mudi::managed_sessions::{
+use mudi::adapters::config::Config;
+use mudi::adapters::macos::clipboard::Clipboard;
+use mudi::adapters::providers::state::ProcessIdentity;
+use mudi::adapters::providers::ProviderBindingEvidence;
+use mudi::adapters::providers::ProviderExecutables;
+use mudi::application::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
+use mudi::application::managed_sessions::{
     run_attach_from_args_with_access, BindingOutcome, BindingReceipt, EvidenceBinder,
     MacosManagedTerminalAccess, ManagedCurrentRunAccessService, ManagedCurrentRunEvidence,
     ManagedCurrentRunRecord, ManagedCurrentRunTerminalAccess, ManagedCurrentRunVerifier,
@@ -17,13 +15,15 @@ use mudi::managed_sessions::{
     ProviderNewCommand, ProviderProcessObservation, SystemManagedCurrentRunEvidence,
     SystemProcessEvidence, VerifiedManagedCurrentRun,
 };
-use mudi::providers::state::ProcessIdentity;
-use mudi::providers::ProviderBindingEvidence;
-use mudi::providers::ProviderExecutables;
-use mudi::read_model::{ManagedCurrentRunSummary, RefreshSnapshot};
-use mudi::refresh::RefreshService;
-use mudi::successor::TerminalLauncher;
-use mudi::ui::{draw, Ui, UiAction};
+use mudi::application::observation::read_model::{ManagedCurrentRunSummary, RefreshSnapshot};
+use mudi::application::observation::refresh::RefreshService;
+use mudi::application::successor::TerminalLauncher;
+use mudi::application::ApplicationController;
+use mudi::domain::{
+    ContextState, Project, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
+    SourceFormat, SourceMetadata, Usage,
+};
+use mudi::presentation::tui::{draw, Ui, UiAction};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use std::fs;
@@ -39,10 +39,9 @@ fn session(state: SessionState, provenance: SessionProvenance) -> Session {
         provenance,
         source: SourceMetadata::default(),
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/sessionmesh")),
+            identity: ProjectIdentity::new(PathBuf::from("/workspace/sessionmesh")),
             label: "sessionmesh".into(),
         }),
-        worktree: None,
         cwd: Some("/workspace/sessionmesh".into()),
         latest_model: Some("claude-sonnet".into()),
         state,
@@ -786,7 +785,7 @@ fn terminal_adapter_only_attaches_the_existing_private_tmux_for_both_entry_point
 fn system_revalidation_requires_the_exact_live_process_and_native_session_source() {
     let temp = TempDir::new("system-evidence");
     let config = temp.config();
-    let working_directory = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let process = SystemProcessEvidence
         .current_identity(std::process::id())
         .unwrap();
@@ -821,16 +820,11 @@ fn system_revalidation_requires_the_exact_live_process_and_native_session_source
         .unwrap();
     };
     write_state(process.started_at_ms);
-    let resolution = mudi::project::resolve(Some(&working_directory));
-    let project = resolution.project.unwrap();
     let registration = ManagedLaunchRegistration {
         id: "launch-system".into(),
         status: ManagedLaunchStatus::Binding,
         provider: Provider::ClaudeCode,
         target: ManagedLaunchTarget {
-            project: project.identity,
-            project_label: project.label,
-            worktree_root: resolution.worktree.map(|worktree| worktree.root),
             working_directory: working_directory.clone(),
         },
         session_alias: "System evidence".into(),
@@ -950,22 +944,17 @@ fn bind_managed_run(
     registration_id: &str,
     native_session_id: &str,
 ) {
-    let working_directory = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let source_path = temp.file("source.jsonl", "{}\n");
     let process = ProcessIdentity {
         pid: 42,
         started_at_ms: 41_000,
     };
-    let resolution = mudi::project::resolve(Some(&working_directory));
-    let project = resolution.project.unwrap();
     let registration = ManagedLaunchRegistration {
         id: registration_id.into(),
         status: ManagedLaunchStatus::Binding,
         provider: Provider::ClaudeCode,
         target: ManagedLaunchTarget {
-            project: project.identity,
-            project_label: project.label,
-            worktree_root: resolution.worktree.map(|worktree| worktree.root),
             working_directory: working_directory.clone(),
         },
         session_alias: "Managed work".into(),

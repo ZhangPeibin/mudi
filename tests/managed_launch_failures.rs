@@ -1,14 +1,14 @@
 use anyhow::Result;
-use mudi::domain::{ProjectIdentity, Provider, SourceFormat, SourceMetadata};
-use mudi::managed_sessions::{
+use mudi::adapters::providers::state::ProcessIdentity;
+use mudi::adapters::providers::{ProviderBindingEvidence, ProviderExecutables};
+use mudi::application::managed_sessions::{
     BindingOutcome, EvidenceBinder, ManagedLaunchAction, ManagedLaunchBroker, ManagedLaunchCleanup,
     ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore,
     ManagedLaunchTarget, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
     ProcessEvidence, ProviderNewCommand, ProviderProcessObservation, TmuxLaunchBroker,
     TmuxManagedLaunchCleanup,
 };
-use mudi::providers::state::ProcessIdentity;
-use mudi::providers::{ProviderBindingEvidence, ProviderExecutables};
+use mudi::domain::{Provider, SourceFormat, SourceMetadata};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -378,8 +378,6 @@ fn needs_review_diagnostics_include_only_launch_metadata() {
         "Managed Launch Registration: launch-diagnostics",
         "Status: Needs Review",
         "Provider: Codex CLI",
-        "Project: project",
-        "Worktree: N/A",
         &format!("Working directory: {}", temp.path().display()),
         "Launched pane process: pid 42, started 41000",
         "Evidence: private tmux pane %42; Binding Receipt not issued",
@@ -563,9 +561,6 @@ fn registration(id: &str, working_directory: &Path) -> ManagedLaunchRegistration
         status: ManagedLaunchStatus::Binding,
         provider: Provider::CodexCli,
         target: ManagedLaunchTarget {
-            project: ProjectIdentity::CanonicalCwd(working_directory.to_path_buf()),
-            project_label: "project".into(),
-            worktree_root: None,
             working_directory: working_directory.to_path_buf(),
         },
         session_alias: "Investigate launch".into(),

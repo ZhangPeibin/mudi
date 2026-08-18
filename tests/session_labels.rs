@@ -1,8 +1,9 @@
-use mudi::config::Config;
+use mudi::adapters::config::Config;
+use mudi::adapters::persistence::index::Index;
+use mudi::adapters::providers::claude;
+use mudi::application::session_labels::{CurationDisposition, SessionLabels};
 use mudi::domain::{Provider, SessionIdentity};
-use mudi::index::Index;
-use mudi::providers::claude;
-use mudi::session_labels::{CurationDisposition, SessionLabels};
+use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -37,6 +38,31 @@ fn user_alias_survives_a_label_store_reload() {
     );
 
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn launch_alias_association_is_idempotent_and_preserves_the_first_alias() {
+    let (_directory, path) = temp_label_store("launch-alias-association");
+    let mut labels = SessionLabels::load(&path);
+
+    assert!(labels
+        .associate_alias(Provider::ClaudeCode, "claude-session", "Launch title")
+        .unwrap());
+    let associated_bytes = fs::read(&path).unwrap();
+
+    assert!(!labels
+        .associate_alias(
+            Provider::ClaudeCode,
+            "claude-session",
+            "Conflicting launch title",
+        )
+        .unwrap());
+
+    assert_eq!(fs::read(&path).unwrap(), associated_bytes);
+    assert_eq!(
+        SessionLabels::load(&path).alias(Provider::ClaudeCode, "claude-session"),
+        Some("Launch title")
+    );
 }
 
 #[test]

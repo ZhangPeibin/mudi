@@ -1,22 +1,22 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mudi::app::Snapshot;
-use mudi::config::Config;
+use mudi::adapters::config::Config;
+use mudi::adapters::providers::state::ProcessIdentity;
+use mudi::adapters::providers::{registry, ProviderBindingEvidence};
+use mudi::application::managed_sessions::{
+    BindingOutcome, EvidenceBinder, LaunchIdentityAssociationOutcome, ManagedLaunchAction,
+    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus,
+    ManagedLaunchStore, ManagedLaunchTarget, PrivateTmuxEnvironment, ProcessEvidence,
+    ProviderNewCommand, ProviderProcessObservation, SystemProcessEvidence,
+};
+use mudi::application::observation::read_model::{ManagedLaunchSummary, ManagedTerminalState};
+use mudi::application::observation::refresh::RefreshService;
+use mudi::application::session_labels::SessionLabels;
 use mudi::domain::{
-    ContextState, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
-    SourceFormat, SourceMetadata, Usage,
+    ContextState, Provider, Session, SessionProvenance, SessionState, SourceFormat, SourceMetadata,
+    Usage,
 };
-use mudi::managed_sessions::{
-    BindingOutcome, EvidenceBinder, ManagedLaunchAction, ManagedLaunchCleanup,
-    ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore,
-    ManagedLaunchTarget, PrivateTmuxEnvironment, ProcessEvidence, ProviderNewCommand,
-    ProviderProcessObservation, SystemProcessEvidence,
-};
-use mudi::providers::state::ProcessIdentity;
-use mudi::providers::{registry, ProviderBindingEvidence};
-use mudi::read_model::{ManagedLaunchSummary, ManagedTerminalState};
-use mudi::refresh::RefreshService;
-use mudi::session_labels::SessionLabels;
-use mudi::ui::{draw, Ui, UiAction};
+use mudi::presentation::app::Snapshot;
+use mudi::presentation::tui::{draw, Ui, UiAction};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use std::collections::HashMap;
@@ -59,10 +59,15 @@ impl ManagedLaunchCleanup for NoopCleanup {
 #[test]
 fn binding_receipt_atomically_establishes_the_managed_session_and_current_run() {
     let temp = TempDir::new("atomic-receipt");
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let source_path = temp.file("rollout.jsonl", "{}\n");
     let process = process(42, 41_000);
-    let registration = registration("launch-atomic", Provider::CodexCli, &worktree, process);
+    let registration = registration(
+        "launch-atomic",
+        Provider::CodexCli,
+        &working_directory,
+        process,
+    );
     let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
     let binder = EvidenceBinder::new(
@@ -79,7 +84,7 @@ fn binding_receipt_atomically_establishes_the_managed_session_and_current_run() 
                 "native-session",
                 "native-session",
                 &source_path,
-                &worktree,
+                &working_directory,
                 process,
             )),
             50_000,
@@ -108,7 +113,7 @@ fn binding_receipt_atomically_establishes_the_managed_session_and_current_run() 
         Provider::CodexCli,
         "native-session",
         &source_path,
-        &worktree,
+        &working_directory,
     )];
     store.apply_provenance(&mut sessions).unwrap();
     assert_eq!(sessions[0].provenance, SessionProvenance::Managed);
@@ -117,14 +122,14 @@ fn binding_receipt_atomically_establishes_the_managed_session_and_current_run() 
 #[test]
 fn provider_descendant_of_the_launched_pane_can_issue_a_binding_receipt() {
     let temp = TempDir::new("provider-descendant");
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let source_path = temp.file("rollout.jsonl", "{}\n");
     let pane_process = process(42, 41_000);
     let provider_process = process(43, 41_001);
     let registration = registration(
         "launch-provider-descendant",
         Provider::CodexCli,
-        &worktree,
+        &working_directory,
         pane_process,
     );
     let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
@@ -146,7 +151,7 @@ fn provider_descendant_of_the_launched_pane_can_issue_a_binding_receipt() {
                 "native-session",
                 "native-session",
                 &source_path,
-                &worktree,
+                &working_directory,
                 pane_process,
                 provider_process,
             )),
@@ -169,9 +174,71 @@ fn provider_descendant_of_the_launched_pane_can_issue_a_binding_receipt() {
 }
 
 #[test]
+fn matching_cwd_binds_when_project_snapshot_changed_after_launch() {
+    let temp = TempDir::new("git-state-changed-after-launch");
+    let working_directory = temp.directory("working-directory");
+    let project_before_launch = mudi::adapters::project::resolve(Some(&working_directory))
+        .project
+        .unwrap()
+        .identity;
+    let source_path = temp.file("rollout.jsonl", "{}\n");
+    let launch_process = process(42, 41_000);
+    let registration = registration(
+        "launch-git-state-changed",
+        Provider::CodexCli,
+        &working_directory,
+        launch_process,
+    );
+    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    store.insert(&registration).unwrap();
+    let git_init = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(git_init.success());
+    let project_after_launch = mudi::adapters::project::resolve(Some(&working_directory))
+        .project
+        .unwrap()
+        .identity;
+    assert_ne!(project_before_launch, project_after_launch);
+    let binder = EvidenceBinder::new(
+        Box::new(FixedProcessEvidence(Some(launch_process))),
+        Box::new(NoopCleanup),
+    );
+
+    let outcome = binder
+        .bind(
+            &mut store,
+            &registration.id,
+            Some(binding_evidence(
+                Provider::CodexCli,
+                "native-session",
+                "native-session",
+                &source_path,
+                &working_directory,
+                launch_process,
+            )),
+            50_000,
+        )
+        .unwrap();
+
+    assert!(matches!(outcome, BindingOutcome::Bound(_)));
+    assert_eq!(
+        store
+            .managed_session(Provider::CodexCli, "native-session")
+            .unwrap()
+            .unwrap()
+            .target
+            .working_directory,
+        working_directory
+    );
+}
+
+#[test]
 fn provider_evidence_from_a_different_launch_root_cannot_issue_a_binding_receipt() {
     let temp = TempDir::new("different-launch-root");
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let source_path = temp.file("rollout.jsonl", "{}\n");
     let pane_process = process(42, 41_000);
     let unrelated_launch_process = process(43, 41_001);
@@ -179,7 +246,7 @@ fn provider_evidence_from_a_different_launch_root_cannot_issue_a_binding_receipt
     let registration = registration(
         "launch-different-root",
         Provider::CodexCli,
-        &worktree,
+        &working_directory,
         pane_process,
     );
     let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
@@ -202,7 +269,7 @@ fn provider_evidence_from_a_different_launch_root_cannot_issue_a_binding_receipt
                 "native-session",
                 "native-session",
                 &source_path,
-                &worktree,
+                &working_directory,
                 unrelated_launch_process,
                 provider_process,
             )),
@@ -224,6 +291,7 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
         InvalidEvidence::ProviderMismatch,
         InvalidEvidence::NativeSessionMismatch,
         InvalidEvidence::LaunchProcessMismatch,
+        InvalidEvidence::MissingSourceFile,
         InvalidEvidence::WorkingDirectoryMismatch,
         InvalidEvidence::StalePid,
         InvalidEvidence::ReusedPid,
@@ -231,14 +299,15 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
 
     for case in cases {
         let temp = TempDir::new(case.name());
-        let worktree = temp.directory("worktree");
-        let other_worktree = temp.directory("other-worktree");
+        let working_directory = temp.directory("working_directory");
+        let other_directory = temp.directory("other-working_directory");
         let source_path = temp.file("source.jsonl", "{}\n");
+        let missing_source_path = temp.path().join("missing-source.jsonl");
         let launch_process = process(42, 41_000);
         let registration = registration(
             &format!("launch-{}", case.name()),
             Provider::CodexCli,
-            &worktree,
+            &working_directory,
             launch_process,
         );
         let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
@@ -259,7 +328,7 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
                 "native-session",
                 "native-session",
                 &source_path,
-                &worktree,
+                &working_directory,
                 launch_process,
             )),
             InvalidEvidence::NativeSessionMismatch => Some(binding_evidence(
@@ -267,7 +336,7 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
                 "source-session",
                 "process-session",
                 &source_path,
-                &worktree,
+                &working_directory,
                 launch_process,
             )),
             InvalidEvidence::LaunchProcessMismatch => Some(binding_evidence(
@@ -275,7 +344,7 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
                 "native-session",
                 "native-session",
                 &source_path,
-                &worktree,
+                &working_directory,
                 process(43, 41_000),
             )),
             InvalidEvidence::WorkingDirectoryMismatch => Some(binding_evidence(
@@ -283,7 +352,15 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
                 "native-session",
                 "native-session",
                 &source_path,
-                &other_worktree,
+                &other_directory,
+                launch_process,
+            )),
+            InvalidEvidence::MissingSourceFile => Some(binding_evidence(
+                Provider::CodexCli,
+                "native-session",
+                "native-session",
+                &missing_source_path,
+                &working_directory,
                 launch_process,
             )),
             InvalidEvidence::StalePid | InvalidEvidence::ReusedPid => Some(binding_evidence(
@@ -291,12 +368,26 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
                 "native-session",
                 "native-session",
                 &source_path,
-                &worktree,
+                &working_directory,
                 launch_process,
             )),
         };
 
-        let outcome = binder.bind(&mut store, &registration.id, evidence, 50_000);
+        let mut labels = SessionLabels::load(temp.path().join("labels.json"));
+        let outcome = binder.bind_with_identity_association(
+            &mut store,
+            &registration.id,
+            evidence,
+            50_000,
+            |_, launch, session| {
+                labels.associate_alias(
+                    session.provider,
+                    &session.native_id,
+                    &launch.session_alias,
+                )?;
+                Ok(LaunchIdentityAssociationOutcome::ContinueBinding)
+            },
+        );
 
         if matches!(case, InvalidEvidence::MissingSource) {
             assert_eq!(outcome.unwrap(), BindingOutcome::Waiting, "{case:?}");
@@ -317,13 +408,20 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
                 .is_none(),
             "{case:?} created a Managed Session"
         );
+        let expected_alias =
+            matches!(case, InvalidEvidence::WorkingDirectoryMismatch).then_some("Managed work");
+        assert_eq!(
+            labels.alias(Provider::CodexCli, "native-session"),
+            expected_alias,
+            "{case:?} associated the wrong Title"
+        );
     }
 }
 
 #[test]
 fn conflicting_managed_identity_rolls_back_and_needs_review() {
     let temp = TempDir::new("rollback");
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let source_path = temp.file("source.jsonl", "{}\n");
     let process = process(42, 41_000);
     let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
@@ -337,7 +435,7 @@ fn conflicting_managed_identity_rolls_back_and_needs_review() {
             .insert(&registration(
                 registration_id,
                 Provider::ClaudeCode,
-                &worktree,
+                &working_directory,
                 process,
             ))
             .unwrap();
@@ -351,7 +449,7 @@ fn conflicting_managed_identity_rolls_back_and_needs_review() {
                 "same-native-session",
                 "same-native-session",
                 &source_path,
-                &worktree,
+                &working_directory,
                 process,
             )),
             50_000,
@@ -366,7 +464,7 @@ fn conflicting_managed_identity_rolls_back_and_needs_review() {
             "same-native-session",
             "same-native-session",
             &source_path,
-            &worktree,
+            &working_directory,
             process,
         )),
         51_000,
@@ -385,7 +483,7 @@ fn conflicting_managed_identity_rolls_back_and_needs_review() {
 #[test]
 fn claude_adapter_normalizes_first_prompt_source_and_exact_process_evidence() {
     let temp = TempDir::new("claude-adapter");
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let claude_dir = temp.path().join("claude");
     let transcripts = claude_dir.join("projects/project");
     let states = claude_dir.join("sessions");
@@ -403,7 +501,7 @@ fn claude_adapter_normalizes_first_prompt_source_and_exact_process_evidence() {
             serde_json::json!({
                 "type": "user",
                 "sessionId": native_session_id,
-                "cwd": worktree,
+                "cwd": working_directory,
                 "message": {"role": "user", "content": "first real prompt"}
             })
         ),
@@ -437,7 +535,7 @@ fn claude_adapter_normalizes_first_prompt_source_and_exact_process_evidence() {
     assert_eq!(evidence.source_session_id, native_session_id);
     assert_eq!(evidence.process_session_id, native_session_id);
     assert_eq!(evidence.source.path, source_path.canonicalize().unwrap());
-    assert_eq!(evidence.working_directory, worktree);
+    assert_eq!(evidence.working_directory, working_directory);
     assert_eq!(evidence.provider_process, process);
 }
 
@@ -445,7 +543,7 @@ fn claude_adapter_normalizes_first_prompt_source_and_exact_process_evidence() {
 #[test]
 fn codex_adapter_normalizes_the_rollout_held_by_the_exact_process() {
     let temp = TempDir::new("codex-adapter");
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let codex_dir = temp.path().join("codex");
     let rollouts = codex_dir.join("sessions/2026/08/10");
     fs::create_dir_all(&rollouts).unwrap();
@@ -459,7 +557,7 @@ fn codex_adapter_normalizes_the_rollout_held_by_the_exact_process() {
             "{}\n",
             serde_json::json!({
                 "type": "session_meta",
-                "payload": {"id": native_session_id, "cwd": worktree}
+                "payload": {"id": native_session_id, "cwd": working_directory}
             })
         ),
     )
@@ -485,7 +583,7 @@ fn codex_adapter_normalizes_the_rollout_held_by_the_exact_process() {
     assert_eq!(evidence.source_session_id, native_session_id);
     assert_eq!(evidence.process_session_id, native_session_id);
     assert_eq!(evidence.source.path, source_path.canonicalize().unwrap());
-    assert_eq!(evidence.working_directory, worktree);
+    assert_eq!(evidence.working_directory, working_directory);
     assert_eq!(evidence.launch_process, process);
     assert_eq!(evidence.provider_process, process);
 }
@@ -494,7 +592,7 @@ fn codex_adapter_normalizes_the_rollout_held_by_the_exact_process() {
 #[test]
 fn codex_adapter_resolves_the_rollout_holder_below_a_launch_wrapper() {
     let temp = TempDir::new("codex-wrapper-adapter");
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let codex_dir = temp.path().join("codex");
     let rollouts = codex_dir.join("sessions/2026/08/11");
     fs::create_dir_all(&rollouts).unwrap();
@@ -508,7 +606,7 @@ fn codex_adapter_resolves_the_rollout_holder_below_a_launch_wrapper() {
             "{}\n",
             serde_json::json!({
                 "type": "session_meta",
-                "payload": {"id": native_session_id, "cwd": worktree}
+                "payload": {"id": native_session_id, "cwd": working_directory}
             })
         ),
     )
@@ -556,7 +654,7 @@ fn codex_adapter_resolves_the_rollout_holder_below_a_launch_wrapper() {
 #[test]
 fn refresh_publishes_metadata_only_managed_launch_recovery_state() {
     let temp = TempDir::new("managed-launch-read-model");
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let config = Config {
         claude_dir: temp.path().join("claude"),
         codex_dir: temp.path().join("codex"),
@@ -566,7 +664,7 @@ fn refresh_publishes_metadata_only_managed_launch_recovery_state() {
     let mut registration = registration(
         "launch-needs-review",
         Provider::CodexCli,
-        &worktree,
+        &working_directory,
         process(42, 41_000),
     );
     registration.status = ManagedLaunchStatus::NeedsReview;
@@ -589,9 +687,7 @@ fn refresh_publishes_metadata_only_managed_launch_recovery_state() {
     assert_eq!(launch.id, "launch-needs-review");
     assert_eq!(launch.status, ManagedLaunchStatus::NeedsReview);
     assert_eq!(launch.provider, Provider::CodexCli);
-    assert_eq!(launch.project_label, registration.target.project_label);
-    assert_eq!(launch.worktree_root, registration.target.worktree_root);
-    assert_eq!(launch.working_directory, worktree);
+    assert_eq!(launch.working_directory, working_directory);
     assert_eq!(launch.title, "Recover payment tests");
     assert_eq!(launch.created_at_ms, 40_000);
     assert_eq!(launch.terminal_state, ManagedTerminalState::Error);
@@ -895,9 +991,6 @@ fn launch_summary(
         id: id.into(),
         status,
         provider: Provider::CodexCli,
-        project: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/mudi")),
-        project_label: "mudi".into(),
-        worktree_root: Some(PathBuf::from("/workspace/mudi/main")),
         working_directory: PathBuf::from("/workspace/mudi/main"),
         title: "Work Continuity".into(),
         created_at_ms,
@@ -911,7 +1004,7 @@ fn launch_summary(
 #[test]
 fn claude_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
     let temp = TempDir::new("claude-refresh");
-    let worktree = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let working_directory = std::env::current_dir().unwrap().canonicalize().unwrap();
     let claude_dir = temp.path().join("claude");
     let transcripts = claude_dir.join("projects/project");
     let states = claude_dir.join("sessions");
@@ -929,7 +1022,7 @@ fn claude_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
             serde_json::json!({
                 "type": "assistant",
                 "sessionId": native_session_id,
-                "cwd": worktree,
+                "cwd": working_directory,
                 "timestamp": "2026-08-10T10:00:00.000Z",
                 "message": {
                     "id": "first-response",
@@ -961,9 +1054,12 @@ fn claude_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
         &config,
         "launch-claude-refresh",
         Provider::ClaudeCode,
-        &worktree,
+        &working_directory,
         process,
     );
+    SessionLabels::load(config.label_store_path())
+        .set_alias(Provider::ClaudeCode, native_session_id, "User-owned title")
+        .unwrap();
     let mut ui = load_ui_before_binding(&config);
 
     let mut refresh = RefreshService::new(config.clone());
@@ -975,7 +1071,7 @@ fn claude_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
         &mut ui,
         Provider::ClaudeCode,
         native_session_id,
-        &worktree,
+        &working_directory,
         "launch-claude-refresh",
     );
 
@@ -1004,7 +1100,7 @@ fn claude_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
 #[test]
 fn codex_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
     let temp = TempDir::new("codex-refresh");
-    let worktree = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let working_directory = std::env::current_dir().unwrap().canonicalize().unwrap();
     let codex_dir = temp.path().join("codex");
     let rollouts = codex_dir.join("sessions/2026/08/10");
     fs::create_dir_all(&rollouts).unwrap();
@@ -1019,12 +1115,12 @@ fn codex_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
         serde_json::json!({
             "timestamp": "2026-08-10T10:00:00.000Z",
             "type": "session_meta",
-            "payload": {"id": native_session_id, "cwd": worktree}
+            "payload": {"id": native_session_id, "cwd": working_directory}
         }),
         serde_json::json!({
             "timestamp": "2026-08-10T10:00:01.000Z",
             "type": "turn_context",
-            "payload": {"model": "gpt-5.6-sol", "cwd": worktree}
+            "payload": {"model": "gpt-5.6-sol", "cwd": working_directory}
         }),
         serde_json::json!({
             "timestamp": "2026-08-10T10:00:02.000Z",
@@ -1063,7 +1159,7 @@ fn codex_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
         &config,
         "launch-codex-refresh",
         Provider::CodexCli,
-        &worktree,
+        &working_directory,
         process,
     );
     let mut ui = load_ui_before_binding(&config);
@@ -1076,21 +1172,307 @@ fn codex_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
         &mut ui,
         Provider::CodexCli,
         native_session_id,
-        &worktree,
+        &working_directory,
         "launch-codex-refresh",
     );
+}
+
+#[test]
+fn claude_title_survives_binding() {
+    assert_title_survives_binding(Provider::ClaudeCode);
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_title_survives_binding() {
+    assert_title_survives_binding(Provider::CodexCli);
+}
+
+fn assert_title_survives_binding(provider: Provider) {
+    let temp = TempDir::new(&format!("{}-title-before-project", provider.as_str()));
+    let working_directory = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let process = SystemProcessEvidence
+        .current_identity(std::process::id())
+        .unwrap();
+    let native_session_id = match provider {
+        Provider::ClaudeCode => "claude-title-before-project".to_string(),
+        Provider::CodexCli => "33333333-3333-3333-3333-333333333333".to_string(),
+    };
+    let config = Config {
+        claude_dir: temp.path().join("claude"),
+        codex_dir: temp.path().join("codex"),
+        data_dir: temp.path().join("data"),
+        extra_dirs: Vec::new(),
+    };
+    let mut held_source = None;
+
+    match provider {
+        Provider::ClaudeCode => {
+            let transcripts = config.claude_dir.join("projects/project");
+            let states = config.claude_dir.join("sessions");
+            fs::create_dir_all(&transcripts).unwrap();
+            fs::create_dir_all(&states).unwrap();
+            fs::write(
+                transcripts.join(format!("{native_session_id}.jsonl")),
+                format!(
+                    "{}\n",
+                    serde_json::json!({
+                        "type": "assistant",
+                        "sessionId": native_session_id,
+                        "cwd": working_directory,
+                        "timestamp": "2026-08-10T10:00:00.000Z",
+                        "message": {
+                            "id": "first-response",
+                            "model": "claude-sonnet-4-5",
+                            "usage": {"input_tokens": 10, "output_tokens": 2}
+                        }
+                    })
+                ),
+            )
+            .unwrap();
+            fs::write(
+                states.join(format!("{}.json", process.pid)),
+                serde_json::json!({
+                    "pid": process.pid,
+                    "sessionId": native_session_id,
+                    "status": "idle",
+                    "startedAt": process.started_at_ms
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+        Provider::CodexCli => {
+            let rollouts = config.codex_dir.join("sessions/2026/08/10");
+            fs::create_dir_all(&rollouts).unwrap();
+            let source_path = rollouts.join(format!(
+                "rollout-2026-08-10T00-00-00-{native_session_id}.jsonl"
+            ));
+            let records = [
+                serde_json::json!({
+                    "timestamp": "2026-08-10T10:00:00.000Z",
+                    "type": "session_meta",
+                    "payload": {"id": native_session_id, "cwd": working_directory}
+                }),
+                serde_json::json!({
+                    "timestamp": "2026-08-10T10:00:01.000Z",
+                    "type": "turn_context",
+                    "payload": {"model": "gpt-5.6-sol", "cwd": working_directory}
+                }),
+                serde_json::json!({
+                    "timestamp": "2026-08-10T10:00:02.000Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {"input_tokens": 10, "output_tokens": 2},
+                            "total_token_usage": {
+                                "input_tokens": 10,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 2
+                            },
+                            "model_context_window": 200000
+                        }
+                    }
+                }),
+            ];
+            fs::write(
+                &source_path,
+                records
+                    .iter()
+                    .map(serde_json::Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap();
+            held_source = Some(fs::File::open(source_path).unwrap());
+        }
+    }
+
+    let registration_id = format!("launch-{}-title-before-project", provider.as_str());
+    let launch = registration(&registration_id, provider, &working_directory, process);
+    ManagedLaunchStore::open(config.managed_launch_store_path())
+        .unwrap()
+        .insert(&launch)
+        .unwrap();
+    let mut ui = load_ui_before_binding(&config);
+
+    let mut refresh = RefreshService::new(config.clone());
+    let snapshot = refresh.refresh();
+
+    let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    assert!(store.get(&registration_id).unwrap().is_none());
+    assert!(store.binding_receipt(&registration_id).unwrap().is_some());
+    assert_eq!(store.managed_sessions().unwrap().len(), 1);
+    assert_eq!(store.managed_current_runs().unwrap().len(), 1);
+    let observed = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.provider == provider && session.id == native_session_id)
+        .unwrap();
+    assert_eq!(observed.provenance, SessionProvenance::Managed);
+    let labels = SessionLabels::load(config.label_store_path());
+    assert_eq!(
+        labels.alias(provider, &native_session_id),
+        Some("Managed work")
+    );
+    assert_eq!(
+        labels.description(provider, &native_session_id),
+        Some("Bound only after exact evidence")
+    );
+    if observed.state.is_open() {
+        ui.clamp_selections(&snapshot);
+        let mut sessions_only = snapshot.clone();
+        sessions_only.managed_launches.clear();
+        let rendered = render_ui(&ui, &sessions_only);
+        assert!(
+            rendered.contains("Managed work"),
+            "associated Title missing from same-refresh UI:\n{rendered}"
+        );
+    } else {
+        assert_eq!(labels.title(provider, &native_session_id), "Managed work");
+    }
+
+    let label_bytes = fs::read(config.label_store_path()).unwrap();
+    refresh.refresh();
+    assert_eq!(fs::read(config.label_store_path()).unwrap(), label_bytes);
+    drop(refresh);
+
+    let mut restarted_refresh = RefreshService::new(config.clone());
+    let restarted = restarted_refresh.refresh();
+    assert_eq!(fs::read(config.label_store_path()).unwrap(), label_bytes);
+    assert!(restarted.managed_launches.is_empty());
+    assert_eq!(
+        SessionLabels::load(config.label_store_path()).alias(provider, &native_session_id),
+        Some("Managed work")
+    );
+
+    SessionLabels::load(config.label_store_path())
+        .set_alias(provider, &native_session_id, "User-edited title")
+        .unwrap();
+    restarted_refresh.refresh();
+    assert_eq!(
+        SessionLabels::load(config.label_store_path()).alias(provider, &native_session_id),
+        Some("User-edited title")
+    );
+
+    SessionLabels::load(config.label_store_path())
+        .clear_title(provider, &native_session_id)
+        .unwrap();
+    restarted_refresh.refresh();
+    assert_eq!(
+        SessionLabels::load(config.label_store_path()).alias(provider, &native_session_id),
+        None
+    );
+    drop(held_source);
+}
+
+#[test]
+fn conflicting_launch_registration_cannot_replace_an_associated_title() {
+    let temp = TempDir::new("conflicting-title-registration");
+    let working_directory = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let claude_dir = temp.path().join("claude");
+    let transcripts = claude_dir.join("projects/project");
+    let states = claude_dir.join("sessions");
+    fs::create_dir_all(&transcripts).unwrap();
+    fs::create_dir_all(&states).unwrap();
+    let process = SystemProcessEvidence
+        .current_identity(std::process::id())
+        .unwrap();
+    let native_session_id = "claude-conflicting-title";
+    fs::write(
+        transcripts.join(format!("{native_session_id}.jsonl")),
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "assistant",
+                "sessionId": native_session_id,
+                "cwd": working_directory,
+                "timestamp": "2026-08-10T10:00:00.000Z",
+                "message": {
+                    "id": "first-response",
+                    "model": "claude-sonnet-4-5",
+                    "usage": {"input_tokens": 10, "output_tokens": 2}
+                }
+            })
+        ),
+    )
+    .unwrap();
+    fs::write(
+        states.join(format!("{}.json", process.pid)),
+        serde_json::json!({
+            "pid": process.pid,
+            "sessionId": native_session_id,
+            "status": "idle",
+            "startedAt": process.started_at_ms
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let config = Config {
+        claude_dir,
+        codex_dir: temp.path().join("codex"),
+        data_dir: temp.path().join("data"),
+        extra_dirs: Vec::new(),
+    };
+    let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let mut first = registration(
+        "launch-a",
+        Provider::ClaudeCode,
+        &working_directory,
+        process,
+    );
+    first.session_alias = "First title".into();
+    store.insert(&first).unwrap();
+    let mut conflicting = registration(
+        "launch-b",
+        Provider::ClaudeCode,
+        &working_directory,
+        process,
+    );
+    conflicting.session_alias = "Conflicting title".into();
+    store.insert(&conflicting).unwrap();
+    drop(store);
+
+    let mut refresh = RefreshService::new(config.clone());
+    refresh.refresh();
+
+    let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    assert!(store.get(&first.id).unwrap().is_none());
+    assert_eq!(
+        store.get(&conflicting.id).unwrap().unwrap().status,
+        ManagedLaunchStatus::NeedsReview
+    );
+    assert!(store.binding_receipt(&first.id).unwrap().is_some());
+    assert!(store.binding_receipt(&conflicting.id).unwrap().is_none());
+    assert_eq!(store.managed_sessions().unwrap().len(), 1);
+    assert_eq!(store.managed_current_runs().unwrap().len(), 1);
+    assert_eq!(
+        SessionLabels::load(config.label_store_path())
+            .alias(Provider::ClaudeCode, native_session_id),
+        Some("First title")
+    );
+
+    let label_bytes = fs::read(config.label_store_path()).unwrap();
+    refresh.refresh();
+    assert_eq!(fs::read(config.label_store_path()).unwrap(), label_bytes);
 }
 
 fn insert_binding_registration(
     config: &Config,
     registration_id: &str,
     provider: Provider,
-    worktree: &Path,
+    working_directory: &Path,
     process: ProcessIdentity,
 ) {
     let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
     store
-        .insert(&registration(registration_id, provider, worktree, process))
+        .insert(&registration(
+            registration_id,
+            provider,
+            working_directory,
+            process,
+        ))
         .unwrap();
 }
 
@@ -1100,23 +1482,27 @@ fn assert_managed_refresh(
     ui: &mut Ui,
     provider: Provider,
     native_session_id: &str,
-    worktree: &Path,
+    working_directory: &Path,
     registration_id: &str,
 ) {
+    let expected_title = match provider {
+        Provider::ClaudeCode => "User-owned title",
+        Provider::CodexCli => "Managed work",
+    };
     let session = snapshot
         .sessions
         .iter()
         .find(|session| session.provider == provider && session.id == native_session_id)
         .expect("verified Session should appear in Session inventory");
-    let expected = mudi::project::resolve(Some(worktree));
+    let expected = mudi::adapters::project::resolve(Some(working_directory));
     assert_eq!(session.provenance, SessionProvenance::Managed);
     assert_eq!(
         session.project.as_ref().map(|project| &project.identity),
         expected.project.as_ref().map(|project| &project.identity)
     );
     assert_eq!(
-        session.worktree.as_ref().map(|worktree| &worktree.root),
-        expected.worktree.as_ref().map(|worktree| &worktree.root)
+        session.cwd.as_deref().map(Path::new),
+        Some(working_directory)
     );
     let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
     assert!(store.get(registration_id).unwrap().is_none());
@@ -1124,7 +1510,7 @@ fn assert_managed_refresh(
     let labels = SessionLabels::load(config.label_store_path());
     assert_eq!(
         labels.alias(provider, native_session_id),
-        Some("Managed work")
+        Some(expected_title)
     );
     assert_eq!(
         labels.description(provider, native_session_id),
@@ -1146,7 +1532,7 @@ fn assert_managed_refresh(
         "Project row missing:\n{rendered}"
     );
     assert!(
-        rendered.contains("Managed work"),
+        rendered.contains(expected_title),
         "verified Managed row missing:\n{rendered}"
     );
     assert!(
@@ -1157,7 +1543,7 @@ fn assert_managed_refresh(
 
 fn load_ui_before_binding(config: &Config) -> Ui {
     fs::write(config.profile_path(), r#"{"help_seen":true}"#).unwrap();
-    Ui::load(config.profile_path(), None).unwrap()
+    Ui::load(config.profile_path()).unwrap()
 }
 
 fn render_ui(ui: &Ui, snapshot: &Snapshot) -> String {
@@ -1179,6 +1565,7 @@ enum InvalidEvidence {
     ProviderMismatch,
     NativeSessionMismatch,
     LaunchProcessMismatch,
+    MissingSourceFile,
     WorkingDirectoryMismatch,
     StalePid,
     ReusedPid,
@@ -1191,6 +1578,7 @@ impl InvalidEvidence {
             Self::ProviderMismatch => "provider-mismatch",
             Self::NativeSessionMismatch => "native-id-mismatch",
             Self::LaunchProcessMismatch => "launch-process-mismatch",
+            Self::MissingSourceFile => "missing-source-file",
             Self::WorkingDirectoryMismatch => "working-directory-mismatch",
             Self::StalePid => "stale-pid",
             Self::ReusedPid => "reused-pid",
@@ -1204,18 +1592,11 @@ fn registration(
     working_directory: &Path,
     provider_process: ProcessIdentity,
 ) -> ManagedLaunchRegistration {
-    let resolution = mudi::project::resolve(Some(working_directory));
-    let project = resolution
-        .project
-        .expect("test working directory should resolve to a Project");
     ManagedLaunchRegistration {
         id: id.into(),
         status: ManagedLaunchStatus::Binding,
         provider,
         target: ManagedLaunchTarget {
-            project: project.identity,
-            project_label: project.label,
-            worktree_root: resolution.worktree.map(|worktree| worktree.root),
             working_directory: working_directory.to_path_buf(),
         },
         session_alias: "Managed work".into(),
@@ -1298,7 +1679,6 @@ fn observed_session(
             format: SourceFormat::JsonLines,
         },
         project: None,
-        worktree: None,
         cwd: Some(working_directory.to_string_lossy().into_owned()),
         latest_model: None,
         state: SessionState::Idle,

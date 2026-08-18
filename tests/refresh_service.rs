@@ -1,6 +1,6 @@
-use mudi::config::Config;
-use mudi::read_model::RefreshHealth;
-use mudi::refresh::RefreshService;
+use mudi::adapters::config::Config;
+use mudi::application::observation::read_model::RefreshHealth;
+use mudi::application::observation::refresh::RefreshService;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 

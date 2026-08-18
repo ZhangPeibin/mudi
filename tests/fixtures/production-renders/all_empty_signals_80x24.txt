@@ -1,4 +1,4 @@
-┌ Mudi | v0.1.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 1 ┐
+┌ Mudi | v2.0.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 4 ┐
                           ┌ RECENT SIGNALS 0 ───────┐┌ TASKS 0 ────────────────┐
                           │No recent Signals.       ││                         │
                           │                         ││                         │
@@ -7,18 +7,18 @@
                           │                         ││                         │
                           │                         ││                         │
                           └─────────────────────────┘└─────────────────────────┘
- PROJECT 1 ─────────── 5 OPEN  │ Session Workspace ─────────────────────────────
- ▾ mudi (7)                    │Session Claude Code / critical
-   ▾ main !2                   │Conversation unavailable.
-    > ✳ critical ↗     ! •  90%│
-      ⬡ x-shared ↗     ! •  40%│
-   ▾ warning                   │
+ PROJECT 4 ─────────── 5 OPEN  │ Session Workspace ─────────────────────────────
+ ▾ mudi (2)                    │Session Claude Code / critical
+  > ✳ critical ↗       ! •  90%│Conversation unavailable.
+    ⬡ x-shared ↗       ! •  40%│
+ ▾ mudi-warning (1)            │
+    ✳ -warning ↗       ! •  75%│
  DETAILS ──────────────────────│
  Title       critical          │
  Description N/A               │
  Context     [#########-] 90.0%│
  Attention   Crit Ctx · 90% +1 │
  Provider    Claude Code -> ...│
- Worktree    ...ode/mudi @ main│
+ Directory   ...xture/code/mudi│
 ───────────────────────────────┴────────────────────────────────────────────────
 j/k | Left/Right | Enter | e Edit | ? | q Quit watching · 0 sessions · 0 parsed

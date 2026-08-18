@@ -1,15 +1,15 @@
-use mudi::config::Config;
-use mudi::domain::{
-    ContextState, Provider, Session, SessionState, SourceFormat, SourceMetadata, Usage,
-};
-use mudi::handoff::{
+use mudi::adapters::config::Config;
+use mudi::adapters::providers::state::ProcessIdentity;
+use mudi::adapters::skills::handoff::ManagedHandoffSkills;
+use mudi::application::handoff::{
     CompletionNotice, CompletionNotifier, CurrentRunControl, CurrentRunObservation,
     DetachedWorkerLauncher, HandoffPaths, HandoffService, HandoffWorker, MacosCurrentRunControl,
     ProviderExecutables, WorkerLaunch, WorkerLauncher,
 };
-use mudi::handoff_skill::ManagedHandoffSkills;
-use mudi::providers::state::ProcessIdentity;
-use mudi::tasks::{OperationTaskState, TaskStore};
+use mudi::application::tasks::{OperationTaskState, TaskStore};
+use mudi::domain::{
+    ContextState, Provider, Session, SessionState, SourceFormat, SourceMetadata, Usage,
+};
 use rusqlite::Connection;
 use std::collections::VecDeque;
 use std::fs;
@@ -473,7 +473,6 @@ fn exited_session(source_path: PathBuf, cwd: PathBuf) -> Session {
             format: SourceFormat::JsonLines,
         },
         project: None,
-        worktree: None,
         cwd: Some(cwd.to_string_lossy().into_owned()),
         latest_model: None,
         state: SessionState::Exited,
@@ -2270,7 +2269,7 @@ fn copied_successor_command_preserves_adversarial_paths_and_arguments_exactly() 
         .run(&task.id, 20_000)
         .unwrap();
 
-    let command = mudi::successor::render_successor_command(&ready).unwrap();
+    let command = mudi::application::successor::render_successor_command(&ready).unwrap();
     let status = Command::new("/bin/sh")
         .args(["-c", &command])
         .status()
@@ -2325,7 +2324,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
     let mut missing = ready.clone();
     missing.successor_launch_plan = None;
     assert_eq!(
-        mudi::successor::render_successor_command(&missing)
+        mudi::application::successor::render_successor_command(&missing)
             .unwrap_err()
             .to_string(),
         "Ready Task has no Successor Launch Plan"
@@ -2338,7 +2337,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
         .unwrap()
         .artifact_path = temp.path().join("different.md");
     assert_eq!(
-        mudi::successor::render_successor_command(&mismatched)
+        mudi::application::successor::render_successor_command(&mismatched)
             .unwrap_err()
             .to_string(),
         "Successor Launch Plan does not match its Operation Task"
@@ -2352,7 +2351,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
         .arguments
         .push("; touch injected".into());
     assert_eq!(
-        mudi::successor::render_successor_command(&tampered)
+        mudi::application::successor::render_successor_command(&tampered)
             .unwrap_err()
             .to_string(),
         "Successor arguments do not match the Handoff Artifact"
@@ -2366,7 +2365,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
     plan.arguments.pop();
     plan.executable = PathBuf::from("/bin/sh");
     assert_eq!(
-        mudi::successor::render_successor_command(&substituted_executable)
+        mudi::application::successor::render_successor_command(&substituted_executable)
             .unwrap_err()
             .to_string(),
         "Successor Launch Plan does not match its Operation Task"
@@ -2393,7 +2392,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
 #[cfg(unix)]
 #[test]
 fn terminal_app_launches_the_foreground_helper_and_failure_preserves_the_ready_result() {
-    use mudi::successor::{MacosTerminalLauncher, TerminalLauncher};
+    use mudi::application::successor::{MacosTerminalLauncher, TerminalLauncher};
 
     let temp = TempDir::new("terminal-app-launcher");
     let source_path = temp.path().join("source.jsonl");
@@ -2490,7 +2489,7 @@ fn terminal_app_launches_the_foreground_helper_and_failure_preserves_the_ready_r
         metadata.failure_code.as_deref(),
         Some("terminal_app_launch_failed")
     );
-    assert!(mudi::successor::render_successor_command(&retained).is_ok());
+    assert!(mudi::application::successor::render_successor_command(&retained).is_ok());
 }
 
 #[cfg(unix)]
@@ -2676,18 +2675,20 @@ fn foreground_helper_links_claude_after_exact_pid_state_evidence_appears() {
         extra_dirs: Vec::new(),
     };
 
-    assert!(mudi::successor::run_successor_from_args_with_config(
-        [
-            "mudi".into(),
-            "--launch-successor".into(),
-            "--task-store".into(),
-            paths.task_store.as_os_str().to_owned(),
-            "--task-id".into(),
-            task.id.clone().into(),
-        ],
-        &config,
-    )
-    .unwrap());
+    assert!(
+        mudi::application::successor::run_successor_from_args_with_config(
+            [
+                "mudi".into(),
+                "--launch-successor".into(),
+                "--task-store".into(),
+                paths.task_store.as_os_str().to_owned(),
+                "--task-id".into(),
+                task.id.clone().into(),
+            ],
+            &config,
+        )
+        .unwrap()
+    );
     evidence_writer.join().unwrap();
 
     let linked = handoff.task(&task.id).unwrap().unwrap();
@@ -2771,18 +2772,20 @@ fn foreground_helper_links_codex_only_to_the_rollout_held_by_the_exact_process()
         extra_dirs: Vec::new(),
     };
 
-    assert!(mudi::successor::run_successor_from_args_with_config(
-        [
-            "mudi".into(),
-            "--launch-successor".into(),
-            "--task-store".into(),
-            paths.task_store.as_os_str().to_owned(),
-            "--task-id".into(),
-            task.id.clone().into(),
-        ],
-        &config,
-    )
-    .unwrap());
+    assert!(
+        mudi::application::successor::run_successor_from_args_with_config(
+            [
+                "mudi".into(),
+                "--launch-successor".into(),
+                "--task-store".into(),
+                paths.task_store.as_os_str().to_owned(),
+                "--task-id".into(),
+                task.id.clone().into(),
+            ],
+            &config,
+        )
+        .unwrap()
+    );
 
     let linked = handoff.task(&task.id).unwrap().unwrap();
     assert_eq!(linked.state, OperationTaskState::Ready);
@@ -2880,7 +2883,7 @@ fn concurrent_same_directory_claude_launches_link_each_task_by_its_own_process()
     };
     let launch = |task_id: String, config: Config, task_store: PathBuf| {
         std::thread::spawn(move || {
-            mudi::successor::run_successor_from_args_with_config(
+            mudi::application::successor::run_successor_from_args_with_config(
                 [
                     "mudi".into(),
                     "--launch-successor".into(),
@@ -2976,7 +2979,7 @@ fn concurrent_same_directory_codex_launches_link_each_task_by_its_held_rollout()
     };
     let launch = |task_id: String, config: Config, task_store: PathBuf| {
         std::thread::spawn(move || {
-            mudi::successor::run_successor_from_args_with_config(
+            mudi::application::successor::run_successor_from_args_with_config(
                 [
                     "mudi".into(),
                     "--launch-successor".into(),
@@ -3080,7 +3083,7 @@ fn foreground_helper_launch_failure_is_bounded_and_preserves_the_ready_result() 
         metadata.failure_code.as_deref(),
         Some("successor_provider_start_failed")
     );
-    assert!(mudi::successor::render_successor_command(&retained).is_ok());
+    assert!(mudi::application::successor::render_successor_command(&retained).is_ok());
 }
 
 #[test]
@@ -4162,7 +4165,7 @@ fn reconciliation_keeps_the_successor_executable_selected_at_authorization() {
             .map(|plan| &plan.executable),
         Some(&selected_codex)
     );
-    assert!(mudi::successor::render_successor_command(&ready).is_ok());
+    assert!(mudi::application::successor::render_successor_command(&ready).is_ok());
     std::thread::sleep(Duration::from_millis(1_100));
 }
 
@@ -5740,10 +5743,12 @@ fn deletion_requires_owner_only_artifact_root_and_task_directory() {
     assert!(root_error.to_string().contains("Artifact root"));
     assert!(artifact_path.is_file());
     let deleting = handoff.task(&task.id).unwrap().unwrap();
-    assert!(mudi::successor::render_successor_command(&deleting)
-        .unwrap_err()
-        .to_string()
-        .contains("being deleted"));
+    assert!(
+        mudi::application::successor::render_successor_command(&deleting)
+            .unwrap_err()
+            .to_string()
+            .contains("being deleted")
+    );
     assert!(handoff
         .acknowledge_task(&task.id, 30_500)
         .unwrap_err()

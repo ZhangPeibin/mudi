@@ -46,7 +46,7 @@ re-explaining the work or trusting an opaque chat summary. Before the next provi
 the developer can inspect a small, evidence-backed account of:
 
 - the intended outcome and constraints;
-- the working directory, Project, and Worktree;
+- the exact working directory and Project;
 - files and repository state changed during the work;
 - commands and checks actually run, with their observed result;
 - decisions, unresolved risks, and the next useful action; and
@@ -62,7 +62,7 @@ verifiable local evidence.
 
 | Capability | v2.0.0 position |
 |---|---|
-| Start a Codex CLI or Claude Code Managed Session in a selected Project / Worktree | Accepted |
+| Start a Codex CLI or Claude Code Managed Session in a selected Project directory | Accepted |
 | Persist local Title (Session Alias) and Description | Accepted |
 | Bind native Session ID, provider process, Current Run, and private tmux evidence conclusively | Accepted |
 | Inspect and attach to / detach from a Managed Session through an external terminal | Accepted |
@@ -110,8 +110,8 @@ without asking the developer to reconstruct the full history manually.
 The candidate checkpoint contains:
 
 - an objective and explicit constraints supplied or confirmed by the developer;
-- repository evidence available locally at checkpoint time, such as Project, Worktree,
-  branch, revision, diff status, changed-path list, and commands/checks run;
+- repository evidence available locally at checkpoint time, such as Project, exact working
+  directory, revision, diff status, changed-path list, and commands/checks run;
 - clearly labelled Agent-proposed decisions, unknowns, and next action; and
 - links to the source Session and any successor relationship.
 
@@ -160,7 +160,7 @@ The continuity surface should make it difficult to accidentally continue the sam
 two conflicting places. At minimum it must surface:
 
 - whether the source Session has a validated Open Current Run;
-- Shared Worktree Risk already observed by Mudi; and
+- Shared Project Risk already observed by Mudi; and
 - whether the requested continuation is a same-Session resume or a separate Successor.
 
 It must not silently resume a Session alongside a validated Open Current Run, overwrite a
@@ -184,7 +184,7 @@ a second project-management hierarchy.
 
 ## Candidate user journey
 
-1. The developer chooses a Project and Worktree, then explicitly starts a Managed Session
+1. The developer chooses a Project directory, then explicitly starts a Managed Session
    through the v2.0.0 flow.
 2. Mudi records only the metadata and conclusive launch evidence allowed by the
    current privacy and control rules. The developer works in the Provider terminal.
@@ -262,8 +262,6 @@ These are discussion targets, not launch criteria yet:
   Session Core scope baseline.
 - [`feature/v2.0.1/README.md`](../../../../feature/v2.0.1/README.md) - accepted Work
   Continuity scope baseline.
-- [`docs/legacy/v2/v2.x-exploration.md`](../../../legacy/v2/v2.x-exploration.md) - broader
-  product direction and deferred layers.
 - [`CONTEXT.md`](../../../../CONTEXT.md) - authoritative domain vocabulary and privacy rules.
 - [`ADR 0009`](../../../adr/0009-private-tmux-for-managed-current-runs.md) - private tmux
   runtime boundary.

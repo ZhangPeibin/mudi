@@ -91,8 +91,8 @@ None.
 
 ## Evidence
 
-- `src/providers/codex.rs` - current New and Resume native arguments.
-- `src/managed_sessions.rs` - Managed launch authorization and private tmux boundary.
+- `src/adapters/providers/codex.rs` - current New and Resume native arguments.
+- `src/application/managed_sessions.rs` - Managed launch authorization and private tmux boundary.
 - `feature/v2.0.0/README.md` - accepted Managed Session Core scope.
 - `docs/feature/v2.0.0/managed-session-core/discussion.md` - existing authorization decisions.
 - Local `codex --help`, inspected 2026-08-11 - supported sandbox and approval policies and the

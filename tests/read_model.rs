@@ -1,4 +1,4 @@
-use mudi::read_model::{
+use mudi::application::observation::read_model::{
     InMemoryReadModelCache, ReadModelCache, RefreshDiagnostic, RefreshHealth, RefreshSnapshot,
 };
 

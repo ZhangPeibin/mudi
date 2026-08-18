@@ -1,17 +1,17 @@
-use mudi::config::Config;
-use mudi::domain::{ProjectIdentity, Provider, SourceFormat, SourceMetadata};
-use mudi::managed_sessions::{
+use mudi::adapters::config::Config;
+use mudi::adapters::providers::state::ProcessIdentity;
+use mudi::adapters::providers::{ProviderBindingEvidence, ProviderExecutables};
+use mudi::application::managed_sessions::{
     BindingOutcome, BindingReceipt, EvidenceBinder, ManagedCurrentRunEvidence,
     ManagedCurrentRunRecord, ManagedLaunchCleanup, ManagedLaunchEvidence,
     ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget,
     ManagedSessionRecord, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
     ProcessEvidence, ProviderNewCommand, ProviderProcessObservation,
 };
-use mudi::providers::state::ProcessIdentity;
-use mudi::providers::{ProviderBindingEvidence, ProviderExecutables};
-use mudi::read_model::RefreshHealth;
-use mudi::refresh::RefreshService;
-use mudi::session_labels::SessionLabels;
+use mudi::application::observation::read_model::RefreshHealth;
+use mudi::application::observation::refresh::RefreshService;
+use mudi::application::session_labels::SessionLabels;
+use mudi::domain::{Provider, SourceFormat, SourceMetadata};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -57,6 +57,28 @@ fn managed_launch_persistence_records_initializer_without_provider_command_conte
     assert!(!columns
         .iter()
         .any(|column| column == "provider_arguments_json"));
+    assert_eq!(
+        columns,
+        [
+            "registration_id",
+            "status",
+            "provider",
+            "working_directory",
+            "session_alias",
+            "description",
+            "tmux_socket_name",
+            "tmux_session_name",
+            "created_at_ms",
+            "launched_at_ms",
+            "tmux_pane_id",
+            "provider_pid",
+            "provider_started_at_ms",
+            "terminal_opened_at_ms",
+            "terminal_error",
+            "binding_error",
+            "binding_initializer",
+        ]
+    );
 
     let persisted_bytes = fs::read(&store_path).unwrap();
     let persisted_text = String::from_utf8_lossy(&persisted_bytes);
@@ -68,10 +90,10 @@ fn managed_launch_persistence_records_initializer_without_provider_command_conte
 fn legacy_store_migration_preserves_management_but_erases_persisted_commands() {
     let temp = TempDir::new("legacy-migration");
     let store_path = temp.path().join("managed.db");
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let source = temp.path().join("source.jsonl");
     fs::write(&source, "{}\n").unwrap();
-    let mut registration = registration("launch-legacy", &worktree);
+    let mut registration = registration("launch-legacy", &working_directory);
     registration.session_alias = "Legacy alias".into();
     registration.description = Some("Legacy description".into());
     let mut store = ManagedLaunchStore::open(&store_path).unwrap();
@@ -79,7 +101,7 @@ fn legacy_store_migration_preserves_management_but_erases_persisted_commands() {
         &mut store,
         &registration,
         &source,
-        &worktree,
+        &working_directory,
         "native-legacy",
     );
     drop(store);
@@ -100,11 +122,11 @@ fn legacy_store_migration_preserves_management_but_erases_persisted_commands() {
     connection
         .execute(
             "INSERT INTO managed_launch_registrations (
-                registration_id, status, provider, project_kind, project_path,
-                project_label, working_directory, session_alias, description,
+                registration_id, status, provider, working_directory,
+                session_alias, description,
                 tmux_socket_name, tmux_session_name, created_at_ms,
                 binding_initializer, provider_executable, provider_arguments_json
-             ) VALUES (?1, 'needs_review', 'codex', 'canonical_cwd', ?2, 'legacy', ?2,
+             ) VALUES (?1, 'needs_review', 'codex', ?2,
                        'Legacy pending alias', 'Legacy pending description',
                        'mudi-legacy-pending', 'managed', 60000, 1, ?3, ?4)",
             rusqlite::params![
@@ -147,6 +169,29 @@ fn legacy_store_migration_preserves_management_but_erases_persisted_commands() {
     assert!(pending.provider_command.executable.as_os_str().is_empty());
     assert!(pending.provider_command.arguments.is_empty());
     drop(migrated);
+
+    let connection = rusqlite::Connection::open(&store_path).unwrap();
+    let mut statement = connection
+        .prepare("PRAGMA table_info(managed_sessions)")
+        .unwrap();
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        [
+            "provider",
+            "native_session_id",
+            "working_directory",
+            "session_alias",
+            "description",
+            "binding_receipt_id",
+        ]
+    );
+    drop(statement);
+    drop(connection);
 
     for entry in fs::read_dir(temp.path()).unwrap() {
         let path = entry.unwrap().path();
@@ -281,7 +326,7 @@ fn startup_refresh_preserves_a_preexisting_uncertain_launch_for_review() {
 fn verified_managed_relationship_and_local_metadata_survive_restart() {
     let temp = TempDir::new("verified-recovery");
     let config = temp.config();
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let source_dir = config.claude_dir.join("projects/mudi");
     fs::create_dir_all(&source_dir).unwrap();
     let source = source_dir.join("native-session.jsonl");
@@ -294,7 +339,7 @@ fn verified_managed_relationship_and_local_metadata_survive_restart() {
             serde_json::json!({
                 "type": "user",
                 "sessionId": "native-session",
-                "cwd": worktree,
+                "cwd": working_directory,
                 "message": {"role": "user", "content": provider_content}
             })
         ),
@@ -304,7 +349,7 @@ fn verified_managed_relationship_and_local_metadata_survive_restart() {
         pid: 42,
         started_at_ms: 41_000,
     };
-    let mut registration = registration("launch-verified", &worktree);
+    let mut registration = registration("launch-verified", &working_directory);
     registration.provider = Provider::ClaudeCode;
     registration.session_alias = "Investigate restart".into();
     registration.description = Some("Keep the exact recovery context".into());
@@ -332,7 +377,7 @@ fn verified_managed_relationship_and_local_metadata_survive_restart() {
                         path: source.canonicalize().unwrap(),
                         format: SourceFormat::JsonLines,
                     },
-                    working_directory: worktree.clone(),
+                    working_directory: working_directory.clone(),
                     launch_process: process,
                     provider_process: process,
                 }),
@@ -462,17 +507,17 @@ fn corrupted_persisted_identity_stays_unassociated_and_degrades_startup() {
 fn stale_managed_current_run_is_not_reassociated_or_rewritten_on_restart() {
     let temp = TempDir::new("stale-current-run");
     let config = temp.config();
-    let worktree = temp.directory("worktree");
+    let working_directory = temp.directory("working_directory");
     let source = temp.path().join("source.jsonl");
     fs::write(&source, "{}\n").unwrap();
-    let registration = registration("launch-stale-run", &worktree);
+    let registration = registration("launch-stale-run", &working_directory);
     let store_path = config.managed_launch_store_path();
     let mut store = ManagedLaunchStore::open(&store_path).unwrap();
     let opaque_ref = bind_registration(
         &mut store,
         &registration,
         &source,
-        &worktree,
+        &working_directory,
         "native-stale",
     );
     let before = store
@@ -504,7 +549,7 @@ struct RecordingLaunchBroker {
     cancelled: Arc<Mutex<Vec<String>>>,
 }
 
-impl mudi::managed_sessions::ManagedLaunchBroker for RecordingLaunchBroker {
+impl mudi::application::managed_sessions::ManagedLaunchBroker for RecordingLaunchBroker {
     fn launch(
         &mut self,
         registration: &ManagedLaunchRegistration,
@@ -654,9 +699,6 @@ fn registration(id: &str, working_directory: &Path) -> ManagedLaunchRegistration
         status: ManagedLaunchStatus::Binding,
         provider: Provider::CodexCli,
         target: ManagedLaunchTarget {
-            project: ProjectIdentity::CanonicalCwd(working_directory.to_path_buf()),
-            project_label: "mudi".into(),
-            worktree_root: None,
             working_directory: working_directory.to_path_buf(),
         },
         session_alias: "Restart work".into(),

@@ -11,7 +11,7 @@ Mudi is a single-context repository.
 ## Vocabulary
 
 Use domain terms exactly as defined in `CONTEXT.md`, including Session,
-Current Run, Project, Worktree, Current Context, Attention Condition, and
+Current Run, Project, Current Context, Attention Condition, and
 Recent Signal.
 
 Do not replace terms with synonyms that `CONTEXT.md` explicitly avoids.

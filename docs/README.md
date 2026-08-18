@@ -35,7 +35,3 @@ not change an accepted version scope on their own.
 
 - [`research/`](./research/) - fixed-version technical research; it informs design but is
   not product or architecture authority.
-- [`legacy/v1/`](./legacy/v1/) - retained local v1 specifications, plans, and PRD records.
-  They are historical references; formal PRDs now live in GitHub Issues.
-- [`legacy/v2/`](./legacy/v2/) - retained v2.x exploration history. Accepted v2 version
-  scope remains under `feature/`.

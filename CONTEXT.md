@@ -17,8 +17,7 @@ Session ID**. Sessions are **never merged across providers** — a Claude sessio
 Codex session are always distinct, even if related in time or directory.
 
 - `Session Provider` ∈ { ClaudeCode, CodexCli }.
-- A Session belongs to one Project and, for a Git Project, one Worktree according to its
-  working directory.
+- A Session belongs to one Project resolved from its working directory.
 - A session lists its **latest** model. Mixed-model sessions split usage in the detail view.
 
 ## Session Provider
@@ -53,9 +52,12 @@ _Avoid:_ Summary, Intent, Current Task, when referring to Session display identi
 ## Session Alias
 
 A Mudi-owned Session Label explicitly assigned by the user to one Session, including
-as the Title supplied when creating a Managed Session. It is a local nickname and never
-renames or modifies the provider-native Session. It remains associated across Current Runs,
-Mudi restarts, and temporary source-log absence until the user explicitly clears it.
+as the Title supplied through New. Once conclusive Provider source and launched-process
+evidence associates that Title with one Session Provider and native Session ID, the Alias
+belongs to that Session independently of Managed Binding or its outcome. Launch reconciliation
+never replaces an existing Alias. It is a local nickname and never renames or modifies the
+provider-native Session. It remains associated across Current Runs, Mudi restarts, and temporary
+source-log absence until the user explicitly clears it.
 
 _Avoid:_ Provider title, Project label, Current Task.
 
@@ -86,10 +88,11 @@ _Avoid:_ Session ID, when only the shortened display reference is shown.
 
 ## Project
 
-A local repository-scale unit of related coding work. Git working directories with the
-same canonical Git common directory belong to one Project; independent clones remain
-distinct even when they use the same remote. A non-Git canonical working directory is a
-standalone Project.
+A canonical local directory that groups related Sessions. For Git, the Project identity is
+the canonical Git top-level directory. For non-Git, it is the canonical working directory.
+Independent clones and linked Git working directories remain distinct Projects even when
+they share repository metadata or a remote. An unavailable recorded absolute working
+directory remains the best available Project identity for historical observation.
 
 The display label uses the working directory or repository basename and adds parent-path
 context when visible labels collide.
@@ -104,13 +107,6 @@ discovered Project appears first in its Current or Older section. A restart rebu
 these presentation ranks from its new initial snapshot.
 
 _Avoid:_ Remote repository, project label, when referring to Project identity.
-
-## Worktree
-
-A specific Git working copy within a Project, identified by its canonical Git top-level
-directory. Linked Worktrees share a Project but remain distinct working copies.
-
-_Avoid:_ Project, repository, branch.
 
 ## Current Run
 
@@ -132,6 +128,8 @@ _Avoid:_ Managed Session, tmux Session.
 A durable local record of one explicitly authorized request to start a Provider CLI before
 that request has established a Session or Current Run. It carries the requested target and
 launch evidence until it receives a Binding Receipt or reaches a terminal launch outcome.
+Conclusive launch identity may associate its requested Title with a Session Alias before
+Managed Binding finishes; that association establishes no management provenance or authority.
 
 _Avoid:_ Managed Run Registration, pending Session, launch attempt.
 
@@ -139,7 +137,8 @@ _Avoid:_ Managed Run Registration, pending Session, launch attempt.
 
 The conclusive evidence record associating one Managed Launch Registration with one native
 Session, Current Run, and provider process. Issuing it atomically establishes the Managed
-Session and Managed Current Run relationship.
+Session and Managed Current Run relationship. A Binding Receipt is not required for the
+Registration's Title to become the conclusively identified Session's Alias.
 
 _Avoid:_ tmux binding, guessed association, launch success message.
 
@@ -155,7 +154,8 @@ _Avoid:_ First Prompt, Prompt Manager, automatic task.
 
 A Managed Launch Registration status in which a provider process may exist but the required
 binding evidence is incomplete or contradictory. It establishes neither a Session nor control
-authority and remains available for user inspection.
+authority and remains available for user inspection. When launch identity was already
+conclusive, the identified Session keeps its independently associated Alias.
 
 _Avoid:_ Managed Current Run, Operation Task State, retryable failure.
 
@@ -228,7 +228,7 @@ Result for a future Successor Session. It is complete when the result is ready; 
 the successor is a separate user choice. For an Open source Session, its declared workflow
 may include ending the Current Run only with explicit authorization; it waits for Idle,
 revalidates the target process, and never force-kills a Busy or unverified process. Handoff
-generation is strictly read-only with respect to the source Project and Worktree. Context
+generation is strictly read-only with respect to the source Project. Context
 Alerts may recommend a Handoff but never determine its eligibility or authorization.
 
 _Avoid:_ Task, automatic handoff.
@@ -350,18 +350,18 @@ Notify once when crossing each threshold. Reset notification state when context 
 below the threshold (including after Compaction). Only Busy/Idle sessions contribute to
 `Context Alerts`; exited historical sessions never do.
 
-## Shared Worktree Risk
+## Shared Project Risk
 
 A structural concurrency risk that exists when two or more distinct Open Sessions resolve
-to the same writable Git worktree. It indicates possible interference in one working copy,
-not an observed file-level or Git merge conflict. It has Warning severity and does not
-become Critical solely because more Sessions share the worktree.
+to the same Project. It applies equally to Git and non-Git Projects and indicates possible
+interference in one directory, not an observed file-level or Git merge conflict. It has
+Warning severity and does not become Critical solely because more Sessions share the Project.
 
-_Avoid:_ Worktree conflict, candidate conflict.
+_Avoid:_ Project conflict, candidate conflict.
 
 ## Attention Condition
 
-An evidence-backed current condition on a Session or worktree that may warrant user
+An evidence-backed current condition on a Session or Project that may warrant user
 inspection. An Idle Session is a neutral Attention Condition; Attention Conditions are not
 Alerts unless they carry Warning or Critical severity.
 
@@ -369,7 +369,7 @@ _Avoid:_ Attention state, when referring to a condition independent of Session l
 
 ## Recent Signal
 
-A deduplicated, metadata-only record that a meaningful Session, Context, or Worktree
+A deduplicated, metadata-only record that a meaningful Session, Context, or Project
 condition changed recently. A Recent Signal describes a transition, not current state and
 never provider conversation content.
 

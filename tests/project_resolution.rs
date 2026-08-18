@@ -6,13 +6,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use mudi::collector::{build_sessions, build_sessions_with_resolver, ProjectResolverCache};
-use mudi::config::Config;
+use mudi::adapters::config::Config;
+use mudi::adapters::models::ModelCatalog;
+use mudi::adapters::persistence::index::{Fingerprint, Index};
+use mudi::adapters::project::{resolve, resolve_selected_directory};
+use mudi::adapters::providers::ParsedSession;
+use mudi::application::observation::collector::{
+    build_sessions, build_sessions_with_resolver, ProjectResolverCache,
+};
 use mudi::domain::{ContextState, ProjectIdentity, Provider, Usage};
-use mudi::index::{Fingerprint, Index};
-use mudi::models::ModelCatalog;
-use mudi::project::{resolve, resolve_selected_directory};
-use mudi::providers::ParsedSession;
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -89,7 +91,7 @@ fn parsed_session(id: &str, cwd: &Path) -> ParsedSession {
 }
 
 #[test]
-fn linked_worktrees_share_project_identity_and_keep_worktree_metadata() {
+fn linked_git_working_directories_are_independent_projects() {
     let temp = TempDir::new();
     let repository = temp.path().join("mudi");
     let linked = temp.path().join("mudi-feature");
@@ -108,22 +110,22 @@ fn linked_worktrees_share_project_identity_and_keep_worktree_metadata() {
     let main = resolve(Some(&repository));
     let feature = resolve(Some(&linked));
 
-    assert_eq!(
+    assert_ne!(
         main.project.as_ref().unwrap().identity,
         feature.project.as_ref().unwrap().identity
     );
-
-    let main_worktree = main.worktree.unwrap();
-    let feature_worktree = feature.worktree.unwrap();
-    assert_ne!(main_worktree.root, feature_worktree.root);
-    assert_eq!(main_worktree.branch.as_deref(), Some("main"));
-    assert_eq!(feature_worktree.branch.as_deref(), Some("feature/identity"));
-    assert!(main_worktree.writable);
-    assert!(feature_worktree.writable);
+    assert_eq!(
+        main.project.as_ref().unwrap().identity,
+        ProjectIdentity::new(fs::canonicalize(&repository).unwrap())
+    );
+    assert_eq!(
+        feature.project.as_ref().unwrap().identity,
+        ProjectIdentity::new(fs::canonicalize(&linked).unwrap())
+    );
 }
 
 #[test]
-fn selected_git_subdirectory_resolves_to_canonical_project_and_worktree() {
+fn selected_git_subdirectory_resolves_project_root_and_preserves_working_directory() {
     let temp = TempDir::new();
     let repository = temp.path().join("mudi");
     let nested = repository.join("src/domain");
@@ -134,18 +136,18 @@ fn selected_git_subdirectory_resolves_to_canonical_project_and_worktree() {
 
     assert_eq!(
         resolved.project.identity,
-        ProjectIdentity::GitCommonDir(fs::canonicalize(repository.join(".git")).unwrap())
+        ProjectIdentity::new(fs::canonicalize(&repository).unwrap())
     );
     assert_eq!(
-        resolved.worktree.unwrap().root,
-        fs::canonicalize(repository).unwrap()
+        resolved.working_directory,
+        fs::canonicalize(nested).unwrap()
     );
 }
 
 #[test]
 fn selected_directory_with_broken_git_metadata_is_rejected_as_ambiguous() {
     let temp = TempDir::new();
-    let directory = temp.path().join("broken-worktree");
+    let directory = temp.path().join("broken-git-directory");
     fs::create_dir(&directory).unwrap();
     fs::write(directory.join(".git"), "gitdir: ../missing-git-dir\n").unwrap();
 
@@ -166,12 +168,8 @@ fn selected_non_git_directory_becomes_its_own_canonical_project() {
     let resolved = resolve_selected_directory(&directory).unwrap();
     let canonical = fs::canonicalize(&directory).unwrap();
 
-    assert_eq!(
-        resolved.project.identity,
-        ProjectIdentity::CanonicalCwd(canonical)
-    );
+    assert_eq!(resolved.project.identity, ProjectIdentity::new(canonical));
     assert_eq!(resolved.project.label, "notes");
-    assert!(resolved.worktree.is_none());
 }
 
 #[test]
@@ -205,8 +203,25 @@ fn selected_unreadable_directory_is_rejected() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn non_git_directory_is_a_standalone_project_without_a_worktree() {
+fn unreadable_recorded_absolute_cwd_remains_a_project() {
+    let temp = TempDir::new();
+    let directory = temp.path().join("unreadable-observed-cwd");
+    fs::create_dir(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let resolved = resolve(Some(&directory));
+
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        resolved.project.unwrap().identity,
+        ProjectIdentity::new(directory)
+    );
+}
+
+#[test]
+fn non_git_directory_is_a_standalone_project() {
     let temp = TempDir::new();
     let notes = temp.path().join("research-notes");
     fs::create_dir_all(&notes).unwrap();
@@ -215,9 +230,8 @@ fn non_git_directory_is_a_standalone_project_without_a_worktree() {
 
     assert_eq!(
         resolved.project.unwrap().identity,
-        ProjectIdentity::CanonicalCwd(fs::canonicalize(&notes).unwrap())
+        ProjectIdentity::new(fs::canonicalize(&notes).unwrap())
     );
-    assert!(resolved.worktree.is_none());
 }
 
 #[test]
@@ -249,14 +263,16 @@ fn independent_clones_remain_distinct_projects_with_the_same_remote() {
 }
 
 #[test]
-fn unavailable_cwd_does_not_invent_project_or_worktree_identity() {
+fn unavailable_recorded_absolute_cwd_remains_a_project() {
     let temp = TempDir::new();
     let missing = temp.path().join("does-not-exist");
 
     let resolved = resolve(Some(&missing));
 
-    assert!(resolved.project.is_none());
-    assert!(resolved.worktree.is_none());
+    assert_eq!(
+        resolved.project.unwrap().identity,
+        ProjectIdentity::new(missing)
+    );
 }
 
 #[test]
@@ -275,10 +291,6 @@ fn symlink_and_nested_path_spellings_resolve_to_the_same_identities() {
     assert_eq!(
         direct.project.unwrap().identity,
         through_alias.project.unwrap().identity
-    );
-    assert_eq!(
-        direct.worktree.unwrap().root,
-        through_alias.worktree.unwrap().root
     );
 }
 
@@ -352,19 +364,16 @@ fn snapshot_carries_resolved_identity_and_disambiguates_distinct_projects() {
     assert_eq!(first_b.project.as_ref().unwrap().label, "first/mudi");
     assert_eq!(second.project.as_ref().unwrap().label, "second/mudi");
     assert_eq!(
-        first_a.worktree.as_ref().unwrap().root,
+        first_a.project.as_ref().unwrap().identity.display_path(),
         fs::canonicalize(&first).unwrap()
-    );
-    assert_eq!(
-        first_a.worktree.as_ref().unwrap().branch.as_deref(),
-        Some("main")
     );
 }
 
 #[test]
-fn project_resolution_is_cached_until_the_cwd_leaves_source_evidence() {
+fn project_resolution_observes_git_state_changes_on_each_refresh() {
     let temp = TempDir::new();
-    let working_directory = temp.path().join("cached-project");
+    let project_directory = temp.path().join("cached-project");
+    let working_directory = project_directory.join("nested");
     fs::create_dir_all(&working_directory).unwrap();
     let source_path = temp.path().join("cached-session.jsonl");
     let mut index = Index::open_in_memory().unwrap();
@@ -385,28 +394,40 @@ fn project_resolution_is_cached_until_the_cwd_leaves_source_evidence() {
         extra_dirs: vec![],
     };
     let models = ModelCatalog::load(None);
-    let mut resolver = ProjectResolverCache::default();
+    let mut resolver = ProjectResolverCache;
 
     let first = build_sessions_with_resolver(&cfg, &index, &models, &mut resolver).unwrap();
-    assert!(matches!(
-        first.sessions[0].project.as_ref().unwrap().identity,
-        ProjectIdentity::CanonicalCwd(_)
-    ));
+    assert_eq!(
+        first.sessions[0]
+            .project
+            .as_ref()
+            .unwrap()
+            .identity
+            .display_path(),
+        fs::canonicalize(&working_directory).unwrap()
+    );
 
-    repository_with_commit(&working_directory);
-    let still_cached = build_sessions_with_resolver(&cfg, &index, &models, &mut resolver).unwrap();
-    assert!(matches!(
-        still_cached.sessions[0].project.as_ref().unwrap().identity,
-        ProjectIdentity::CanonicalCwd(_)
-    ));
+    repository_with_commit(&project_directory);
+    let initialized = build_sessions_with_resolver(&cfg, &index, &models, &mut resolver).unwrap();
+    assert_eq!(
+        initialized.sessions[0]
+            .project
+            .as_ref()
+            .unwrap()
+            .identity
+            .display_path(),
+        fs::canonicalize(&project_directory).unwrap()
+    );
 
-    let empty_index = Index::open_in_memory().unwrap();
-    let absent = build_sessions_with_resolver(&cfg, &empty_index, &models, &mut resolver).unwrap();
-    assert!(absent.sessions.is_empty());
-
-    let reappeared = build_sessions_with_resolver(&cfg, &index, &models, &mut resolver).unwrap();
-    assert!(matches!(
-        reappeared.sessions[0].project.as_ref().unwrap().identity,
-        ProjectIdentity::GitCommonDir(_)
-    ));
+    fs::remove_dir_all(project_directory.join(".git")).unwrap();
+    let removed = build_sessions_with_resolver(&cfg, &index, &models, &mut resolver).unwrap();
+    assert_eq!(
+        removed.sessions[0]
+            .project
+            .as_ref()
+            .unwrap()
+            .identity
+            .display_path(),
+        fs::canonicalize(&working_directory).unwrap()
+    );
 }

@@ -1,18 +1,18 @@
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mudi::app::Snapshot;
-use mudi::clipboard::Clipboard;
-use mudi::collector::build_sessions;
-use mudi::config::Config;
+use mudi::adapters::config::Config;
+use mudi::adapters::macos::clipboard::Clipboard;
+use mudi::adapters::models::ModelCatalog;
+use mudi::adapters::persistence::index::{Fingerprint, Index};
+use mudi::adapters::providers::ParsedSession;
+use mudi::application::observation::collector::build_sessions;
 use mudi::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceFormat,
-    SourceMetadata, Usage, Worktree,
+    SourceMetadata, Usage,
 };
-use mudi::index::{Fingerprint, Index};
-use mudi::models::ModelCatalog;
-use mudi::providers::ParsedSession;
-use mudi::ui::{draw, Ui, UiAction};
+use mudi::presentation::app::Snapshot;
+use mudi::presentation::tui::{draw, Ui, UiAction};
 use ratatui::backend::TestBackend;
 use ratatui::style::{Modifier, Style};
 use ratatui::Terminal;
@@ -34,7 +34,7 @@ impl Clipboard for RecordingClipboard {
 
 fn session_with_metadata(
     source_path: &str,
-    worktree_path: Option<&str>,
+    project_path: Option<&str>,
     cwd: Option<&str>,
     native_id: &str,
 ) -> Session {
@@ -47,13 +47,10 @@ fn session_with_metadata(
             format: SourceFormat::JsonLines,
         },
         project: Some(Project {
-            identity: ProjectIdentity::CanonicalCwd(PathBuf::from("/workspace/mudi")),
+            identity: ProjectIdentity::new(PathBuf::from(
+                project_path.unwrap_or("/workspace/mudi"),
+            )),
             label: "mudi".into(),
-        }),
-        worktree: worktree_path.map(|root| Worktree {
-            root: root.into(),
-            branch: Some("feature/source-metadata".into()),
-            writable: true,
         }),
         cwd: cwd.map(str::to_string),
         latest_model: None,
@@ -83,9 +80,10 @@ fn render(ui: &Ui, snapshot: &Snapshot, width: u16, height: u16) -> String {
         .backend()
         .buffer()
         .content()
-        .iter()
-        .map(|cell| cell.symbol())
-        .collect()
+        .chunks(width as usize)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn rendered_style_at(ui: &Ui, snapshot: &Snapshot, text: &str) -> Style {
@@ -154,13 +152,13 @@ fn indexed_source_metadata_reaches_the_normalized_session() {
 #[test]
 fn detail_displays_complete_local_source_metadata_without_shortening() {
     let source_path = "/Users/example/.claude/projects/-Users-example-code-mudi/a-very-long-source-directory/native-session-123.jsonl";
-    let worktree_path = "/Users/example/code/mudi-worktrees/a-very-long-feature-worktree";
-    let cwd = "/Users/example/code/mudi-worktrees/a-very-long-feature-worktree/crates/mudi-ui";
+    let project_path = "/Users/example/code/mudi-project";
+    let cwd = "/Users/example/code/mudi-project/crates/mudi-ui";
     let native_id = "native-session-123-with-a-complete-provider-identifier";
     let snapshot = Snapshot {
         sessions: vec![session_with_metadata(
             source_path,
-            Some(worktree_path),
+            Some(project_path),
             Some(cwd),
             native_id,
         )],
@@ -170,13 +168,14 @@ fn detail_displays_complete_local_source_metadata_without_shortening() {
     let ui = open_detail(&snapshot);
     let rendered = render(&ui, &snapshot, 80, 40);
     let without_layout_whitespace: String = rendered
-        .chars()
+        .lines()
+        .flat_map(|line| line.chars().skip(8).take(64))
         .filter(|character| {
             !character.is_whitespace() && !matches!(character, '│' | '┌' | '┐' | '└' | '┘' | '─')
         })
         .collect();
 
-    for expected in [source_path, worktree_path, cwd, native_id, "JSONL"] {
+    for expected in [source_path, project_path, cwd, native_id, "JSONL"] {
         assert!(
             without_layout_whitespace.contains(expected),
             "Detail should display the complete value {expected:?}\n{rendered}"

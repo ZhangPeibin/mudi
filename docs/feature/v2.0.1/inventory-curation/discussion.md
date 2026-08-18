@@ -26,7 +26,7 @@ was hidden by mistake.
   `/private/var/folders` are excluded as system-temporary work.
 - A Project is Current when it has an Open Session or its newest Session is less than seven
   days old. Other Projects are grouped under the collapsed Older Projects section.
-- Within a visible Project or Worktree, Open Sessions are direct rows and Exited Sessions
+- Within a visible Project, Open Sessions are direct rows and Exited Sessions
   are grouped into Recent and Older disclosures.
 - The inspected local index contained 326 Sessions across 48 distinct working directories:
   148 Recent, 178 Older, and only 16 covered by the current system-temporary exclusion.
@@ -72,8 +72,8 @@ was hidden by mistake.
   selected Session.
 - Both entry points open the same hidden-inventory management view. That view presents all
   hidden Sessions using a Project Tree hierarchy rather than a flat list.
-- Hidden Tree does not reproduce Recent or Older disclosures. Within each Project and
-  Worktree, hidden Sessions are direct rows sorted by latest activity, newest first.
+- Hidden Tree does not reproduce Recent or Older disclosures. Within each Project,
+  hidden Sessions are direct rows sorted by latest activity, newest first.
 - Hidden Tree opens with every Project collapsed after Mudi startup. Up and Down move
   selection; Enter toggles the selected Project open or closed. Left and Right are not part
   of this view. Expansion state may persist only for the current application run and resets
@@ -86,7 +86,7 @@ was hidden by mistake.
   first successful Hide and displays the hidden count.
 - In the normal Project Tree, uppercase `H` requests Hide for the selected Project or
   Session. Project Hide confirms the number of Sessions affected; Session Hide confirms
-  the selected Title and Provider. Worktree rows do not expose Hide.
+  the selected Title and Provider.
 - Hide is available only for Exited Sessions. An Open Session remains unchanged and receives
   a brief `Open Session cannot be hidden` notice. Project Hide targets only its currently
   observed Exited Sessions and its confirmation separately reports the number to hide and
@@ -104,7 +104,6 @@ was hidden by mistake.
 - In the Hidden Tree, `u` removes the selected Session from Hide and `d` requests confirmed
   permanent deletion from Mudi inventory. On a Project row these actions apply in
   bulk to every currently hidden Session in that Project and disclose the affected count.
-  Worktree rows remain structural and expose neither action.
 - Esc closes the Hidden Tree and restores the exact originating Overview selection.
 - Hidden Exited Sessions are absent from the normal Overview Project Tree. The same Open
   override applies there. Hidden Tree is the only inventory that shows hidden Exited Sessions.
@@ -114,7 +113,7 @@ was hidden by mistake.
   remain intact.
 - Session-scoped Recent Signals are hidden when their Session is hidden and Exited. They may
   reappear after Remove from Hide only while still retained by the existing five-Signal
-  process-lifetime policy. Open override makes applicable Signals visible. Shared Worktree
+  process-lifetime policy. Open override makes applicable Signals visible. Shared Project
   Risk remains based on Open Sessions and is never suppressed by historical hiding.
 - Each durable curation record is keyed only by Provider plus native Session ID and has one
   disposition: Hidden or Permanently Excluded. No Project-level curation record is stored.
@@ -150,7 +149,7 @@ was hidden by mistake.
   metadata store must disable curation edits and report degradation rather than guessing
   visibility or overwriting user metadata.
 - Visibility must not silently grant or remove control authority over a Managed Session.
-- Open Sessions and Shared Worktree Risk may require safety treatment distinct from Exited
+- Open Sessions and Shared Project Risk may require safety treatment distinct from Exited
   historical inventory.
 - Adding this capability to v2.0.1 changes an accepted version boundary and must be made
   explicit before delivery.
@@ -171,20 +170,20 @@ was hidden by mistake.
 - Empty hidden inventory has no Session Detail entry; global `h` reports a brief empty-state
   notice instead of opening Hidden Tree.
 - Uppercase `H` is the normal-Tree Hide command for Project and Session selections. It is
-  confirmation-gated, and Worktree is not a hideable scope.
+  confirmation-gated.
 - Open Sessions cannot be hidden. Project bulk Hide skips Open Sessions and discloses both
   affected Exited and retained Open counts before authorization.
 - Hidden Tree uses `u` for Remove from Hide and `d` for confirmation-gated permanent
   Mudi deletion. Project selection applies either operation to its current hidden
-  Sessions as a disclosed bulk action; Worktree remains structural.
+  Sessions as a disclosed bulk action.
 - Esc from Hidden Tree restores the originating Overview selection.
 - Hide applies consistently to the normal Overview inventory. Hidden Exited Sessions appear
   only in Hidden Tree; a validated Open override surfaces them in Overview.
 - Overview Project, Session, and Usage totals exclude hidden Exited Sessions so displayed
   summaries match the visible inventory. Hidden Tree has separate counts.
 - Recent Signals follow visible inventory for hidden Exited Sessions. Open lifecycle and
-  Shared Worktree Risk safety behavior continue to surface normally.
-- Hidden Tree uses a simplified Project/Worktree/Session hierarchy with direct Session rows
+  Shared Project Risk safety behavior continue to surface normally.
+- Hidden Tree uses a simplified Project/Session hierarchy with direct Session rows
   ordered newest first and no age-band disclosures.
 - Hidden Tree uses Up/Down navigation and Enter-only Project expansion. Projects start
   collapsed after restart; expansion state is process-lifetime only.
@@ -199,7 +198,7 @@ was hidden by mistake.
   persist a Project exclusion, so a newly discovered Session makes the Project visible
   again without restoring the previously hidden Sessions.
 - Open overrides Hide without clearing the Hide preference. The Session becomes visible and
-  participates in Busy/Idle, Attention, and Shared Worktree Risk while Open, then returns to
+  participates in Busy/Idle, Attention, and Shared Project Risk while Open, then returns to
   hidden after exit.
 - Metadata activity alone never overrides Hide; only a validated Resume or other Open
   Current Run for the same native Session does. A newly created native Session remains
@@ -217,13 +216,14 @@ None at the current product boundary.
 ## Evidence
 
 - `CONTEXT.md` defines Provider JSONL as source of truth and the Session index as disposable.
-- `src/ui/project_tree/model.rs` groups all resolved non-system-temporary Sessions into the
+- `src/presentation/tui/project_tree/model.rs` groups all resolved non-system-temporary Sessions into the
   Project Tree and applies the seven-day Recent/Older cutoff.
-- `src/ui/provider.rs` uses the same system-temporary exclusion and seven-day history split.
-- `src/ui/mod.rs` recognizes only the four system-temporary roots listed above.
-- `src/index/mod.rs` prunes a Session only when its source file vanishes.
-- `src/domain.rs` defines Session identity as Provider plus native Session ID.
-- `src/session_labels.rs` already provides versioned, owner-only, atomic local Session
+- `src/presentation/tui/session_browser.rs` uses the same system-temporary exclusion and
+  seven-day history split.
+- `src/presentation/tui/mod.rs` recognizes only the four system-temporary roots listed above.
+- `src/adapters/persistence/index/mod.rs` prunes a Session only when its source file vanishes.
+- `src/domain/session.rs` defines Session identity as Provider plus native Session ID.
+- `src/application/session_labels.rs` already provides versioned, owner-only, atomic local Session
   metadata updates and degraded behavior for unreadable or unsupported stores.
 
 ## Session Log
@@ -249,18 +249,16 @@ None at the current product boundary.
 - Confirmed Project Hide as a snapshot bulk action over current Session identities. Future
   Sessions in that Project remain visible and make the Project reappear.
 - Confirmed that Open lifecycle state temporarily overrides Hide without removing the Hide
-  record. The Session remains part of active lifecycle, Attention, and shared-Worktree safety
+  record. The Session remains part of active lifecycle, Attention, and Shared Project Risk
   behavior, and becomes hidden again after exit.
 - Corrected the destination: the contextual entry belongs to the full Session Detail opened
   with Enter, not the compact DETAILS panel. A separate global shortcut will open the same
   all-hidden management view, rendered with Tree hierarchy.
 - Selected `h` as the top-level global Hidden Tree shortcut. Session Detail keeps its
   existing `h` Handoff behavior and uses the selectable Hidden List entry for access.
-- Selected uppercase `H` for confirmation-gated Hide on normal Project and Session rows;
-  Worktree remains structural and cannot be hidden directly.
+- Selected uppercase `H` for confirmation-gated Hide on normal Project and Session rows.
 - Selected `u` and `d` for Hidden Tree restoration and confirmed permanent exclusion.
-  Project rows apply them in bulk to current hidden Sessions, Worktree rows remain
-  structural, and Esc restores the origin.
+  Project rows apply them in bulk to current hidden Sessions, and Esc restores the origin.
 - Confirmed that only a validated Open lifecycle state temporarily overrides Hide. Metadata
   activity and rescans do not; a distinct native Session identity is visible as new work.
 - Confirmed that Hide removes Exited Sessions from the normal Overview inventory. Hidden Tree
@@ -268,9 +266,9 @@ None at the current product boundary.
 - Confirmed that Overview Project, Session, and Usage totals use visible inventory only;
   Hidden Tree reports separate counts while underlying evidence is unchanged.
 - Confirmed that Recent Signals for hidden Exited Sessions are filtered with the inventory,
-  while Open override and Shared Worktree Risk remain visible safety behavior.
+  while Open override and Shared Project Risk remain visible safety behavior.
 - Confirmed that Hidden Tree omits Recent/Older disclosures and directly lists hidden
-  Sessions newest first within the Project/Worktree hierarchy.
+  Sessions newest first within the Project hierarchy.
 - Confirmed Enter-only Project expansion with Up/Down navigation in Hidden Tree. Projects
   reset to collapsed on restart; no Left/Right behavior is added.
 - Confirmed that only Exited Sessions can be hidden. Project bulk Hide skips and reports

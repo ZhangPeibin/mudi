@@ -20,12 +20,12 @@ not expand the accepted Work Continuity boundary until the user confirms that am
 Session 也不可靠。一个独立、健康的 Codex Session 完成了以下流程：
 
 1. 直接读取 Source Session 的 JSONL，检查记录结构、最近有效消息、使用量和中断点。
-2. 读取 Source Worktree 的 Git 状态、已有设计文档和相关代码证据。
+2. 读取 Source 工作目录的 Git 状态、已有设计文档和相关代码证据。
 3. 不复制完整 Transcript 或大段工具输出，只提取目标、当前状态、决策、已完成工作、
    剩余事项、验证证据、风险和下一步。
 4. 在 Source Project 之外生成精简的 Handoff Artifact。
 5. 保留旧 JSONL 原件，不覆盖、不截断，也不要求失效 Session 自己生成摘要。
-6. 创建新的 Claude Session，让它读取 Artifact 和 Worktree 中的权威文档。
+6. 创建新的 Claude Session，让它读取 Artifact 和 Source 工作目录中的权威文档。
 7. 验证新 Session 能准确说明原任务断点和第一项具体行动后，才把它交给用户继续。
 
 案例结果：旧 Session 约 3.7 MB，新 Session 初始上下文约 3.8 万 token，并成功
@@ -52,7 +52,7 @@ Handoff Skill。该路径适合 Source Session 仍能正常处理 Prompt 的情�
 ```text
 Source Session JSONL
         +
-Source Worktree 的只读状态和权威文档
+Source 工作目录的只读状态和权威文档
         +
 Provider/Process/Task 元数据
         |
@@ -74,9 +74,9 @@ Successor Launch Plan -> 用户显式启动 -> 进程证据关联 Successor Sess
 
 ### 2. 获取稳定证据
 
-- 记录 Source Session、Provider、Project、Worktree 和源 JSONL 路径。
+- 记录 Source Session、Provider、由工作目录派生的 Project、精确工作目录和源 JSONL 路径。
 - 以明确的记录边界读取 JSONL，忽略边界之后追加的数据。
-- 读取 Source Worktree 时保持严格只读。
+- 读取 Source 工作目录时保持严格只读。
 - 优先识别已经落盘的 PRD、ADR、设计文档、测试结果和 Git diff；这些证据通常比
   Transcript 中重复的讨论更权威。
 - 不把完整 Transcript、无关工具输出或秘密材料送入 Artifact。
@@ -92,7 +92,7 @@ Successor Launch Plan -> 用户显式启动 -> 进程证据关联 Successor Sess
 ### 4. 验证与发布
 
 - Worker 校验固定标题、必填内容、UTF-8 和秘密材料规则。
-- 额外检查 Artifact 是否包含可执行的 `Next Action` 和 Source Worktree 的实际状态。
+- 额外检查 Artifact 是否包含可执行的 `Next Action` 和 Source 工作目录的实际状态。
 - 只有校验成功后，才能由 Worker 在 Mudi 私有数据目录原子发布 Artifact。
 - Task Store 只保存结果元数据和 Artifact 路径，不保存正文。
 
@@ -115,7 +115,7 @@ Source Session 可正常响应时，继续使用托管 Handoff Skill，利用其
 ### 故障恢复
 
 Source Session 无法正常响应，或正常交接已出现可恢复失败时，向用户提供独立恢复。
-它从 JSONL、Worktree 和权威文档重建上下文，不要求 Source Session 再运行。
+它从 JSONL、Source 工作目录和权威文档重建上下文，不要求 Source Session 再运行。
 
 故障恢复不应在正常交接失败后静默自动执行；它是具有不同证据来源和成本的独立、
 显式授权 Operation Task。
@@ -153,7 +153,7 @@ Provider stdout、stderr 和完整 Transcript 不进入 Task Store；但 Task �
 2. Source Session 因上下文超限无法响应时，独立恢复能生成有效 Artifact。
 3. Source Session 的 Handoff Skill 未识别时，用户能看到具体失败原因并选择独立恢复。
 4. Source JSONL 持续增长时，恢复使用固定读取边界，不产生新旧记录混合的 Artifact。
-5. Source Worktree 有未提交修改时，Artifact 能准确记录相关文件和验证状态，但不修改它们。
+5. Source 工作目录有未提交修改时，Artifact 能准确记录相关文件和验证状态，但不修改它们。
 6. Source JSONL 不完整或没有足够上下文时，Task 明确失败，不伪造恢复成功。
 7. Successor 读取 Artifact 后能复述 Objective、Current State 和 Next Action。
 8. 旧 Session JSONL 保持不变，新旧 Session 不共享 Provider-native Session ID。

@@ -1,30 +1,30 @@
-┌ Mudi | v0.1.0 ────────────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 1 Project ┐
+┌ Mudi | v2.0.0 ───────────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 4 Projects ┐
                                         ┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
-                                        │WT /Users/fixture/co...  Risk detected││                                      │
+                                        │PJ /Users/fixture/co...  Risk detected││                                      │
             ┌ Session Detail ──────────────────────────────────────────────────────────────────────────────┐           │
             │Provider        Claude Code -> claude-opus-4-8                                                │           │
             │Project         mudi                                                                          │           │
-            │Worktree        /Users/fixture/code/mudi                                                      │           │
-            │Branch          main                                                                          │           │
-            │cwd             /Users/fixture/code/mudi                                                      │───────────┘
- PROJECT 1 ─│Source log      /Users/fixture/.claude/projects/-Users-fixture-code-mudi/claude-critical.jsonl│────────────
- ▾ mudi (7) │Source format   JSONL                                                                         │
-   ▾ main !2│Title           critical                                                                      │
-    > ✳ crit│Session ID      claude-critical                                                               │
-      ⬡ x-sh│State           Busy                                                                          │
-   ▾ warning│                                                                                              │
-      ✳ -war│Current Context                                                                               │
-   ▾ idle   │Occupancy        180.0k / 200.0k [#############################---] (90.0%)                   │
-      ⬡ dex-│                                                                                              │
-   ▾ healthy│Attention Conditions                                                                          │
-      ✳ -hea│  CRITICAL Current Context 90.0% >= 85%                                                       │
- DETAILS ───│  WARNING Shared Worktree Risk x2                                                             │
- Title      │                                                                                              │
- Description│Current Run Usage                                                                             │
- Context    │Input           1.2k                                                                          │
- Attention  │Output          230                                                                           │
- Provider   │Est. API cost   $0.04                                                                         │
- Worktree   └ Up/Down Select | c Copy | h Handoff | Esc Close ──────────────────────────────── fields 1/17 ┘
+            │cwd             /Users/fixture/code/mudi                                                      │           │
+            │Source log      /Users/fixture/.claude/projects/-Users-fixture-code-mudi/claude-critical.jsonl│           │
+            │Source format   JSONL                                                                         │───────────┘
+ PROJECT 4 ─│Title           critical                                                                      │────────────
+ ▾ mudi (2) │Session ID      claude-critical                                                               │
+  > ✳ critic│State           Busy                                                                          │
+    ⬡ x-shar│                                                                                              │
+ ▾ mudi-warn│Current Context                                                                               │
+    ✳ -warni│Occupancy        180.0k / 200.0k [#############################---] (90.0%)                   │
+ ▾ mudi-idle│                                                                                              │
+    ⬡ dex-id│Attention Conditions                                                                          │
+ ▾ mudi-heal│  CRITICAL Current Context 90.0% >= 85%                                                       │
+    ✳ -healt│  WARNING Shared Project Risk x2                                                              │
+            │                                                                                              │
+ DETAILS ───│Current Run Usage                                                                             │
+ Title      │Input           1.2k                                                                          │
+ Description│Output          230                                                                           │
+ Context    │Est. API cost   $0.04                                                                         │
+ Attention  │                                                                                              │
+ Provider   │Current Run per-model Usage                                                                   │
+ Directory  └ Up/Down Select | c Copy | h Handoff | Esc Close ──────────────────────────────── fields 1/15 ┘
  Run usage   in 1.2k | out 230                         │
 ───────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────
 Esc | j/k Fields | c Copy | e Edit session | h Handoff | ? | q Quiwatching · 0 sessions · 0 parsed / 0 skipped   ·   Est
