@@ -26,6 +26,8 @@ not change an accepted version scope on their own.
 
 - [`source-map.md`](./source-map.md) - module-by-module map of `src/`, for onboarding
   readers.
+- [`refactoring/v2.0.1-architecture-refactoring-plan.md`](./refactoring/v2.0.1-architecture-refactoring-plan.md)
+  - staged architecture stabilization plan required before Checkpoint implementation.
 - [`agents/`](./agents/) - issue-tracker, domain-document, triage-label, and feature-doc
   conventions used by engineering skills.
 - [`releases/mudi-rename.md`](./releases/mudi-rename.md) - product rename, storage
