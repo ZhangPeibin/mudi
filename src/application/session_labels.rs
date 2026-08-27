@@ -1,48 +1,17 @@
 //! Persistent, Mudi-owned metadata for provider-native Sessions.
 
+use crate::adapters::persistence::state::StateDatabase;
 use crate::domain::{Provider, SessionIdentity};
+use anyhow::{anyhow, Context, Result};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-
-const SCHEMA_VERSION: u32 = 3;
-const LEGACY_SCHEMA_VERSIONS: [u32; 2] = [1, 2];
-static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SessionKey {
     provider: Provider,
     native_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct LabelFile {
-    version: u32,
-    aliases: Vec<AliasRecord>,
-    #[serde(default)]
-    descriptions: Vec<DescriptionRecord>,
-    #[serde(default)]
-    curation: Vec<CurationRecord>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AliasRecord {
-    provider: String,
-    session_id: String,
-    alias: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct DescriptionRecord {
-    provider: String,
-    session_id: String,
-    description: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,11 +21,21 @@ pub enum CurationDisposition {
     PermanentlyExcluded,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct CurationRecord {
-    provider: String,
-    session_id: String,
-    disposition: CurationDisposition,
+impl CurationDisposition {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hidden => "hidden",
+            Self::PermanentlyExcluded => "permanently_excluded",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "hidden" => Ok(Self::Hidden),
+            "permanently_excluded" => Ok(Self::PermanentlyExcluded),
+            _ => Err(anyhow!("unknown Session curation disposition {value:?}")),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -77,20 +56,11 @@ pub struct SessionLabels {
 }
 
 impl SessionLabels {
-    /// Load a Label Store. A missing file is an empty store.
+    /// Load Session metadata from the authoritative State Database.
     pub fn load(path: impl AsRef<Path>) -> Self {
         let path = path.as_ref().to_path_buf();
-        let (metadata, load_error) = match fs::read(&path) {
-            Ok(contents) => match decode(&contents) {
-                Ok(metadata) => (metadata, None),
-                Err(error) => (
-                    SessionMetadata::default(),
-                    Some(format!("Label Store error at {}: {error}", path.display())),
-                ),
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                (SessionMetadata::default(), None)
-            }
+        let (metadata, load_error) = match load_metadata(&path) {
+            Ok(metadata) => (metadata, None),
             Err(error) => (
                 SessionMetadata::default(),
                 Some(format!("Label Store error at {}: {error}", path.display())),
@@ -379,72 +349,14 @@ impl SessionLabels {
                 curation: self.curation.clone(),
             });
         };
-        match fs::read(path) {
-            Ok(contents) => decode(&contents).map_err(std::io::Error::other),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(SessionMetadata::default())
-            }
-            Err(error) => Err(error),
-        }
+        load_metadata(path).map_err(std::io::Error::other)
     }
 
     fn save(&self, metadata: &SessionMetadata) -> std::io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
-            create_private_dir(parent)?;
-        }
-        let mut aliases = metadata
-            .aliases
-            .iter()
-            .map(|(key, alias)| AliasRecord {
-                provider: key.provider.as_str().to_string(),
-                session_id: key.native_id.clone(),
-                alias: alias.clone(),
-            })
-            .collect::<Vec<_>>();
-        aliases.sort_by(|left, right| {
-            left.provider
-                .cmp(&right.provider)
-                .then_with(|| left.session_id.cmp(&right.session_id))
-        });
-        let mut descriptions = metadata
-            .descriptions
-            .iter()
-            .map(|(key, description)| DescriptionRecord {
-                provider: key.provider.as_str().to_string(),
-                session_id: key.native_id.clone(),
-                description: description.clone(),
-            })
-            .collect::<Vec<_>>();
-        descriptions.sort_by(|left, right| {
-            left.provider
-                .cmp(&right.provider)
-                .then_with(|| left.session_id.cmp(&right.session_id))
-        });
-        let mut curation = metadata
-            .curation
-            .iter()
-            .map(|(key, disposition)| CurationRecord {
-                provider: key.provider.as_str().to_string(),
-                session_id: key.native_id.clone(),
-                disposition: *disposition,
-            })
-            .collect::<Vec<_>>();
-        curation.sort_by(|left, right| {
-            left.provider
-                .cmp(&right.provider)
-                .then_with(|| left.session_id.cmp(&right.session_id))
-        });
-        let contents = serde_json::to_vec_pretty(&LabelFile {
-            version: SCHEMA_VERSION,
-            aliases,
-            descriptions,
-            curation,
-        })
-        .map_err(std::io::Error::other)?;
-        atomic_write_private_file(path, &contents)
+        save_metadata(path, metadata).map_err(std::io::Error::other)
     }
 
     fn publish(&mut self, metadata: SessionMetadata) {
@@ -580,106 +492,85 @@ fn unique_short_session_ids(sessions: &[(Provider, &str)]) -> Vec<String> {
         .collect()
 }
 
-fn create_private_dir(path: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true).mode(0o700).create(path)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-        Ok(())
+fn load_metadata(path: &Path) -> Result<SessionMetadata> {
+    let database = StateDatabase::open(path)?;
+    let connection = database.connect()?;
+    let mut statement = connection.prepare(
+        "SELECT provider, native_session_id, alias, description, disposition \
+         FROM session_metadata",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut metadata = SessionMetadata::default();
+    for (provider, native_id, alias, description, disposition) in rows {
+        let provider = Provider::parse(&provider)
+            .ok_or_else(|| anyhow!("unknown Session Metadata Provider {provider:?}"))?;
+        let key = SessionKey {
+            provider,
+            native_id,
+        };
+        if let Some(alias) = alias {
+            metadata.aliases.insert(
+                key.clone(),
+                validate_alias(&alias).context("invalid stored Session Alias")?,
+            );
+        }
+        if let Some(description) = description {
+            let description = validate_description(&description)
+                .context("invalid stored Session Description")?
+                .ok_or_else(|| anyhow!("stored Session Description cannot be empty"))?;
+            metadata.descriptions.insert(key.clone(), description);
+        }
+        if let Some(disposition) = disposition {
+            metadata
+                .curation
+                .insert(key, CurationDisposition::parse(&disposition)?);
+        }
     }
-    #[cfg(not(unix))]
-    fs::create_dir_all(path)
+    Ok(metadata)
 }
 
-fn atomic_write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
-    let filename = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("session-labels.json");
-    let temporary = parent.join(format!(".{filename}.tmp-{}-{sequence}", std::process::id()));
-    let mut options = OpenOptions::new();
-    options.create_new(true).write(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let result = (|| {
-        let mut file = options.open(&temporary)?;
-        file.write_all(contents)?;
-        file.sync_all()?;
-        #[cfg(unix)]
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
-        fs::rename(&temporary, path)?;
-        let _ = fs::File::open(parent).and_then(|directory| directory.sync_all());
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
+fn save_metadata(path: &Path, metadata: &SessionMetadata) -> Result<()> {
+    let database = StateDatabase::open(path)?;
+    let mut connection = database.connect()?;
+    let transaction = connection.transaction()?;
+    transaction.execute("DELETE FROM session_metadata", [])?;
 
-fn decode(contents: &[u8]) -> Result<SessionMetadata, String> {
-    let file = serde_json::from_slice::<LabelFile>(contents).map_err(|error| error.to_string())?;
-    if file.version != SCHEMA_VERSION && !LEGACY_SCHEMA_VERSIONS.contains(&file.version) {
-        return Err(format!(
-            "unsupported schema version {} (expected 1, 2, or {SCHEMA_VERSION})",
-            file.version
-        ));
-    }
-    let aliases = file
+    let keys = metadata
         .aliases
-        .into_iter()
-        .map(|record| {
-            let provider = Provider::parse(&record.provider)
-                .ok_or_else(|| format!("unknown Provider {:?}", record.provider))?;
-            let alias = validate_alias(&record.alias).map_err(|error| error.to_string())?;
-            Ok((
-                SessionKey {
-                    provider,
-                    native_id: record.session_id,
-                },
+        .keys()
+        .chain(metadata.descriptions.keys())
+        .chain(metadata.curation.keys())
+        .cloned()
+        .collect::<HashSet<_>>();
+    for key in keys {
+        let alias = metadata.aliases.get(&key).map(String::as_str);
+        let description = metadata.descriptions.get(&key).map(String::as_str);
+        let disposition = metadata
+            .curation
+            .get(&key)
+            .map(|disposition| disposition.as_str());
+        transaction.execute(
+            "INSERT INTO session_metadata (provider, native_session_id, alias, description, disposition) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                key.provider.as_str(),
+                key.native_id,
                 alias,
-            ))
-        })
-        .collect::<Result<HashMap<_, _>, String>>()?;
-    let descriptions = file
-        .descriptions
-        .into_iter()
-        .map(|record| {
-            let provider = Provider::parse(&record.provider)
-                .ok_or_else(|| format!("unknown Provider {:?}", record.provider))?;
-            let description = validate_description(&record.description)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "Description cannot be empty in the Label Store".to_string())?;
-            Ok((
-                SessionKey {
-                    provider,
-                    native_id: record.session_id,
-                },
                 description,
-            ))
-        })
-        .collect::<Result<HashMap<_, _>, String>>()?;
-    let curation = file
-        .curation
-        .into_iter()
-        .map(|record| {
-            let provider = Provider::parse(&record.provider)
-                .ok_or_else(|| format!("unknown Provider {:?}", record.provider))?;
-            Ok((
-                SessionKey {
-                    provider,
-                    native_id: record.session_id,
-                },
-                record.disposition,
-            ))
-        })
-        .collect::<Result<HashMap<_, _>, String>>()?;
-    Ok(SessionMetadata {
-        aliases,
-        descriptions,
-        curation,
-    })
+                disposition,
+            ],
+        )?;
+    }
+    transaction.commit()?;
+    Ok(())
 }

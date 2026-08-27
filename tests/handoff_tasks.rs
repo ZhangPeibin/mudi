@@ -645,73 +645,11 @@ fn reconciliation_fails_queued_task_without_worker_startup_after_thirty_seconds(
 }
 
 #[test]
-fn existing_task_store_migrates_current_run_authority_fields_without_changing_tasks() {
-    let temp = TempDir::new("current-run-schema-migration");
-    let task_store = temp.path().join("tasks.db");
-    let connection = Connection::open(&task_store).unwrap();
-    connection
-        .execute_batch(
-            r#"
-            CREATE TABLE operation_tasks (
-                task_id TEXT PRIMARY KEY,
-                state TEXT NOT NULL,
-                source_provider TEXT NOT NULL,
-                source_session_id TEXT NOT NULL,
-                source_record_path TEXT NOT NULL,
-                source_working_directory TEXT NOT NULL,
-                created_at_ms INTEGER NOT NULL,
-                state_changed_at_ms INTEGER NOT NULL,
-                worker_pid INTEGER,
-                artifact_path TEXT,
-                plan_provider TEXT,
-                plan_working_directory TEXT,
-                plan_artifact_path TEXT,
-                failure_code TEXT,
-                acknowledged_at_ms INTEGER
-            );
-            INSERT INTO operation_tasks (
-                task_id, state, source_provider, source_session_id,
-                source_record_path, source_working_directory,
-                created_at_ms, state_changed_at_ms, acknowledged_at_ms
-            ) VALUES (
-                'legacy-ready', 'ready', 'claude', 'legacy-session',
-                '/private/source.jsonl', '/private/project',
-                1000, 2000, 3000
-            );
-            "#,
-        )
-        .unwrap();
-    drop(connection);
-    let handoff = HandoffService::open(
-        HandoffPaths {
-            task_store,
-            artifact_root: temp.path().join("artifacts"),
-        },
-        ProviderExecutables::new(temp.path().join("claude"), temp.path().join("codex")),
-        RecordingWorkerLauncher::default(),
-    )
-    .unwrap();
-
-    let task = handoff.task("legacy-ready").unwrap().unwrap();
-
-    assert_eq!(task.state, OperationTaskState::Ready);
-    assert_eq!(task.acknowledged_at_ms, Some(3_000));
-    assert!(!task.end_current_run_authorized);
-    assert_eq!(task.source_process_identity, None);
-    assert_eq!(task.waiting_reason, None);
-    assert_eq!(task.waiting_deadline_ms, None);
-    assert_eq!(task.control_used_at_ms, None);
-    assert_eq!(task.deletion_requested_at_ms, None);
-    assert_eq!(task.deletion_failure_code, None);
-}
-
-#[test]
-fn concurrent_task_store_open_serializes_the_index_migration() {
+fn concurrent_task_store_open_uses_the_initialized_state_database() {
     let temp = TempDir::new("concurrent-task-store-open");
     let task_store = temp.path().join("tasks.db");
-    drop(TaskStore::open(&task_store).unwrap());
-    let barrier = Arc::new(Barrier::new(8));
-    let handles = (0..8)
+    let barrier = Arc::new(Barrier::new(16));
+    let handles = (0..16)
         .map(|_| {
             let barrier = barrier.clone();
             let task_store = task_store.clone();

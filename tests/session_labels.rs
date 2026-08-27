@@ -18,7 +18,7 @@ fn temp_label_store(test_name: &str) -> (PathBuf, PathBuf) {
         "mudi-{test_name}-{}-{sequence}",
         std::process::id()
     ));
-    let path = directory.join("session-labels.json");
+    let path = directory.join("state.db");
     (directory, path)
 }
 
@@ -172,55 +172,6 @@ fn permanent_exclusion_cannot_be_downgraded_or_relabelled() {
         reloaded.description(session.provider, &session.native_id),
         None
     );
-
-    std::fs::remove_dir_all(directory).unwrap();
-}
-
-#[test]
-fn version_one_store_migrates_when_description_is_saved() {
-    let (directory, path) = temp_label_store("v1-description-migration");
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(
-        &path,
-        br#"{
-  "version": 1,
-  "aliases": [
-    {"provider": "claude", "session_id": "claude-session", "alias": "Existing title"}
-  ]
-}"#,
-    )
-    .unwrap();
-    let mut labels = SessionLabels::load(&path);
-
-    assert_eq!(
-        labels.alias(Provider::ClaudeCode, "claude-session"),
-        Some("Existing title")
-    );
-    assert_eq!(
-        labels.description(Provider::ClaudeCode, "claude-session"),
-        None
-    );
-    labels
-        .set_metadata(
-            Provider::ClaudeCode,
-            "claude-session",
-            "Existing title",
-            "Why this Session exists",
-        )
-        .unwrap();
-
-    let reloaded = SessionLabels::load(&path);
-    assert_eq!(
-        reloaded.alias(Provider::ClaudeCode, "claude-session"),
-        Some("Existing title")
-    );
-    assert_eq!(
-        reloaded.description(Provider::ClaudeCode, "claude-session"),
-        Some("Why this Session exists")
-    );
-    let written: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(written["version"], 3);
 
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -406,41 +357,6 @@ fn failed_permanent_exclusion_keeps_hidden_disposition_and_session_metadata() {
 }
 
 #[test]
-fn version_two_store_defaults_to_visible_and_migrates_on_first_curation_write() {
-    let (directory, path) = temp_label_store("v2-curation-migration");
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(
-        &path,
-        br#"{
-  "version": 2,
-  "aliases": [],
-  "descriptions": []
-}"#,
-    )
-    .unwrap();
-    let mut labels = SessionLabels::load(&path);
-    let session = SessionIdentity {
-        provider: Provider::CodexCli,
-        native_id: "legacy-session".into(),
-    };
-
-    assert_eq!(
-        labels.disposition(session.provider, &session.native_id),
-        None
-    );
-    labels
-        .hide_sessions(std::slice::from_ref(&session))
-        .unwrap();
-
-    let written: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(written["version"], 3);
-    assert_eq!(written["curation"][0]["disposition"], "hidden");
-
-    std::fs::remove_dir_all(directory).unwrap();
-}
-
-#[test]
 fn malformed_label_store_is_preserved_and_disables_editing() {
     let (directory, path) = temp_label_store("malformed");
     std::fs::create_dir_all(&directory).unwrap();
@@ -462,9 +378,10 @@ fn malformed_label_store_is_preserved_and_disables_editing() {
 #[test]
 fn unsupported_label_store_version_is_preserved_and_disables_editing() {
     let (directory, path) = temp_label_store("unsupported-version");
-    std::fs::create_dir_all(&directory).unwrap();
-    let original = br#"{"version":4,"aliases":[],"descriptions":[],"curation":[]}"#;
-    std::fs::write(&path, original).unwrap();
+    drop(mudi::adapters::persistence::state::StateDatabase::open(&path).unwrap());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.pragma_update(None, "user_version", 4).unwrap();
+    drop(connection);
 
     let labels = SessionLabels::load(&path);
 
@@ -472,8 +389,14 @@ fn unsupported_label_store_version_is_preserved_and_disables_editing() {
     assert!(labels
         .error()
         .unwrap()
-        .contains("unsupported schema version 4"));
-    assert_eq!(std::fs::read(&path).unwrap(), original);
+        .contains("unsupported State Database schema version 4"));
+    assert_eq!(
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -498,12 +421,11 @@ fn invalid_alias_in_a_structured_store_disables_editing() {
 
 #[test]
 fn failed_save_does_not_publish_the_alias_in_memory() {
-    let (directory, _) = temp_label_store("failed-save");
-    std::fs::create_dir_all(&directory).unwrap();
-    let blocked_parent = directory.join("not-a-directory");
-    let path = blocked_parent.join("session-labels.json");
+    let (directory, path) = temp_label_store("failed-save");
     let mut labels = SessionLabels::load(&path);
-    std::fs::write(&blocked_parent, b"block directory creation").unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.pragma_update(None, "user_version", 999).unwrap();
+    drop(connection);
 
     assert!(labels
         .set_alias(Provider::ClaudeCode, "claude-session", "Auth fix")
@@ -619,7 +541,7 @@ fn new_label_store_is_owner_only() {
 
 #[cfg(unix)]
 #[test]
-fn successful_save_atomically_replaces_the_label_store() {
+fn successful_save_commits_without_replacing_the_state_database() {
     let (directory, path) = temp_label_store("atomic-replace");
     let mut labels = SessionLabels::load(&path);
     labels
@@ -631,7 +553,7 @@ fn successful_save_atomically_replaces_the_label_store() {
         .set_alias(Provider::ClaudeCode, "claude-session", "Second title")
         .unwrap();
 
-    assert_ne!(std::fs::metadata(&path).unwrap().ino(), first_inode);
+    assert_eq!(std::fs::metadata(&path).unwrap().ino(), first_inode);
     assert_eq!(
         SessionLabels::load(&path).alias(Provider::ClaudeCode, "claude-session"),
         Some("Second title")
@@ -648,16 +570,10 @@ fn reload_recovers_after_the_label_store_is_repaired() {
     let mut labels = SessionLabels::load(&path);
     assert!(!labels.is_editable());
 
-    std::fs::write(
-        &path,
-        br#"{
-  "version": 1,
-  "aliases": [
-    {"provider": "codex", "session_id": "codex-session", "alias": "Recovered work"}
-  ]
-}"#,
-    )
-    .unwrap();
+    std::fs::remove_file(&path).unwrap();
+    SessionLabels::load(&path)
+        .set_alias(Provider::CodexCli, "codex-session", "Recovered work")
+        .unwrap();
     labels.reload();
 
     assert!(labels.is_editable());

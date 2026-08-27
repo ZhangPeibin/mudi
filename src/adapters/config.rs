@@ -66,14 +66,19 @@ impl Config {
         self.data_dir.join("index.db")
     }
 
-    /// Authoritative Operation Task Store, separate from the disposable Session index.
-    pub fn task_store_path(&self) -> PathBuf {
-        self.data_dir.join("tasks.db")
+    /// Mudi-owned authoritative State Database, separate from the disposable Session index.
+    pub fn state_database_path(&self) -> PathBuf {
+        self.data_dir.join("state.db")
     }
 
-    /// Durable Managed Launch Registrations, separate from the disposable Session index.
+    /// Authoritative Operation Task repository storage.
+    pub fn task_store_path(&self) -> PathBuf {
+        self.state_database_path()
+    }
+
+    /// Durable Managed Session repository storage.
     pub fn managed_launch_store_path(&self) -> PathBuf {
-        self.data_dir.join("managed-launches.db")
+        self.state_database_path()
     }
 
     /// Private root for Task-owned Handoff Artifacts.
@@ -86,9 +91,9 @@ impl Config {
         self.data_dir.join("profile.json")
     }
 
-    /// Authoritative local Session metadata store, separate from the disposable index.
+    /// Authoritative local Session Metadata and Curation repository storage.
     pub fn label_store_path(&self) -> PathBuf {
-        self.data_dir.join("session-labels.json")
+        self.state_database_path()
     }
 
     /// Optional local Model Catalog override (`data_dir/models.json`).
@@ -176,7 +181,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn label_store_lives_in_the_mudi_data_directory() {
+    fn authoritative_repositories_share_the_state_database() {
         let config = Config {
             claude_dir: PathBuf::from("/claude"),
             codex_dir: PathBuf::from("/codex"),
@@ -184,10 +189,11 @@ mod tests {
             extra_dirs: Vec::new(),
         };
 
-        assert_eq!(
-            config.label_store_path(),
-            PathBuf::from("/mudi-data/session-labels.json")
-        );
+        let state_database = PathBuf::from("/mudi-data/state.db");
+        assert_eq!(config.state_database_path(), state_database);
+        assert_eq!(config.task_store_path(), state_database);
+        assert_eq!(config.managed_launch_store_path(), state_database);
+        assert_eq!(config.label_store_path(), state_database);
     }
 
     #[test]
@@ -214,10 +220,7 @@ mod tests {
             extra_dirs: Vec::new(),
         };
 
-        assert_eq!(
-            config.task_store_path(),
-            PathBuf::from("/mudi-data/tasks.db")
-        );
+        assert_eq!(config.task_store_path(), config.state_database_path());
         assert_eq!(
             config.artifact_root(),
             PathBuf::from("/mudi-data/handoff-artifacts")
@@ -225,10 +228,10 @@ mod tests {
         assert_ne!(config.task_store_path(), config.index_path());
         assert_eq!(
             config.managed_launch_store_path(),
-            PathBuf::from("/mudi-data/managed-launches.db")
+            config.state_database_path()
         );
         assert_ne!(config.managed_launch_store_path(), config.index_path());
-        assert_ne!(config.managed_launch_store_path(), config.task_store_path());
+        assert_eq!(config.managed_launch_store_path(), config.task_store_path());
     }
 
     #[test]

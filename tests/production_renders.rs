@@ -663,7 +663,7 @@ fn exited_session_hide_is_confirmed_persisted_and_removed_from_the_normal_tree()
     press(&mut ui, &snapshot, KeyCode::Enter);
     let hidden = render(&snapshot, &ui, 120, 30).text;
     assert!(!hidden.contains("x-exited"));
-    let labels = SessionLabels::load(directory.join("session-labels.json"));
+    let labels = SessionLabels::load(directory.join("state.db"));
     assert_eq!(
         labels.disposition(exited.provider, &exited.id),
         Some(CurationDisposition::Hidden)
@@ -743,8 +743,7 @@ fn hide_confirmation_revalidates_that_the_session_is_still_exited() {
         .text
         .contains("Open Session cannot be hidden"));
     assert_eq!(
-        SessionLabels::load(directory.join("session-labels.json"))
-            .disposition(exited.provider, &exited.id),
+        SessionLabels::load(directory.join("state.db")).disposition(exited.provider, &exited.id),
         None
     );
 
@@ -810,7 +809,7 @@ fn project_hide_is_a_snapshot_that_skips_and_reports_open_sessions() {
     let rendered = render(&snapshot, &ui, 120, 30).text;
     assert!(rendered.contains("critical"));
     assert!(!rendered.contains("x-exited"));
-    let labels = SessionLabels::load(directory.join("session-labels.json"));
+    let labels = SessionLabels::load(directory.join("state.db"));
     for exited in [&first_exited, &second_exited] {
         assert_eq!(
             labels.disposition(exited.provider, &exited.id),
@@ -881,7 +880,7 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
     newer.id = "claude-newest-hidden".into();
     newer.last_activity_ms = first.last_activity_ms + 1_000;
     snapshot.sessions = vec![first.clone(), newer.clone(), second_project.clone()];
-    let label_path = directory.join("session-labels.json");
+    let label_path = directory.join("state.db");
     let mut labels = SessionLabels::load(&label_path);
     labels
         .set_metadata(newer.provider, &newer.id, "Newest hidden", "")
@@ -942,7 +941,7 @@ fn session_detail_hidden_list_entry_opens_the_same_tree_and_restores_its_origin(
         .iter()
         .find(|session| session.id == "codex-exited")
         .unwrap();
-    SessionLabels::load(directory.join("session-labels.json"))
+    SessionLabels::load(directory.join("state.db"))
         .hide_sessions(&[SessionIdentity::from(hidden)])
         .unwrap();
     let mut ui = Ui::load(&profile_path).unwrap();
@@ -991,7 +990,7 @@ fn hidden_tree_u_restores_the_selected_session_to_its_origin_inventory() {
         ready: true,
         ..Snapshot::default()
     };
-    let label_path = directory.join("session-labels.json");
+    let label_path = directory.join("state.db");
     SessionLabels::load(&label_path)
         .hide_sessions(&[SessionIdentity::from(&hidden)])
         .unwrap();
@@ -1043,7 +1042,7 @@ fn hidden_tree_d_permanently_excludes_metadata_without_touching_provider_jsonl()
         ready: true,
         ..Snapshot::default()
     };
-    let label_path = directory.join("session-labels.json");
+    let label_path = directory.join("state.db");
     let mut labels = SessionLabels::load(&label_path);
     labels
         .set_metadata(
@@ -1122,7 +1121,7 @@ fn hidden_tree_project_delete_applies_to_all_current_hidden_sessions() {
         ready: true,
         ..Snapshot::default()
     };
-    let label_path = directory.join("session-labels.json");
+    let label_path = directory.join("state.db");
     SessionLabels::load(&label_path)
         .hide_sessions(&[
             SessionIdentity::from(&first),
@@ -1176,7 +1175,7 @@ fn hidden_tree_project_restore_applies_to_all_current_hidden_sessions() {
         ready: true,
         ..Snapshot::default()
     };
-    let label_path = directory.join("session-labels.json");
+    let label_path = directory.join("state.db");
     SessionLabels::load(&label_path)
         .hide_sessions(&[
             SessionIdentity::from(&first),
@@ -1234,7 +1233,7 @@ fn hidden_exited_visibility_is_consistent_and_only_validated_open_overrides_it()
         ready: true,
         ..Snapshot::default()
     };
-    SessionLabels::load(directory.join("session-labels.json"))
+    SessionLabels::load(directory.join("state.db"))
         .hide_sessions(&[SessionIdentity::from(&session)])
         .unwrap();
     let ui = Ui::load(&profile_path).unwrap();
@@ -1281,7 +1280,7 @@ fn hidden_curation_is_dormant_while_source_evidence_is_absent_and_resumes_on_ret
         .find(|session| session.id == "codex-exited")
         .unwrap()
         .clone();
-    let label_path = directory.join("session-labels.json");
+    let label_path = directory.join("state.db");
     SessionLabels::load(&label_path)
         .hide_sessions(&[SessionIdentity::from(&hidden)])
         .unwrap();
@@ -4414,6 +4413,8 @@ fn edit_session_metadata_survives_reloading_the_ui() {
     assert!(!saved.cursor_visible);
     assert!(saved.text.contains("Auth fix"));
     assert!(saved.text.contains("Auth boundary"));
+    assert!(directory.join("state.db").exists());
+    assert!(!directory.join("session-labels.json").exists());
 
     let mut reloaded = Ui::load(&profile_path).unwrap();
     press(&mut reloaded, &snapshot, KeyCode::Char('e'));
@@ -4476,7 +4477,7 @@ fn malformed_label_store_disables_editing_until_rescan_reloads_it() {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let profile_path = directory.join("profile.json");
-    let label_path = directory.join("session-labels.json");
+    let label_path = directory.join("state.db");
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     std::fs::write(&label_path, b"broken").unwrap();
     let snapshot = production_snapshot();
@@ -4488,7 +4489,7 @@ fn malformed_label_store_disables_editing_until_rescan_reloads_it() {
         .text
         .contains("↑/↓ or j/k Move · Enter Edit · y Save"));
     assert!(degraded.text.contains("Label Store error"));
-    assert!(degraded.text.contains("session-labels.json"));
+    assert!(degraded.text.contains("state.db"));
 
     std::fs::remove_file(&label_path).unwrap();
     press(&mut ui, &snapshot, KeyCode::Char('r'));
@@ -4510,7 +4511,7 @@ fn malformed_label_store_disables_curation_until_rescan_reloads_it() {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let profile_path = directory.join("profile.json");
-    let label_path = directory.join("session-labels.json");
+    let label_path = directory.join("state.db");
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     std::fs::write(&label_path, b"broken").unwrap();
     let source = production_snapshot();
@@ -4566,7 +4567,7 @@ fn failed_metadata_save_preserves_both_editor_inputs_for_a_successful_retry() {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let profile_path = directory.join("profile.json");
-    let label_path = directory.join("session-labels.json");
+    let label_path = directory.join("state.db");
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     let snapshot = production_snapshot();
     let mut ui = Ui::load(&profile_path).unwrap();

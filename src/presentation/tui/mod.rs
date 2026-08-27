@@ -643,7 +643,7 @@ impl Ui {
         let label_path = profile_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
-            .join("session-labels.json");
+            .join("state.db");
         let workspace_split = split_pane::State::new(profile.overview_left_width);
         Ok(Self {
             guide_open: !profile.help_seen,

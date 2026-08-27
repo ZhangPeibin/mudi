@@ -211,7 +211,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("mudi-alert-title-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("session-labels.json");
+        let path = directory.join("state.db");
         let mut labels = SessionLabels::load(&path);
         labels
             .set_alias(Provider::ClaudeCode, "claude-session", "Before")

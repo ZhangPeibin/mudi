@@ -35,7 +35,9 @@ fn unused_profile_path(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!(
+    let data_dir = std::env::temp_dir().join(format!("mudi-ui-tests-{}", std::process::id()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    data_dir.join(format!(
         "mudi-{name}-{}-{nonce}-profile.json",
         std::process::id(),
     ))

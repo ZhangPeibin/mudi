@@ -24,6 +24,7 @@ use tokio::sync::mpsc;
 
 use mudi::adapters::config::Config;
 use mudi::adapters::macos::clipboard::{Clipboard, MacosClipboard};
+use mudi::adapters::persistence::state::StateDatabase;
 use mudi::adapters::skills::handoff::ManagedHandoffSkills;
 
 use mudi::application::handoff::{
@@ -50,11 +51,13 @@ type TuiController = ApplicationController<DetachedWorkerLauncher, MacosTerminal
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let config = Config::load();
+    StateDatabase::open_data_dir(&config.data_dir)?;
     if run_non_tui_mode()? {
         return Ok(());
     }
 
-    let runtime = TuiRuntime::build(Config::load())?;
+    let runtime = TuiRuntime::build(config)?;
     runtime.run()
 }
 

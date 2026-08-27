@@ -1,13 +1,11 @@
 //! Authoritative persistence for user-authorized Operation Tasks.
 
+use crate::adapters::persistence::state::StateDatabase;
 use crate::adapters::providers::state::ProcessIdentity;
 use crate::domain::Provider;
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
-
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationTaskState {
@@ -149,149 +147,8 @@ pub struct TaskStore {
 
 impl TaskStore {
     pub fn open(path: &Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                let mut builder = std::fs::DirBuilder::new();
-                builder.recursive(true);
-                #[cfg(unix)]
-                builder.mode(0o700);
-                builder.create(parent)?;
-            }
-            #[cfg(unix)]
-            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
-        }
-        let conn = Connection::open(path)?;
-        #[cfg(unix)]
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-
-            CREATE TABLE IF NOT EXISTS operation_tasks (
-                task_id                  TEXT PRIMARY KEY,
-                state                    TEXT NOT NULL,
-                source_provider          TEXT NOT NULL,
-                source_session_id        TEXT NOT NULL,
-                source_record_path       TEXT NOT NULL,
-                source_working_directory TEXT NOT NULL,
-                successor_provider       TEXT,
-                successor_executable     TEXT,
-                created_at_ms            INTEGER NOT NULL,
-                state_changed_at_ms      INTEGER NOT NULL,
-                worker_pid               INTEGER,
-                worker_started_at_ms     INTEGER,
-                provider_pid             INTEGER,
-                provider_started_at_ms  INTEGER,
-                prompt_sent_at_ms        INTEGER,
-                provider_exited_at_ms   INTEGER,
-                provider_exit_code      INTEGER,
-                running_deadline_ms      INTEGER,
-                cancellation_requested_at_ms INTEGER,
-                termination_requested_at_ms INTEGER,
-                retry_of_task_id         TEXT,
-                retry_ready_at_ms        INTEGER,
-                artifact_path            TEXT,
-                plan_provider            TEXT,
-                plan_working_directory   TEXT,
-                plan_executable          TEXT,
-                plan_arguments_json      TEXT,
-                plan_artifact_path       TEXT,
-                successor_launch_requested_at_ms INTEGER,
-                successor_launch_failed_at_ms INTEGER,
-                successor_launch_failure_code TEXT,
-                successor_pid            INTEGER,
-                successor_process_started_at_ms INTEGER,
-                successor_started_at_ms  INTEGER,
-                successor_exited_at_ms   INTEGER,
-                successor_exit_code      INTEGER,
-                successor_session_id     TEXT,
-                successor_linked_at_ms   INTEGER,
-                failure_code             TEXT,
-                acknowledged_at_ms       INTEGER,
-                end_current_run_authorized INTEGER NOT NULL DEFAULT 0,
-                source_process_pid       INTEGER,
-                source_process_started_at_ms INTEGER,
-                waiting_reason           TEXT,
-                waiting_deadline_ms      INTEGER,
-                control_used_at_ms       INTEGER,
-                deletion_requested_at_ms INTEGER,
-                deletion_failure_code   TEXT
-            );
-
-            "#,
-        )?;
-        let has_acknowledgement = {
-            let mut statement = conn.prepare("PRAGMA table_info(operation_tasks)")?;
-            let columns = statement
-                .query_map([], |row| row.get::<_, String>(1))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            columns.iter().any(|column| column == "acknowledged_at_ms")
-        };
-        if !has_acknowledgement {
-            conn.execute(
-                "ALTER TABLE operation_tasks ADD COLUMN acknowledged_at_ms INTEGER",
-                [],
-            )?;
-        }
-        let columns = {
-            let mut statement = conn.prepare("PRAGMA table_info(operation_tasks)")?;
-            let columns = statement
-                .query_map([], |row| row.get::<_, String>(1))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            columns
-        };
-        for (name, definition) in [
-            ("end_current_run_authorized", "INTEGER NOT NULL DEFAULT 0"),
-            ("source_process_pid", "INTEGER"),
-            ("source_process_started_at_ms", "INTEGER"),
-            ("waiting_reason", "TEXT"),
-            ("waiting_deadline_ms", "INTEGER"),
-            ("control_used_at_ms", "INTEGER"),
-            ("worker_started_at_ms", "INTEGER"),
-            ("provider_pid", "INTEGER"),
-            ("provider_started_at_ms", "INTEGER"),
-            ("prompt_sent_at_ms", "INTEGER"),
-            ("provider_exited_at_ms", "INTEGER"),
-            ("provider_exit_code", "INTEGER"),
-            ("running_deadline_ms", "INTEGER"),
-            ("cancellation_requested_at_ms", "INTEGER"),
-            ("termination_requested_at_ms", "INTEGER"),
-            ("retry_of_task_id", "TEXT"),
-            ("retry_ready_at_ms", "INTEGER"),
-            ("successor_provider", "TEXT"),
-            ("successor_executable", "TEXT"),
-            ("plan_executable", "TEXT"),
-            ("plan_arguments_json", "TEXT"),
-            ("successor_launch_requested_at_ms", "INTEGER"),
-            ("successor_launch_failed_at_ms", "INTEGER"),
-            ("successor_launch_failure_code", "TEXT"),
-            ("successor_pid", "INTEGER"),
-            ("successor_process_started_at_ms", "INTEGER"),
-            ("successor_started_at_ms", "INTEGER"),
-            ("successor_exited_at_ms", "INTEGER"),
-            ("successor_exit_code", "INTEGER"),
-            ("successor_session_id", "TEXT"),
-            ("successor_linked_at_ms", "INTEGER"),
-            ("deletion_requested_at_ms", "INTEGER"),
-            ("deletion_failure_code", "TEXT"),
-        ] {
-            if !columns.iter().any(|column| column == name) {
-                conn.execute(
-                    &format!("ALTER TABLE operation_tasks ADD COLUMN {name} {definition}"),
-                    [],
-                )?;
-            }
-        }
-        conn.execute_batch(
-            r#"
-            BEGIN IMMEDIATE;
-            DROP INDEX IF EXISTS one_non_terminal_task_per_session;
-            CREATE UNIQUE INDEX one_non_terminal_task_per_session
-            ON operation_tasks(source_provider, source_session_id)
-            WHERE state IN ('queued', 'waiting', 'running');
-            COMMIT;
-            "#,
-        )?;
+        let database = StateDatabase::open(path)?;
+        let conn = database.connect()?;
         Ok(Self { conn })
     }
 

@@ -27,7 +27,6 @@ use mudi::presentation::tui::{draw, Ui, UiAction};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use std::fs;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -639,7 +638,7 @@ fn attach_cli_rejects_exited_and_non_managed_references_before_terminal_access()
 }
 
 #[test]
-fn attach_cli_rejects_an_ambiguous_opaque_reference_before_live_evidence_or_terminal_access() {
+fn state_database_prevents_an_ambiguous_managed_current_run_reference() {
     let temp = TempDir::new("cli-ambiguous");
     let config = temp.config();
     let store_path = config.managed_launch_store_path();
@@ -654,40 +653,22 @@ fn attach_cli_rejects_an_ambiguous_opaque_reference_before_live_evidence_or_term
         .opaque_ref
         .clone();
     let connection = rusqlite::Connection::open(&store_path).unwrap();
-    connection
-        .execute("DROP INDEX managed_current_runs_opaque_ref_unique", [])
-        .unwrap();
-    connection
-        .execute(
-            "UPDATE managed_current_runs SET opaque_ref = ?1 WHERE native_session_id = 'native-second'",
-            [opaque_ref.as_str()],
-        )
-        .unwrap();
-    drop(connection);
-    let evidence_checks = Arc::new(Mutex::new(Vec::new()));
-    let attached = Arc::new(Mutex::new(Vec::new()));
-    let mut access = ManagedCurrentRunAccessService::new(
-        store,
-        ManagedCurrentRunVerifier::new(
-            config,
-            Box::new(RecordingOpenEvidence {
-                checked: evidence_checks.clone(),
-            }),
-        ),
-        Box::new(RecordingCliTerminal {
-            attached: attached.clone(),
-        }),
+    let duplicate = connection.execute(
+        "UPDATE managed_current_runs SET opaque_ref = ?1 WHERE native_session_id = 'native-second'",
+        [opaque_ref.as_str()],
     );
 
-    let error = run_attach_from_args_with_access(
-        ["sessionmesh", "attach", opaque_ref.as_str()],
-        &mut access,
-    )
-    .unwrap_err();
-
-    assert!(error.to_string().contains("ambiguous"));
-    assert!(evidence_checks.lock().unwrap().is_empty());
-    assert!(attached.lock().unwrap().is_empty());
+    assert!(duplicate.is_err());
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM managed_current_runs WHERE opaque_ref = ?1",
+                [opaque_ref],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
 }
 
 #[cfg(unix)]
@@ -886,58 +867,6 @@ fn system_revalidation_requires_the_exact_live_process_and_native_session_source
     assert!(verifier.verify_ref(&store, &opaque_ref).is_err());
 }
 
-#[test]
-fn existing_managed_current_runs_receive_one_stable_opaque_reference_on_store_upgrade() {
-    let temp = TempDir::new("opaque-ref-migration");
-    let store_path = temp.path().join("managed.db");
-    let connection = rusqlite::Connection::open(&store_path).unwrap();
-    connection
-        .execute_batch(
-            r#"
-            CREATE TABLE managed_current_runs (
-                run_id TEXT PRIMARY KEY,
-                provider TEXT NOT NULL,
-                native_session_id TEXT NOT NULL,
-                provider_pid INTEGER NOT NULL,
-                provider_started_at_ms INTEGER NOT NULL,
-                tmux_socket_name TEXT NOT NULL,
-                tmux_session_name TEXT NOT NULL,
-                binding_receipt_id TEXT NOT NULL UNIQUE,
-                UNIQUE (provider, native_session_id)
-            );
-            INSERT INTO managed_current_runs (
-                run_id, provider, native_session_id, provider_pid,
-                provider_started_at_ms, tmux_socket_name, tmux_session_name,
-                binding_receipt_id
-            ) VALUES (
-                'run-old-internal', 'claude', 'native-old', 42, 41000,
-                'sessionmesh-old-private', 'managed', 'receipt-old'
-            );
-            "#,
-        )
-        .unwrap();
-    drop(connection);
-
-    let first = ManagedLaunchStore::open(&store_path)
-        .unwrap()
-        .managed_current_runs()
-        .unwrap()[0]
-        .opaque_ref
-        .clone();
-    let reopened = ManagedLaunchStore::open(&store_path)
-        .unwrap()
-        .managed_current_runs()
-        .unwrap()[0]
-        .opaque_ref
-        .clone();
-
-    assert!(first.starts_with("run_"));
-    assert_eq!(first.len(), 36);
-    assert_eq!(reopened, first);
-    assert!(!reopened.contains("old-internal"));
-    assert!(!reopened.contains("old-private"));
-}
-
 fn bind_managed_run(
     store: &mut ManagedLaunchStore,
     temp: &TempDir,
@@ -1019,10 +948,6 @@ impl TempDir {
         ));
         fs::create_dir_all(&path).unwrap();
         Self(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
     }
 
     fn config(&self) -> Config {
