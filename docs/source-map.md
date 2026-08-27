@@ -9,8 +9,10 @@
 观察侧（只读）：
 
 > Provider 源 JSONL 日志 → `adapters/providers/` 适配器归一化 →
-> `adapters/persistence/index/` 增量缓存 → `adapters/observation.rs` 组装观察批次 →
-> `application/observation/refresh.rs` 投影与发布 →
+> `adapters/persistence/index/` 增量缓存 → `application/observation/collect.rs` 产生
+> `ObservationFrame` → `application/observation/reconcile.rs` 对账已有授权记录 →
+> `application/observation/project.rs` 只读投影 →
+> `application/observation/publish.rs` 原子发布 →
 > `application/observation/read_model.rs` 读模型 → `presentation/tui/` 渲染
 
 控制侧（显式授权）：
@@ -56,9 +58,14 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/application/observation/refresh.rs` | Refresh 应用服务与 port：协调观察、现有对账、投影和发布，不包含具体系统实现 |
-| `src/application/observation/read_model.rs` | refresh 发布、UI 消费的结构化只含元数据的投影（Snapshot） |
-| `src/adapters/refresh.rs` | 生产 Refresh 组合：把索引、Repository、Provider/进程证据、清理、通知和系统时钟 Adapter 接入 Refresh ports |
+| `src/application/observation/frame.rs` | 不可变 `ObservationFrame`：一次周期内的规范化 Session、Binding 与进程证据、Managed Current Run/Resume eligibility 和 Collect 诊断；不含 Provider 对话内容 |
+| `src/application/observation/collect.rs` | Collect 服务与只读 port：组合可丢弃 Index、Provider 源、权威候选记录和一次批量进程证据采样，不写权威状态 |
+| `src/application/observation/reconcile.rs` | Reconciliation 服务：仅根据 Frame 推进已有 Managed Launch/Binding 与 Operation Task 权威记录；无授权记录时不能建立控制关系 |
+| `src/application/observation/project.rs` | Project 服务与只读 Query port：组合 Frame、Managed provenance、Registration 与 Task，计算 Attention 和 Recent Signals，不写权威状态 |
+| `src/application/observation/publish.rs` | Publish 服务：完整 Snapshot 构造成功后才原子替换 `ReadModelCache`，并在发布边界更新 Alert 通知状态 |
+| `src/application/observation/refresh.rs` | TUI-owned `RefreshCycle`：只负责 Collect -> Reconcile -> Project -> Publish 调用顺序和周期级生命周期 |
+| `src/application/observation/read_model.rs` | 四阶段诊断、Refresh health、UI 消费的结构化 Metadata-only Snapshot 与原子内存 Cache |
+| `src/adapters/refresh.rs` | 四阶段生产组合：为各阶段分别打开只读/读写 Repository 端口，并接入 Index、Provider/进程证据、Task recovery、通知和系统时钟 Adapter |
 | `src/application/alerts.rs` | 告警政策与通知 port：上下文阈值跨越（Warning 70% / Critical 85%）时请求通知，每个阈值只通知一次，低于阈值后重置 |
 | `src/application/attention.rs` | 从会话快照推导并排序当前 Attention Conditions |
 | `src/application/signals.rs` | 记录进程生命周期内有意义的 Session 状态转变（Recent Signal） |
