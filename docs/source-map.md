@@ -9,22 +9,22 @@
 观察侧（只读）：
 
 > Provider 源 JSONL 日志 → `adapters/providers/` 适配器归一化 →
-> `adapters/persistence/index/` 增量缓存 → `application/observation/collector.rs`
-> 组装快照 → `application/observation/refresh.rs` 发布 →
+> `adapters/persistence/index/` 增量缓存 → `adapters/observation.rs` 组装观察批次 →
+> `application/observation/refresh.rs` 投影与发布 →
 > `application/observation/read_model.rs` 读模型 → `presentation/tui/` 渲染
 
 控制侧（显式授权）：
 
-> `presentation/tui/` 产生声明式意图 → `application/mod.rs` 控制器分发 →
-> `application/managed_sessions.rs` / `application/handoff/` /
-> `adapters/skills/` 在用户明确授权后执行操作
+> `presentation/tui/` 产生声明式动作 → `presentation/tui/router.rs` 路由 →
+> `application/handlers.rs` 与工作流服务校验和推进状态 → `adapters/` 执行持久化、
+> Provider、进程、tmux、Terminal.app、Clipboard 与通知操作
 
 ## 入口
 
 | 文件 | 职责 |
 | --- | --- |
 | `src/lib.rs` | crate 根：声明 `domain`、`application`、`adapters`、`presentation` 四个顶层模块；逻辑模块路径与物理目录一致 |
-| `src/main.rs` | 程序入口：TUI 立即打开；后台任务完成首次历史索引（带进度）后每约 2 秒增量扫描；渲染循环每帧只读最新快照，从不阻塞在 I/O |
+| `src/main.rs` | Composition Root 与程序入口：构造 Application Handler 和具体 Adapter，分发非 TUI 进程模式；TUI 立即打开，后台任务约每 2 秒刷新，渲染循环每帧只读最新快照 |
 
 ## 领域模型与配置
 
@@ -32,11 +32,12 @@
 | --- | --- |
 | `src/domain/mod.rs` | 领域模块入口；声明子模块并重导出现有 `domain::*` 公共类型 |
 | `src/domain/provider.rs` | Session Provider、Provider 源格式与只含路径/格式的源元数据 |
+| `src/domain/process.rs` | 防止 PID 复用误判所需的精确进程身份（PID 与启动时间） |
 | `src/domain/usage.rs` | Current Context、Processed Usage、模型用量汇总与 Compaction 元数据 |
 | `src/domain/project.rs` | 基于规范目录路径的 Project 稳定身份与展示元数据 |
 | `src/domain/session.rs` | Session 生命周期、来源、稳定身份与归一化 Session 聚合 |
 | `src/adapters/project.rs` | 把 Session 工作目录解析为规范的 Project 身份；Git 使用 top-level，非 Git 使用工作目录 |
-| `src/application/session_labels.rs` | 持久化 Mudi 拥有的会话元数据（Session Alias、Session Description 等） |
+| `src/application/session_labels.rs` | Session Metadata/Curation 的 Query 与 Repository port、验证规则和只读内存 View；不包含 SQLite |
 | `src/adapters/models.rs` | 按 Model-Provider 划分的模型目录：价格、批量价格与上下文窗口，仅用于估算与描述性元数据 |
 | `src/adapters/config.rs` | 配置：数据目录、环境变量覆盖、告警阈值与可配置的额外扫描目录 |
 
@@ -44,7 +45,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/application/observation/collector.rs` | Collector：发现源文件、驱动增量索引、构建 UI 渲染所需的归一化快照 |
+| `src/adapters/observation.rs` | Collector Adapter：发现 Provider 源文件、驱动增量索引并构建归一化 Observation Batch |
 | `src/adapters/persistence/index/mod.rs` | 可随时删除重建的增量 SQLite 索引：源日志之上的缓存，只存使用量元数据，绝不存提示词、摘要或文件内容；按 `(mtime, size)` 指纹跳过未变文件 |
 | `src/adapters/providers/mod.rs` | Provider 适配器层：每个适配器把源 JSONL 转成 `ParsedSession`，Provider 特有字段名不得逃出本模块 |
 | `src/adapters/providers/claude.rs` | Claude Code 适配器：transcript 路径、当前上下文计算规则、按 `message.id` 去重、Compaction 识别等 |
@@ -55,9 +56,10 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/application/observation/refresh.rs` | Refresh 应用服务：UI 读模型的唯一发布者 |
+| `src/application/observation/refresh.rs` | Refresh 应用服务与 port：协调观察、现有对账、投影和发布，不包含具体系统实现 |
 | `src/application/observation/read_model.rs` | refresh 发布、UI 消费的结构化只含元数据的投影（Snapshot） |
-| `src/application/alerts.rs` | 告警引擎：上下文阈值跨越（Warning 70% / Critical 85%）时发送 macOS 通知，每个阈值只通知一次，低于阈值后重置 |
+| `src/adapters/refresh.rs` | 生产 Refresh 组合：把索引、Repository、Provider/进程证据、清理、通知和系统时钟 Adapter 接入 Refresh ports |
+| `src/application/alerts.rs` | 告警政策与通知 port：上下文阈值跨越（Warning 70% / Critical 85%）时请求通知，每个阈值只通知一次，低于阈值后重置 |
 | `src/application/attention.rs` | 从会话快照推导并排序当前 Attention Conditions |
 | `src/application/signals.rs` | 记录进程生命周期内有意义的 Session 状态转变（Recent Signal） |
 
@@ -65,16 +67,18 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/application/mod.rs` | 应用控制器：处理声明式 UI 意图（Copy、AuthorizeHandoff、Rescan 等的分发中心） |
-| `src/application/managed_sessions.rs` | 显式授权的 Managed Session 启动注册与原生 New 启动 |
-| `src/application/successor.rs` | Successor Launch Plan 的校验与安全命令渲染 |
-| `src/application/tasks.rs` | 用户已授权 Operation Task 的权威持久化 |
+| `src/application/mod.rs` | Application 模块入口：声明工作流、政策、port 与读模型模块 |
+| `src/application/handlers.rs` | TUI 发起命令的 typed Handler：接收稳定身份和 typed request，返回 typed outcome/error；不包含界面文案或系统实现 |
+| `src/application/clipboard.rs` | Clipboard 写入能力 port；何时复制及结果文案由 Presentation 决定 |
+| `src/application/provider_runtime.rs` | Provider 可执行文件解析 port 与 Provider-neutral executable 集合 |
+| `src/application/managed_sessions.rs` | Managed New/Resume、Binding 与 Current Run 的领域记录、应用政策和外部能力 port |
+| `src/application/successor.rs` | Successor Launch Plan 的校验、命令渲染与 runtime/Terminal port |
+| `src/application/tasks.rs` | 用户已授权 Operation Task 合约与 Repository port |
 | `src/application/handoff/mod.rs` | Assisted Handoff 的显式授权与执行入口 |
 | `src/application/handoff/application.rs` | Handoff 授权、重试、取消与对账策略 |
-| `src/application/handoff/artifact.rs` | Handoff Artifact 校验与仅限属主的发布 |
+| `src/application/handoff/artifact.rs` | Handoff Artifact 内容契约与校验规则 |
 | `src/application/handoff/contract.rs` | Handoff 应用与 Worker 之间的数据契约 |
 | `src/application/handoff/ports.rs` | Handoff 应用与 Worker 策略依赖的可替换边界（端口） |
-| `src/application/handoff/worker.rs` | 分离式 Handoff Worker 的生命周期与 Provider 执行 |
 | `src/adapters/skills/mod.rs` | Mudi 托管 Skill 的通用边界：Skill 目录与安装器 trait |
 | `src/adapters/skills/handoff.rs` | 把 `mudi-handoff` Skill 安装/校验到 Codex CLI 与 Claude Code 的 skills 目录（权限 0700/0600、防符号链接、区分 Missing/Stale/Unreadable/Conflict） |
 
@@ -82,7 +86,15 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/adapters/macos/clipboard.rs` | macOS 剪贴板写入适配器：`Clipboard` trait + 基于 `/usr/bin/pbcopy` 的实现，含详细的 Rust 学习注释 |
+| `src/adapters/persistence/tasks.rs` | Operation Task Repository 的 SQLite 实现 |
+| `src/adapters/persistence/managed_sessions.rs` | Managed Session、Binding 与 Current Run Repository 的 SQLite 实现 |
+| `src/adapters/persistence/session_metadata.rs` | Session Metadata/Curation Query 与 Repository 的 SQLite 实现 |
+| `src/adapters/handoff.rs` | Handoff 服务生产组合、任务 ID、Worker 启动、Current Run 控制与完成通知 Adapter |
+| `src/adapters/handoff_worker.rs` | 分离式 Handoff Worker 生命周期、私有 Artifact 发布与 Provider 进程执行 |
+| `src/adapters/managed_sessions.rs` | Managed Session 的 Provider、进程证据、tmux 与 Terminal.app Adapter |
+| `src/adapters/successor.rs` | Successor Provider runtime、进程启动与 Terminal.app Adapter |
+| `src/adapters/macos/clipboard.rs` | 基于 `/usr/bin/pbcopy` 的 Clipboard port 实现 |
+| `src/adapters/macos/notification.rs` | 基于 AppleScript 的 best-effort macOS 通知实现 |
 
 ## UI 层（src/presentation/tui/）
 
@@ -94,7 +106,8 @@
 | 文件 | 职责 |
 | --- | --- |
 | `src/presentation/app.rs` | UI 面向的共享快照别名与小型格式化辅助 |
-| `src/presentation/tui/mod.rs` | TUI 顶层：`Ui` 交互状态、事件处理、页签与弹窗调度、剪贴板复制入口 |
+| `src/presentation/tui/mod.rs` | TUI 顶层：`Ui` 临时交互状态、事件处理、页签与弹窗调度，以及声明式 `UiAction` |
+| `src/presentation/tui/router.rs` | 将 `UiAction` 路由到 typed Application Handler，并拥有界面文案、Clipboard 写入和重新投影请求 |
 | `src/presentation/tui/chrome.rs` | 全局页头、页脚和上下文状态提示 |
 | `src/presentation/tui/overview.rs` | 总览页布局组合 |
 | `src/presentation/tui/session_browser.rs` | All 页左栏组合：导航与选中会话事实 |
