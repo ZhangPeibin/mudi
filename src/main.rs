@@ -38,7 +38,7 @@ use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::persistence::session_metadata::SessionLabels;
 use mudi::adapters::persistence::state::StateDatabase;
 use mudi::adapters::project::CanonicalManagedTargetResolver;
-use mudi::adapters::refresh::{open_refresh_service, SystemClock};
+use mudi::adapters::refresh::{open_refresh_cycle_with_cache, SystemClock};
 use mudi::adapters::skills::handoff::ManagedHandoffSkills;
 use mudi::adapters::skills::ManagedSkillCatalog;
 use mudi::adapters::successor::{
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
     }
 
     let runtime = TuiRuntime::build(config)?;
-    runtime.run()
+    runtime.run().await
 }
 
 /// Dispatch process modes that do not start the TUI.
@@ -112,7 +112,7 @@ impl TuiRuntime {
         })
     }
 
-    fn run(self) -> Result<()> {
+    async fn run(self) -> Result<()> {
         let Self {
             config,
             ui,
@@ -123,10 +123,14 @@ impl TuiRuntime {
         let (rescan_tx, rescan_rx) = mpsc::unbounded_channel::<()>();
         let collector = tokio::spawn(collector_loop(config, read_model.clone(), rescan_rx));
 
-        let result = run_tui(read_model, rescan_tx, ui, &mut handlers);
+        let result = run_tui(read_model, rescan_tx, ui, &mut handlers, &collector);
 
         collector.abort();
-        result
+        match collector.await {
+            Ok(()) => result,
+            Err(error) if error.is_cancelled() => result,
+            Err(error) => Err(anyhow::anyhow!("background refresh task failed: {error}")),
+        }
     }
 }
 
@@ -153,10 +157,10 @@ fn build_tui_handlers(config: &Config) -> Result<TuiHandlers> {
         target_resolver: Box::new(CanonicalManagedTargetResolver),
         session_metadata: Box::new(SessionLabels::load(config.label_store_path())),
     };
-    let handlers = WorkflowHandlers::new(handoff, terminal_launcher, managed_sessions, ports)
-        .with_managed_current_run_access(managed_current_runs);
-    handlers.reconcile_tasks()?;
-    Ok(handlers)
+    Ok(
+        WorkflowHandlers::new(handoff, terminal_launcher, managed_sessions, ports)
+            .with_managed_current_run_access(managed_current_runs),
+    )
 }
 
 fn build_managed_session_services(
@@ -223,10 +227,10 @@ async fn collector_loop(
     shared: SharedReadModelCache,
     mut rescan_rx: mpsc::UnboundedReceiver<()>,
 ) {
-    let mut refresh = open_refresh_service(cfg);
+    let mut refresh = open_refresh_cycle_with_cache(cfg, shared);
 
     loop {
-        refresh.refresh_and_publish(shared.as_ref());
+        refresh.run_once();
 
         // Wait ~2s, but wake early on an explicit rescan request.
         tokio::select! {
@@ -241,6 +245,7 @@ fn run_tui<L: WorkerLauncher, T: TerminalLauncher>(
     rescan_tx: mpsc::UnboundedSender<()>,
     mut ui: Ui,
     handlers: &mut WorkflowHandlers<L, T>,
+    collector: &tokio::task::JoinHandle<()>,
 ) -> Result<()> {
     enable_raw_mode()?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -265,6 +270,7 @@ fn run_tui<L: WorkerLauncher, T: TerminalLauncher>(
         &rescan_tx,
         &mut clipboard,
         handlers,
+        collector,
     );
 
     let leave_result = leave_tui_screen(terminal.backend_mut());
@@ -315,8 +321,12 @@ fn event_loop<B: ratatui::backend::Backend, L: WorkerLauncher, T: TerminalLaunch
     rescan_tx: &mpsc::UnboundedSender<()>,
     clipboard: &mut dyn ClipboardPort,
     handlers: &mut WorkflowHandlers<L, T>,
+    collector: &tokio::task::JoinHandle<()>,
 ) -> Result<()> {
     loop {
+        if collector.is_finished() {
+            anyhow::bail!("background refresh task stopped unexpectedly");
+        }
         // Rendering reads the latest published projection without owning refresh state.
         let snap = shared.current();
         ui.clamp_selections(&snap);

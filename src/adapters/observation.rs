@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::application::observation::read_model::RefreshDiagnostic;
 use crate::application::observation::read_model::ScanStats;
-use crate::application::observation::refresh::{ObservationBatch, SessionObservationSource};
+use crate::application::observation::{SessionObservationBatch, SessionObservationSource};
 
 /// Incrementally refresh the index from source: parse changed/new files, skip
 /// unchanged ones, and prune sessions whose source vanished. Each provider's
@@ -40,7 +40,7 @@ pub fn refresh_checked(cfg: &Config, index: &mut Index) -> Result<ScanStats> {
         }
     }
 
-    stats.pruned = index.prune_missing(&present)?;
+    stats.pruned += index.prune_missing(&present)?;
     Ok(stats)
 }
 
@@ -61,6 +61,8 @@ fn index_one_checked(
     if let Some(parsed) = adapter.parse_file(path) {
         index.upsert(&parsed, path, fp)?;
         stats.parsed += 1;
+    } else if index.remove_source(path)? {
+        stats.pruned += 1;
     }
     Ok(())
 }
@@ -347,7 +349,7 @@ impl IndexedObservationSource {
 }
 
 impl SessionObservationSource for IndexedObservationSource {
-    fn refresh(&mut self) -> ObservationBatch {
+    fn collect(&mut self) -> SessionObservationBatch {
         let mut diagnostics = Vec::new();
         let mut stats = ScanStats::default();
         let mut sessions = Vec::new();
@@ -398,7 +400,7 @@ impl SessionObservationSource for IndexedObservationSource {
             },
             Err(error) => diagnostics.push(RefreshDiagnostic::new("Index", error.clone())),
         }
-        ObservationBatch {
+        SessionObservationBatch {
             stats,
             sessions,
             diagnostics,

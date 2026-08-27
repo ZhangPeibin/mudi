@@ -6,6 +6,7 @@ use crate::domain::{
 use anyhow::{anyhow, Context, Result};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedLaunchStatus {
@@ -238,6 +239,14 @@ pub trait ManagedSessionRepository: Send {
         registration_id: &str,
         session: &SessionIdentity,
     ) -> Result<()>;
+    fn associate_launch_title(
+        &mut self,
+        registration_id: &str,
+        session: &SessionIdentity,
+        _alias: &str,
+    ) -> Result<()> {
+        self.record_launch_title_association(registration_id, session)
+    }
     fn has_pending_resume(&self, provider: Provider, native_session_id: &str) -> Result<bool>;
     fn get(&self, registration_id: &str) -> Result<Option<ManagedLaunchRegistration>>;
     fn binding_registrations(&self) -> Result<Vec<ManagedLaunchRegistration>>;
@@ -256,16 +265,6 @@ pub trait ManagedSessionRepository: Send {
         native_session_id: &str,
     ) -> Result<Option<ManagedCurrentRunRecord>>;
     fn managed_current_runs(&self) -> Result<Vec<ManagedCurrentRunRecord>>;
-    fn managed_metadata_is_synchronized(
-        &self,
-        provider: Provider,
-        native_session_id: &str,
-    ) -> Result<bool>;
-    fn mark_managed_metadata_synchronized(
-        &self,
-        provider: Provider,
-        native_session_id: &str,
-    ) -> Result<()>;
     fn apply_provenance(&self, sessions: &mut [Session]) -> Result<()>;
     fn establish_management(
         &mut self,
@@ -795,6 +794,29 @@ pub enum ProviderProcessObservation {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BindingProcessObservation {
+    pub launch_process: ProviderProcessObservation,
+    pub provider_process: Option<ProviderProcessObservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedBindingAttempt<'a> {
+    pub registration_id: &'a str,
+    pub provider_evidence: Option<ProviderBindingEvidence>,
+    pub process_evidence: BindingProcessObservation,
+    pub observed_at_ms: i64,
+    pub after_restart: bool,
+}
+
+struct BindingAttempt<'a> {
+    registration_id: &'a str,
+    provider_evidence: Option<ProviderBindingEvidence>,
+    process_evidence: Option<BindingProcessObservation>,
+    observed_at_ms: i64,
+    clean_confirmed_absence: bool,
+}
+
 /// Revalidates exact process identity immediately before receipt issuance.
 pub trait ProcessEvidence: Send + Sync {
     fn observe(&self, pid: u32) -> ProviderProcessObservation;
@@ -810,7 +832,7 @@ pub trait ManagedLaunchCleanup: Send + Sync {
 
 /// Sole issuer of Binding Receipts.
 pub struct EvidenceBinder {
-    process_evidence: Box<dyn ProcessEvidence>,
+    process_evidence: Arc<dyn ProcessEvidence>,
     cleanup: Box<dyn ManagedLaunchCleanup>,
 }
 
@@ -820,9 +842,13 @@ impl EvidenceBinder {
         cleanup: Box<dyn ManagedLaunchCleanup>,
     ) -> Self {
         Self {
-            process_evidence,
+            process_evidence: Arc::from(process_evidence),
             cleanup,
         }
+    }
+
+    pub fn process_evidence(&self) -> Arc<dyn ProcessEvidence> {
+        self.process_evidence.clone()
     }
 
     pub fn bind(
@@ -832,9 +858,17 @@ impl EvidenceBinder {
         evidence: Option<ProviderBindingEvidence>,
         now_ms: i64,
     ) -> Result<BindingOutcome> {
-        self.bind_with_policy(store, registration_id, evidence, now_ms, true, |_, _, _| {
-            Ok(LaunchIdentityAssociationOutcome::ContinueBinding)
-        })
+        self.bind_with_policy(
+            store,
+            BindingAttempt {
+                registration_id,
+                provider_evidence: evidence,
+                process_evidence: None,
+                observed_at_ms: now_ms,
+                clean_confirmed_absence: true,
+            },
+            |_, _, _| Ok(LaunchIdentityAssociationOutcome::ContinueBinding),
+        )
     }
 
     pub fn bind_with_identity_association<F>(
@@ -852,7 +886,17 @@ impl EvidenceBinder {
             &SessionIdentity,
         ) -> Result<LaunchIdentityAssociationOutcome>,
     {
-        self.bind_with_policy(store, registration_id, evidence, now_ms, true, associate)
+        self.bind_with_policy(
+            store,
+            BindingAttempt {
+                registration_id,
+                provider_evidence: evidence,
+                process_evidence: None,
+                observed_at_ms: now_ms,
+                clean_confirmed_absence: true,
+            },
+            associate,
+        )
     }
 
     /// Reconcile a launch retained across a Mudi restart without cleanup side effects.
@@ -865,10 +909,13 @@ impl EvidenceBinder {
     ) -> Result<BindingOutcome> {
         self.bind_with_policy(
             store,
-            registration_id,
-            evidence,
-            now_ms,
-            false,
+            BindingAttempt {
+                registration_id,
+                provider_evidence: evidence,
+                process_evidence: None,
+                observed_at_ms: now_ms,
+                clean_confirmed_absence: false,
+            },
             |_, _, _| Ok(LaunchIdentityAssociationOutcome::ContinueBinding),
         )
     }
@@ -888,16 +935,23 @@ impl EvidenceBinder {
             &SessionIdentity,
         ) -> Result<LaunchIdentityAssociationOutcome>,
     {
-        self.bind_with_policy(store, registration_id, evidence, now_ms, false, associate)
+        self.bind_with_policy(
+            store,
+            BindingAttempt {
+                registration_id,
+                provider_evidence: evidence,
+                process_evidence: None,
+                observed_at_ms: now_ms,
+                clean_confirmed_absence: false,
+            },
+            associate,
+        )
     }
 
-    fn bind_with_policy<F>(
+    pub fn bind_observed_with_identity_association<F>(
         &self,
         store: &mut dyn ManagedSessionRepository,
-        registration_id: &str,
-        evidence: Option<ProviderBindingEvidence>,
-        now_ms: i64,
-        clean_confirmed_absence: bool,
+        attempt: ObservedBindingAttempt<'_>,
         associate: F,
     ) -> Result<BindingOutcome>
     where
@@ -907,6 +961,39 @@ impl EvidenceBinder {
             &SessionIdentity,
         ) -> Result<LaunchIdentityAssociationOutcome>,
     {
+        self.bind_with_policy(
+            store,
+            BindingAttempt {
+                registration_id: attempt.registration_id,
+                provider_evidence: attempt.provider_evidence,
+                process_evidence: Some(attempt.process_evidence),
+                observed_at_ms: attempt.observed_at_ms,
+                clean_confirmed_absence: !attempt.after_restart,
+            },
+            associate,
+        )
+    }
+
+    fn bind_with_policy<F>(
+        &self,
+        store: &mut dyn ManagedSessionRepository,
+        attempt: BindingAttempt<'_>,
+        associate: F,
+    ) -> Result<BindingOutcome>
+    where
+        F: FnOnce(
+            &mut dyn ManagedSessionRepository,
+            &ManagedLaunchRegistration,
+            &SessionIdentity,
+        ) -> Result<LaunchIdentityAssociationOutcome>,
+    {
+        let BindingAttempt {
+            registration_id,
+            provider_evidence: evidence,
+            process_evidence: processes,
+            observed_at_ms: now_ms,
+            clean_confirmed_absence,
+        } = attempt;
         let registration = store.get(registration_id)?.ok_or_else(|| {
             anyhow!("Binding Managed Launch Registration {registration_id} is unavailable")
         })?;
@@ -918,7 +1005,11 @@ impl EvidenceBinder {
         if registration.status != ManagedLaunchStatus::Binding {
             return Err(anyhow!("only a Binding registration can issue a Receipt"));
         }
-        match self.process_evidence.observe(launch.provider_process.pid) {
+        let launch_process = processes.map_or_else(
+            || self.process_evidence.observe(launch.provider_process.pid),
+            |observed| observed.launch_process,
+        );
+        match launch_process {
             ProviderProcessObservation::Absent => {
                 if !clean_confirmed_absence {
                     store.mark_needs_review(
@@ -956,7 +1047,15 @@ impl EvidenceBinder {
         let Some(evidence) = evidence else {
             return Ok(BindingOutcome::Waiting);
         };
-        match self.process_evidence.observe(evidence.provider_process.pid) {
+        let provider_process = processes.map_or_else(
+            || self.process_evidence.observe(evidence.provider_process.pid),
+            |observed| {
+                observed
+                    .provider_process
+                    .unwrap_or(ProviderProcessObservation::Unknown)
+            },
+        );
+        match provider_process {
             ProviderProcessObservation::Absent => {
                 store.mark_needs_review(
                     registration_id,

@@ -3,7 +3,7 @@ use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::persistence::session_metadata::SessionLabels;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::{ProviderBindingEvidence, ProviderExecutables};
-use mudi::adapters::refresh::open_refresh_service;
+use mudi::adapters::refresh::open_refresh_cycle;
 use mudi::application::managed_sessions::{
     BindingOutcome, BindingReceipt, EvidenceBinder, ManagedCurrentRunEvidence,
     ManagedCurrentRunRecord, ManagedLaunchCleanup, ManagedLaunchEvidence,
@@ -178,9 +178,9 @@ fn startup_refresh_preserves_a_preexisting_uncertain_launch_for_review() {
             cleaned: cleaned.clone(),
         }),
     );
-    let snapshot = open_refresh_service(config)
+    let snapshot = open_refresh_cycle(config)
         .with_managed_binding_reconciler(reconciler)
-        .refresh();
+        .run_once();
 
     let retained = ManagedLaunchStore::open(store_path)
         .unwrap()
@@ -267,17 +267,17 @@ fn verified_managed_relationship_and_local_metadata_survive_restart() {
     let opaque_ref = store.managed_current_runs().unwrap()[0].opaque_ref.clone();
     drop(store);
 
-    let mut first_refresh = open_refresh_service(config.clone())
+    let mut first_refresh = open_refresh_cycle(config.clone())
         .with_managed_current_run_evidence(Box::new(AcceptCurrentRunEvidence));
     assert_eq!(
-        first_refresh.refresh().verified_managed_current_runs[0].opaque_ref,
+        first_refresh.run_once().verified_managed_current_runs[0].opaque_ref,
         opaque_ref
     );
     drop(first_refresh);
 
-    let mut restarted_refresh = open_refresh_service(config.clone())
+    let mut restarted_refresh = open_refresh_cycle(config.clone())
         .with_managed_current_run_evidence(Box::new(AcceptCurrentRunEvidence));
-    let restarted = restarted_refresh.refresh();
+    let restarted = restarted_refresh.run_once();
     assert_eq!(restarted.verified_managed_current_runs.len(), 1);
     assert_eq!(
         restarted.verified_managed_current_runs[0].opaque_ref,
@@ -362,9 +362,9 @@ fn corrupted_persisted_identity_stays_unassociated_and_degrades_startup() {
             cleaned: cleaned.clone(),
         }),
     );
-    let snapshot = open_refresh_service(config)
+    let snapshot = open_refresh_cycle(config)
         .with_managed_binding_reconciler(reconciler)
-        .refresh();
+        .run_once();
 
     assert!(matches!(snapshot.health, RefreshHealth::Degraded { .. }));
     assert!(snapshot.managed_launches.is_empty());
@@ -404,9 +404,9 @@ fn stale_managed_current_run_is_not_reassociated_or_rewritten_on_restart() {
         .unwrap();
     drop(store);
 
-    let snapshot = open_refresh_service(config)
+    let snapshot = open_refresh_cycle(config)
         .with_managed_current_run_evidence(Box::new(RejectCurrentRunEvidence))
-        .refresh();
+        .run_once();
 
     assert!(snapshot.verified_managed_current_runs.is_empty());
     let reopened = ManagedLaunchStore::open(store_path).unwrap();

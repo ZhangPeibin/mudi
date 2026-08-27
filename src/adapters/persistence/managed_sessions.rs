@@ -6,6 +6,7 @@ use crate::application::managed_sessions::{
     ManagedLaunchStatus, ManagedLaunchTarget, ManagedResumeTarget, ManagedSessionRecord,
     ManagedSessionRepository, PrivateTmuxEnvironment, ProviderNewCommand,
 };
+use crate::application::session_labels::validate_alias;
 use crate::domain::{
     ProcessIdentity, Provider, Session, SessionIdentity, SessionProvenance, SourceFormat,
     SourceMetadata,
@@ -143,7 +144,7 @@ impl ManagedLaunchStore {
             )
             .optional()?
             .map(|(provider, native_id)| {
-                Ok(SessionIdentity {
+                Ok::<SessionIdentity, anyhow::Error>(SessionIdentity {
                     provider: Provider::parse(&provider)
                         .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
                     native_id,
@@ -180,6 +181,75 @@ impl ManagedLaunchStore {
                 "Managed Launch Registration {registration_id} cannot record its Title association"
             ))
         }
+    }
+
+    fn associate_launch_title(
+        &mut self,
+        registration_id: &str,
+        session: &SessionIdentity,
+        alias: &str,
+    ) -> Result<()> {
+        let alias = validate_alias(alias)?;
+        let transaction = self.conn.transaction()?;
+        let inserted = transaction.execute(
+            r#"
+            INSERT OR IGNORE INTO managed_launch_title_associations (
+                registration_id, provider, native_session_id
+            )
+            SELECT registration_id, ?2, ?3
+            FROM managed_launch_registrations
+            WHERE registration_id = ?1 AND status = 'binding'
+            "#,
+            params![
+                registration_id,
+                session.provider.as_str(),
+                session.native_id
+            ],
+        )?;
+        let associated = transaction
+            .query_row(
+                "SELECT provider, native_session_id FROM managed_launch_title_associations WHERE registration_id = ?1",
+                [registration_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .map(|(provider, native_id)| {
+                Ok::<SessionIdentity, anyhow::Error>(SessionIdentity {
+                    provider: Provider::parse(&provider)
+                        .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
+                    native_id,
+                })
+            })
+            .transpose()?;
+        if inserted != 1 && associated.as_ref() != Some(session) {
+            return Err(anyhow!(
+                "Managed Launch Registration {registration_id} cannot record its Title association"
+            ));
+        }
+        let disposition = transaction
+            .query_row(
+                "SELECT disposition FROM session_metadata WHERE provider = ?1 AND native_session_id = ?2",
+                params![session.provider.as_str(), session.native_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        if disposition.as_deref() == Some("permanently_excluded") {
+            return Err(anyhow!(
+                "Permanently excluded Session metadata cannot be edited"
+            ));
+        }
+        transaction.execute(
+            r#"
+            INSERT INTO session_metadata (provider, native_session_id, alias)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(provider, native_session_id) DO UPDATE
+            SET alias = COALESCE(session_metadata.alias, excluded.alias)
+            "#,
+            params![session.provider.as_str(), session.native_id, alias],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     fn has_pending_resume(&self, provider: Provider, native_session_id: &str) -> Result<bool> {
@@ -500,34 +570,6 @@ impl ManagedLaunchStore {
         .collect()
     }
 
-    pub fn managed_metadata_is_synchronized(
-        &self,
-        provider: Provider,
-        native_session_id: &str,
-    ) -> Result<bool> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT 1 FROM managed_metadata_syncs WHERE provider = ?1 AND native_session_id = ?2",
-                params![provider.as_str(), native_session_id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some())
-    }
-
-    pub fn mark_managed_metadata_synchronized(
-        &self,
-        provider: Provider,
-        native_session_id: &str,
-    ) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR IGNORE INTO managed_metadata_syncs (provider, native_session_id) VALUES (?1, ?2)",
-            params![provider.as_str(), native_session_id],
-        )?;
-        Ok(())
-    }
-
     pub fn apply_provenance(&self, sessions: &mut [Session]) -> Result<()> {
         let managed = self
             .managed_sessions()?
@@ -614,6 +656,22 @@ impl ManagedLaunchStore {
                     registration.session_alias,
                     registration.description,
                     receipt.id,
+                ],
+            )?;
+            transaction.execute(
+                r#"
+                INSERT INTO session_metadata (
+                    provider, native_session_id, alias, description
+                ) VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(provider, native_session_id) DO UPDATE SET
+                    alias = COALESCE(session_metadata.alias, excluded.alias),
+                    description = COALESCE(session_metadata.description, excluded.description)
+                "#,
+                params![
+                    receipt.provider.as_str(),
+                    receipt.native_session_id,
+                    registration.session_alias,
+                    registration.description,
                 ],
             )?;
         }
@@ -780,6 +838,15 @@ impl ManagedSessionRepository for ManagedLaunchStore {
         ManagedLaunchStore::record_launch_title_association(self, registration_id, session)
     }
 
+    fn associate_launch_title(
+        &mut self,
+        registration_id: &str,
+        session: &SessionIdentity,
+        alias: &str,
+    ) -> Result<()> {
+        ManagedLaunchStore::associate_launch_title(self, registration_id, session, alias)
+    }
+
     fn has_pending_resume(&self, provider: Provider, native_session_id: &str) -> Result<bool> {
         ManagedLaunchStore::has_pending_resume(self, provider, native_session_id)
     }
@@ -826,22 +893,6 @@ impl ManagedSessionRepository for ManagedLaunchStore {
 
     fn managed_current_runs(&self) -> Result<Vec<ManagedCurrentRunRecord>> {
         ManagedLaunchStore::managed_current_runs(self)
-    }
-
-    fn managed_metadata_is_synchronized(
-        &self,
-        provider: Provider,
-        native_session_id: &str,
-    ) -> Result<bool> {
-        ManagedLaunchStore::managed_metadata_is_synchronized(self, provider, native_session_id)
-    }
-
-    fn mark_managed_metadata_synchronized(
-        &self,
-        provider: Provider,
-        native_session_id: &str,
-    ) -> Result<()> {
-        ManagedLaunchStore::mark_managed_metadata_synchronized(self, provider, native_session_id)
     }
 
     fn apply_provenance(&self, sessions: &mut [Session]) -> Result<()> {

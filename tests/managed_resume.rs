@@ -10,7 +10,7 @@ use mudi::adapters::managed_sessions::{
 use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::{registry, ProviderBindingEvidence, ProviderExecutables};
-use mudi::adapters::refresh::open_refresh_service;
+use mudi::adapters::refresh::open_refresh_cycle;
 use mudi::application::clipboard::ClipboardPort;
 use mudi::application::handoff::{HandoffPaths, WorkerLaunch, WorkerLauncher};
 use mudi::application::managed_sessions::{
@@ -991,14 +991,14 @@ fn refresh_projects_resume_eligibility_only_for_verified_exited_evidence() {
             },
         );
         drop(store);
-        let mut refresh = open_refresh_service(config).with_managed_resume_evidence(Box::new(
+        let mut refresh = open_refresh_cycle(config).with_managed_resume_evidence(Box::new(
             FixedResumeEvidence {
                 lifecycle,
                 verified: Arc::new(Mutex::new(Vec::new())),
             },
         ));
 
-        let snapshot = refresh.refresh();
+        let snapshot = refresh.run_once();
 
         assert_eq!(snapshot.resumable_managed_sessions.len(), expected);
         if expected == 1 {

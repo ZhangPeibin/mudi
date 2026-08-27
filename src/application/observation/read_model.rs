@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 /// Progress reported while (re)indexing.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScanStats {
     pub discovered: usize,
     pub parsed: usize,
@@ -22,16 +22,35 @@ pub struct ScanStats {
     pub pruned: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RefreshStage {
+    Collect,
+    Reconcile,
+    #[default]
+    Project,
+    Publish,
+}
+
 /// A component-scoped explanation of why the current projection is degraded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefreshDiagnostic {
+    pub stage: RefreshStage,
     pub component: String,
     pub message: String,
 }
 
 impl RefreshDiagnostic {
     pub fn new(component: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::for_stage(RefreshStage::Project, component, message)
+    }
+
+    pub fn for_stage(
+        stage: RefreshStage,
+        component: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
+            stage,
             component: component.into(),
             message: message.into(),
         }

@@ -14,7 +14,7 @@ use mudi::application::managed_sessions::{
     ManagedTerminalAccess,
 };
 use mudi::application::observation::read_model::RefreshSnapshot;
-use mudi::application::observation::refresh::Clock;
+use mudi::application::observation::Clock;
 use mudi::application::successor::TerminalLauncher;
 use mudi::presentation::tui::{route_action, Ui, UiAction};
 use std::path::Path;

@@ -5,7 +5,7 @@ use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::persistence::session_metadata::SessionLabels;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::{registry, ProviderBindingEvidence};
-use mudi::adapters::refresh::open_refresh_service;
+use mudi::adapters::refresh::open_refresh_cycle;
 use mudi::application::managed_sessions::{
     BindingOutcome, EvidenceBinder, LaunchIdentityAssociationOutcome, ManagedLaunchAction,
     ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus,
@@ -682,7 +682,7 @@ fn refresh_publishes_metadata_only_managed_launch_recovery_state() {
         .insert(&registration)
         .unwrap();
 
-    let snapshot = open_refresh_service(config).refresh();
+    let snapshot = open_refresh_cycle(config).run_once();
 
     assert_eq!(snapshot.managed_launches.len(), 1);
     let launch = &snapshot.managed_launches[0];
@@ -1064,8 +1064,8 @@ fn claude_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
         .unwrap();
     let mut ui = load_ui_before_binding(&config);
 
-    let mut refresh = open_refresh_service(config.clone());
-    let snapshot = refresh.refresh();
+    let mut refresh = open_refresh_cycle(config.clone());
+    let snapshot = refresh.run_once();
 
     assert_managed_refresh(
         &config,
@@ -1086,7 +1086,7 @@ fn claude_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
             "Edited after binding",
         )
         .unwrap();
-    refresh.refresh();
+    refresh.run_once();
     let labels = SessionLabels::load(config.label_store_path());
     assert_eq!(
         labels.alias(Provider::ClaudeCode, native_session_id),
@@ -1166,7 +1166,7 @@ fn codex_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
     );
     let mut ui = load_ui_before_binding(&config);
 
-    let snapshot = open_refresh_service(config.clone()).refresh();
+    let snapshot = open_refresh_cycle(config.clone()).run_once();
 
     assert_managed_refresh(
         &config,
@@ -1299,8 +1299,8 @@ fn assert_title_survives_binding(provider: Provider) {
         .unwrap();
     let mut ui = load_ui_before_binding(&config);
 
-    let mut refresh = open_refresh_service(config.clone());
-    let snapshot = refresh.refresh();
+    let mut refresh = open_refresh_cycle(config.clone());
+    let snapshot = refresh.run_once();
 
     let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
     assert!(store.get(&registration_id).unwrap().is_none());
@@ -1336,12 +1336,12 @@ fn assert_title_survives_binding(provider: Provider) {
     }
 
     let label_bytes = fs::read(config.label_store_path()).unwrap();
-    refresh.refresh();
+    refresh.run_once();
     assert_eq!(fs::read(config.label_store_path()).unwrap(), label_bytes);
     drop(refresh);
 
-    let mut restarted_refresh = open_refresh_service(config.clone());
-    let restarted = restarted_refresh.refresh();
+    let mut restarted_refresh = open_refresh_cycle(config.clone());
+    let restarted = restarted_refresh.run_once();
     assert_eq!(fs::read(config.label_store_path()).unwrap(), label_bytes);
     assert!(restarted.managed_launches.is_empty());
     assert_eq!(
@@ -1352,7 +1352,7 @@ fn assert_title_survives_binding(provider: Provider) {
     SessionLabels::load(config.label_store_path())
         .set_alias(provider, &native_session_id, "User-edited title")
         .unwrap();
-    restarted_refresh.refresh();
+    restarted_refresh.run_once();
     assert_eq!(
         SessionLabels::load(config.label_store_path()).alias(provider, &native_session_id),
         Some("User-edited title")
@@ -1361,7 +1361,7 @@ fn assert_title_survives_binding(provider: Provider) {
     SessionLabels::load(config.label_store_path())
         .clear_title(provider, &native_session_id)
         .unwrap();
-    restarted_refresh.refresh();
+    restarted_refresh.run_once();
     assert_eq!(
         SessionLabels::load(config.label_store_path()).alias(provider, &native_session_id),
         None
@@ -1436,8 +1436,8 @@ fn conflicting_launch_registration_cannot_replace_an_associated_title() {
     store.insert(&conflicting).unwrap();
     drop(store);
 
-    let mut refresh = open_refresh_service(config.clone());
-    refresh.refresh();
+    let mut refresh = open_refresh_cycle(config.clone());
+    refresh.run_once();
 
     let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
     assert!(store.get(&first.id).unwrap().is_none());
@@ -1456,7 +1456,7 @@ fn conflicting_launch_registration_cannot_replace_an_associated_title() {
     );
 
     let label_bytes = fs::read(config.label_store_path()).unwrap();
-    refresh.refresh();
+    refresh.run_once();
     assert_eq!(fs::read(config.label_store_path()).unwrap(), label_bytes);
 }
 

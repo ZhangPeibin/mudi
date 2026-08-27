@@ -251,6 +251,37 @@ impl Index {
         Ok(pruned)
     }
 
+    /// Remove the cached Session for a source that still exists but no longer contains a
+    /// valid Provider record, such as after truncation followed by a partial write.
+    pub fn remove_source(&mut self, source_path: &Path) -> Result<bool> {
+        let identity = self
+            .conn
+            .query_row(
+                "SELECT provider, id FROM sessions WHERE source_path = ?1",
+                params![source_path.to_string_lossy()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let Some((provider, id)) = identity else {
+            return Ok(false);
+        };
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "DELETE FROM sessions WHERE provider = ?1 AND id = ?2",
+            params![provider, id],
+        )?;
+        transaction.execute(
+            "DELETE FROM per_model WHERE provider = ?1 AND session_id = ?2",
+            params![provider, id],
+        )?;
+        transaction.execute(
+            "DELETE FROM compactions WHERE provider = ?1 AND session_id = ?2",
+            params![provider, id],
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
     /// Load every stored session with its child rows.
     pub fn load_all(&self) -> Result<Vec<StoredSession>> {
         let mut stmt = self.conn.prepare(
@@ -498,5 +529,25 @@ mod tests {
         let all = idx.load_all().unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].parsed.id, "s1");
+    }
+
+    #[test]
+    fn remove_source_drops_a_cached_session_and_its_children() {
+        let mut index = Index::open_in_memory().unwrap();
+        let path = PathBuf::from("/logs/truncated.jsonl");
+        index
+            .upsert(
+                &sample("s1"),
+                &path,
+                Fingerprint {
+                    mtime_ns: 1,
+                    size: 2,
+                },
+            )
+            .unwrap();
+
+        assert!(index.remove_source(&path).unwrap());
+        assert!(!index.remove_source(&path).unwrap());
+        assert!(index.load_all().unwrap().is_empty());
     }
 }

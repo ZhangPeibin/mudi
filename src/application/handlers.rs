@@ -8,7 +8,7 @@ use crate::application::managed_sessions::{
     ManagedResumeRequest, ManagedSessionService, ManagedTerminalOutcome,
 };
 use crate::application::observation::read_model::RefreshSnapshot;
-use crate::application::observation::refresh::Clock;
+use crate::application::observation::Clock;
 use crate::application::session_labels::SessionMetadataRepository;
 use crate::application::successor::{render_successor_command, SuccessorRuntime, TerminalLauncher};
 use crate::application::tasks::{OperationTask, OperationTaskState};

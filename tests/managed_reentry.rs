@@ -10,7 +10,7 @@ use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::ProviderBindingEvidence;
 use mudi::adapters::providers::ProviderExecutables;
-use mudi::adapters::refresh::open_refresh_service;
+use mudi::adapters::refresh::open_refresh_cycle;
 use mudi::application::clipboard::ClipboardPort;
 use mudi::application::handoff::{HandoffPaths, WorkerLaunch, WorkerLauncher};
 use mudi::application::managed_sessions::{
@@ -251,13 +251,13 @@ fn refresh_projects_only_revalidated_open_managed_current_runs_without_tmux_meta
         "launch-private-open",
         "native-session",
     );
-    let mut open_refresh = open_refresh_service(open_config).with_managed_current_run_evidence(
+    let mut open_refresh = open_refresh_cycle(open_config).with_managed_current_run_evidence(
         Box::new(RecordingOpenEvidence {
             checked: Arc::new(Mutex::new(Vec::new())),
         }),
     );
 
-    let open_snapshot = open_refresh.refresh();
+    let open_snapshot = open_refresh.run_once();
 
     assert_eq!(open_snapshot.verified_managed_current_runs.len(), 1);
     let debug_projection = format!("{:?}", open_snapshot.verified_managed_current_runs);
@@ -275,11 +275,11 @@ fn refresh_projects_only_revalidated_open_managed_current_runs_without_tmux_meta
         "launch-private-exited",
         "native-session",
     );
-    let mut exited_refresh = open_refresh_service(exited_config)
+    let mut exited_refresh = open_refresh_cycle(exited_config)
         .with_managed_current_run_evidence(Box::new(RejectingEvidence));
 
     assert!(exited_refresh
-        .refresh()
+        .run_once()
         .verified_managed_current_runs
         .is_empty());
 }
