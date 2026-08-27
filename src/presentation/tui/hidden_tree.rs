@@ -3,7 +3,7 @@
 use super::{
     is_system_temporary_cwd, provider_mark, retained_selection, snapshot_now_ms, text, theme::Theme,
 };
-use crate::application::session_labels::{CurationDisposition, SessionLabels};
+use crate::application::session_labels::{CurationDisposition, SessionMetadataQuery};
 use crate::domain::{Project, ProjectIdentity, Session, SessionIdentity};
 use crate::presentation::app::{fmt_relative, Snapshot};
 use ratatui::layout::Rect;
@@ -55,11 +55,16 @@ pub(super) struct State {
 }
 
 impl State {
-    pub(super) fn reconcile(&mut self, snap: &Snapshot, labels: &SessionLabels) {
+    pub(super) fn reconcile(&mut self, snap: &Snapshot, labels: &dyn SessionMetadataQuery) {
         self.selection = effective_selection(self.selection.as_ref(), &self.rows(snap, labels));
     }
 
-    pub(super) fn move_vertical(&mut self, snap: &Snapshot, labels: &SessionLabels, down: bool) {
+    pub(super) fn move_vertical(
+        &mut self,
+        snap: &Snapshot,
+        labels: &dyn SessionMetadataQuery,
+        down: bool,
+    ) {
         let rows = self.rows(snap, labels);
         let Some(selection) = effective_selection(self.selection.as_ref(), &rows) else {
             return;
@@ -75,7 +80,7 @@ impl State {
         self.selection = rows.get(next).map(|row| row.key().clone());
     }
 
-    pub(super) fn activate(&mut self, snap: &Snapshot, labels: &SessionLabels) {
+    pub(super) fn activate(&mut self, snap: &Snapshot, labels: &dyn SessionMetadataQuery) {
         let rows = self.rows(snap, labels);
         let Some(Key::Project(project)) = effective_selection(self.selection.as_ref(), &rows)
         else {
@@ -90,7 +95,7 @@ impl State {
     pub(super) fn selected_identities(
         &self,
         snap: &Snapshot,
-        labels: &SessionLabels,
+        labels: &dyn SessionMetadataQuery,
     ) -> Option<Vec<SessionIdentity>> {
         let rows = self.rows(snap, labels);
         match effective_selection(self.selection.as_ref(), &rows)? {
@@ -110,7 +115,7 @@ impl State {
         }
     }
 
-    fn rows<'a>(&self, snap: &'a Snapshot, labels: &SessionLabels) -> Vec<Row<'a>> {
+    fn rows<'a>(&self, snap: &'a Snapshot, labels: &dyn SessionMetadataQuery) -> Vec<Row<'a>> {
         let groups = groups(snap, labels);
         let mut rows = Vec::new();
         for group in groups {
@@ -136,7 +141,10 @@ impl State {
     }
 }
 
-pub(super) fn sessions<'a>(snap: &'a Snapshot, labels: &SessionLabels) -> Vec<&'a Session> {
+pub(super) fn sessions<'a>(
+    snap: &'a Snapshot,
+    labels: &dyn SessionMetadataQuery,
+) -> Vec<&'a Session> {
     snap.sessions
         .iter()
         .filter(|session| !is_system_temporary_cwd(session.cwd.as_deref()))
@@ -148,7 +156,7 @@ pub(super) fn sessions<'a>(snap: &'a Snapshot, labels: &SessionLabels) -> Vec<&'
         .collect()
 }
 
-fn groups<'a>(snap: &'a Snapshot, labels: &SessionLabels) -> Vec<ProjectGroup<'a>> {
+fn groups<'a>(snap: &'a Snapshot, labels: &dyn SessionMetadataQuery) -> Vec<ProjectGroup<'a>> {
     let mut projects: Vec<ProjectGroup<'a>> = Vec::new();
     for session in sessions(snap, labels) {
         let project = session
@@ -197,7 +205,7 @@ fn effective_selection(selection: Option<&Key>, rows: &[Row<'_>]) -> Option<Key>
         .or_else(|| rows.first().map(|row| row.key().clone()))
 }
 
-pub(super) fn counts(snap: &Snapshot, labels: &SessionLabels) -> (usize, usize) {
+pub(super) fn counts(snap: &Snapshot, labels: &dyn SessionMetadataQuery) -> (usize, usize) {
     let sessions = sessions(snap, labels);
     let projects = sessions
         .iter()
@@ -213,7 +221,7 @@ pub(super) fn draw(
     area: Rect,
     snap: &Snapshot,
     state: &State,
-    labels: &SessionLabels,
+    labels: &dyn SessionMetadataQuery,
     theme: Theme,
 ) {
     let tree_rows = state.rows(snap, labels);

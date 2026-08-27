@@ -22,6 +22,7 @@ mod project_tree;
 mod property_editor;
 mod provenance_mark;
 mod provider_mark;
+mod router;
 mod selected_session;
 mod session_browser;
 mod signals;
@@ -30,12 +31,12 @@ mod tasks;
 mod text;
 mod theme;
 
-use crate::adapters::macos::clipboard::Clipboard;
 use crate::application::attention::{AttentionEngine, AttentionSnapshot};
+use crate::application::clipboard::ClipboardPort;
 use crate::application::managed_sessions::{
     ManagedLaunchAction, ManagedLaunchTarget, ManagedNewRequest, ManagedResumeRequest,
 };
-use crate::application::session_labels::SessionLabels;
+use crate::application::session_labels::{SessionMetadataQuery, SessionMetadataView};
 use crate::application::signals::RecentSignal;
 use crate::application::tasks::OperationTask;
 use crate::domain::{Provider, Session, SessionIdentity, SessionState};
@@ -495,7 +496,7 @@ pub struct Ui {
     /// Stable selection for the independent Managed Start status region.
     managed_launch_id: Option<String>,
     /// UI 自己拥有的 Session 元数据、Profile、主题和短期状态提示。
-    labels: SessionLabels,
+    labels: Box<dyn SessionMetadataQuery>,
     labels_snapshot_revision: u64,
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
@@ -584,11 +585,25 @@ pub enum UiAction {
         native_session_id: String,
         opaque_ref: String,
     },
+    SaveSessionMetadata {
+        session: SessionIdentity,
+        title: String,
+        description: String,
+    },
+    HideSessions {
+        sessions: Vec<SessionIdentity>,
+    },
+    RestoreSessions {
+        sessions: Vec<SessionIdentity>,
+    },
+    PermanentlyExcludeSessions {
+        sessions: Vec<SessionIdentity>,
+    },
     Quit,
 }
 
 /// Declarative request emitted by the UI. The application controller owns its effects.
-pub type UiIntent = UiAction;
+pub use router::route_action;
 
 impl Default for Ui {
     /// 构造首次启动时的默认界面状态。
@@ -618,7 +633,7 @@ impl Default for Ui {
             hide_confirmation: None,
             inventory_delete_confirmation: None,
             managed_launch_id: None,
-            labels: SessionLabels::default(),
+            labels: Box::new(SessionMetadataView::default()),
             labels_snapshot_revision: 0,
             profile_path: None,
             profile: ProfilePreferences::default(),
@@ -631,6 +646,13 @@ impl Default for Ui {
 impl Ui {
     /// 从本地 Profile 加载 UI 状态。
     pub fn load(profile_path: impl AsRef<Path>) -> std::io::Result<Self> {
+        Self::load_with_session_metadata(profile_path, Box::new(SessionMetadataView::default()))
+    }
+
+    pub fn load_with_session_metadata(
+        profile_path: impl AsRef<Path>,
+        labels: Box<dyn SessionMetadataQuery>,
+    ) -> std::io::Result<Self> {
         let profile_path = profile_path.as_ref().to_path_buf();
         let profile = match fs::read(&profile_path) {
             Ok(contents) => serde_json::from_slice(&contents).map_err(std::io::Error::other)?,
@@ -640,14 +662,10 @@ impl Ui {
             Err(error) => return Err(error),
         };
         let theme = profile.theme;
-        let label_path = profile_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("state.db");
         let workspace_split = split_pane::State::new(profile.overview_left_width);
         Ok(Self {
             guide_open: !profile.help_seen,
-            labels: SessionLabels::load(label_path),
+            labels,
             profile_path: Some(profile_path),
             profile,
             workspace_split,
@@ -662,7 +680,12 @@ impl Ui {
     }
 
     /// 执行一次用户明确请求的剪贴板写入，并短暂显示结果。
-    pub fn copy_to_clipboard(&mut self, clipboard: &mut dyn Clipboard, field: &str, value: &str) {
+    pub fn copy_to_clipboard(
+        &mut self,
+        clipboard: &mut dyn ClipboardPort,
+        field: &str,
+        value: &str,
+    ) {
         let message = match clipboard.write_text(value) {
             Ok(()) => format!("Copied {field}"),
             Err(error) => format!("Copy failed: {error}"),
@@ -701,6 +724,76 @@ impl Ui {
                     self.new_session = Some(form);
                 }
             }
+        }
+    }
+
+    pub fn finish_session_metadata_save(&mut self, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                self.labels.reload();
+                self.edit_session = None;
+                self.status_notice = Some((
+                    "Session metadata saved".into(),
+                    Instant::now() + Duration::from_secs(2),
+                ));
+            }
+            Err(error) => {
+                if let Some(form) = self.edit_session.as_mut() {
+                    form.error = Some(error);
+                } else {
+                    self.show_notice(format!("Save failed: {error}"));
+                }
+            }
+        }
+    }
+
+    pub fn finish_hide_sessions(&mut self, result: Result<usize, String>, snap: &Snapshot) {
+        match result {
+            Ok(count) => {
+                self.labels.reload();
+                self.show_notice(format!(
+                    "{count} Session{} hidden",
+                    if count == 1 { "" } else { "s" }
+                ));
+            }
+            Err(error) => self.show_notice(format!("Hide failed: {error}")),
+        }
+        self.hidden_tree.reconcile(snap, self.labels.as_ref());
+    }
+
+    pub fn finish_restore_sessions(&mut self, result: Result<usize, String>, snap: &Snapshot) {
+        match result {
+            Ok(count) => {
+                self.labels.reload();
+                if self.hidden_sessions(snap).is_empty() {
+                    self.hidden_tree_open = false;
+                } else {
+                    self.hidden_tree.reconcile(snap, self.labels.as_ref());
+                }
+                self.show_notice(format!(
+                    "{count} Session{} restored",
+                    if count == 1 { "" } else { "s" }
+                ));
+            }
+            Err(error) => self.show_notice(format!("Restore failed: {error}")),
+        }
+    }
+
+    pub fn finish_permanent_exclusion(&mut self, result: Result<usize, String>, snap: &Snapshot) {
+        match result {
+            Ok(count) => {
+                self.labels.reload();
+                if self.hidden_sessions(snap).is_empty() {
+                    self.hidden_tree_open = false;
+                } else {
+                    self.hidden_tree.reconcile(snap, self.labels.as_ref());
+                }
+                self.show_notice(format!(
+                    "{count} Session{} permanently excluded",
+                    if count == 1 { "" } else { "s" }
+                ));
+            }
+            Err(error) => self.show_notice(format!("Delete failed: {error}")),
         }
     }
 
@@ -809,8 +902,7 @@ impl Ui {
         }
         // Session 编辑器是最高优先级模态状态，打开时不会泄漏全局快捷键。
         if self.edit_session.is_some() {
-            self.handle_session_editor_key(key);
-            return Ok(UiAction::None);
+            return Ok(self.handle_session_editor_key(key));
         }
         if let Some(target) = self.managed_resume_confirmation.clone() {
             return match key.code {
@@ -939,7 +1031,6 @@ impl Ui {
                         })
                         .cloned()
                         .collect::<Vec<_>>();
-                    let count = sessions.len();
                     self.hide_confirmation = None;
                     if sessions.is_empty() {
                         let became_open = requested.iter().any(|identity| {
@@ -956,15 +1047,7 @@ impl Ui {
                         });
                         return Ok(UiAction::None);
                     }
-                    let result = self.labels.hide_sessions(&sessions);
-                    match result {
-                        Ok(()) => self.show_notice(format!(
-                            "{count} Session{} hidden",
-                            if count == 1 { "" } else { "s" }
-                        )),
-                        Err(error) => self.show_notice(format!("Hide failed: {error}")),
-                    }
-                    Ok(UiAction::None)
+                    Ok(UiAction::HideSessions { sessions })
                 }
                 _ => Ok(UiAction::None),
             };
@@ -976,24 +1059,10 @@ impl Ui {
                     Ok(UiAction::None)
                 }
                 crossterm::event::KeyCode::Enter => {
-                    let count = target.sessions.len();
-                    let result = self.labels.permanently_exclude_sessions(&target.sessions);
                     self.inventory_delete_confirmation = None;
-                    match result {
-                        Ok(()) => {
-                            if self.hidden_sessions(observed_snapshot).is_empty() {
-                                self.hidden_tree_open = false;
-                            } else {
-                                self.hidden_tree.reconcile(observed_snapshot, &self.labels);
-                            }
-                            self.show_notice(format!(
-                                "{count} Session{} permanently excluded",
-                                if count == 1 { "" } else { "s" }
-                            ));
-                        }
-                        Err(error) => self.show_notice(format!("Delete failed: {error}")),
-                    }
-                    Ok(UiAction::None)
+                    Ok(UiAction::PermanentlyExcludeSessions {
+                        sessions: target.sessions,
+                    })
                 }
                 _ => Ok(UiAction::None),
             };
@@ -1038,43 +1107,28 @@ impl Ui {
                 crossterm::event::KeyCode::Esc => self.hidden_tree_open = false,
                 crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j') => {
                     self.hidden_tree
-                        .move_vertical(observed_snapshot, &self.labels, true);
+                        .move_vertical(observed_snapshot, self.labels.as_ref(), true);
                 }
                 crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {
                     self.hidden_tree
-                        .move_vertical(observed_snapshot, &self.labels, false);
+                        .move_vertical(observed_snapshot, self.labels.as_ref(), false);
                 }
                 crossterm::event::KeyCode::Enter => {
-                    self.hidden_tree.activate(observed_snapshot, &self.labels);
+                    self.hidden_tree
+                        .activate(observed_snapshot, self.labels.as_ref());
                 }
                 crossterm::event::KeyCode::Char('u') => {
                     if let Some(sessions) = self
                         .hidden_tree
-                        .selected_identities(observed_snapshot, &self.labels)
+                        .selected_identities(observed_snapshot, self.labels.as_ref())
                     {
-                        let count = sessions.len();
-                        match self.labels.remove_from_hide(&sessions) {
-                            Ok(()) => {
-                                if self.hidden_sessions(observed_snapshot).is_empty() {
-                                    self.hidden_tree_open = false;
-                                } else {
-                                    self.hidden_tree.reconcile(observed_snapshot, &self.labels);
-                                }
-                                self.show_notice(format!(
-                                    "{count} Session{} restored",
-                                    if count == 1 { "" } else { "s" }
-                                ));
-                            }
-                            Err(error) => {
-                                self.show_notice(format!("Restore failed: {error}"));
-                            }
-                        }
+                        return Ok(UiAction::RestoreSessions { sessions });
                     }
                 }
                 crossterm::event::KeyCode::Char('d') => {
                     if let Some(sessions) = self
                         .hidden_tree
-                        .selected_identities(observed_snapshot, &self.labels)
+                        .selected_identities(observed_snapshot, self.labels.as_ref())
                     {
                         self.inventory_delete_confirmation =
                             Some(InventoryDeleteConfirmation { sessions });
@@ -1192,7 +1246,8 @@ impl Ui {
                 } else if self.hidden_sessions(observed_snapshot).is_empty() {
                     self.show_notice("No hidden sessions");
                 } else {
-                    self.hidden_tree.reconcile(observed_snapshot, &self.labels);
+                    self.hidden_tree
+                        .reconcile(observed_snapshot, self.labels.as_ref());
                     self.hidden_tree_open = true;
                 }
             }
@@ -1350,7 +1405,8 @@ impl Ui {
             crossterm::event::KeyCode::Enter
                 if detail::selected_opens_hidden_list(observed_snapshot, self) =>
             {
-                self.hidden_tree.reconcile(observed_snapshot, &self.labels);
+                self.hidden_tree
+                    .reconcile(observed_snapshot, self.labels.as_ref());
                 self.hidden_tree_open = true;
             }
             crossterm::event::KeyCode::Enter if self.detail_task(snap).is_some() => {
@@ -1687,7 +1743,7 @@ impl Ui {
     }
 
     fn hidden_sessions<'a>(&self, snap: &'a Snapshot) -> Vec<&'a Session> {
-        hidden_tree::sessions(snap, &self.labels)
+        hidden_tree::sessions(snap, self.labels.as_ref())
     }
 
     fn selected_managed_launch<'a>(
@@ -1852,32 +1908,23 @@ impl Ui {
     }
 
     /// 处理 Session 编辑器的浏览、字段草稿和元数据保存。
-    fn handle_session_editor_key(&mut self, key: crossterm::event::KeyEvent) {
+    fn handle_session_editor_key(&mut self, key: crossterm::event::KeyEvent) -> UiAction {
         let Some(mut form) = self.edit_session.take() else {
-            return;
+            return UiAction::None;
         };
         form.error = None;
         let activation = form.activation();
         let event = form.editor.handle_key(key, activation);
         match event {
-            PropertyEditorEvent::Close => return,
+            PropertyEditorEvent::Close => return UiAction::None,
             PropertyEditorEvent::Submit => {
-                let result = self.labels.set_metadata(
-                    form.session.provider,
-                    &form.session.native_id,
-                    &form.title,
-                    &form.description,
-                );
-                match result {
-                    Ok(()) => {
-                        self.status_notice = Some((
-                            "Session metadata saved".into(),
-                            Instant::now() + Duration::from_secs(2),
-                        ));
-                        return;
-                    }
-                    Err(error) => form.error = Some(error.to_string()),
-                }
+                let action = UiAction::SaveSessionMetadata {
+                    session: form.session.clone(),
+                    title: form.title.clone(),
+                    description: form.description.clone(),
+                };
+                self.edit_session = Some(form);
+                return action;
             }
             PropertyEditorEvent::TextCommitted { field, value } => {
                 match SessionEditorField::from_index(field) {
@@ -1888,6 +1935,7 @@ impl Ui {
             _ => {}
         }
         self.edit_session = Some(form);
+        UiAction::None
     }
 
     /// 打开选中的 Task；未读终态任务同时请求显式记录 Acknowledgement。
@@ -2012,7 +2060,7 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
             screen.content,
             observed_snapshot,
             &ui.hidden_tree,
-            &ui.labels,
+            ui.labels.as_ref(),
             theme,
         );
     } else if let Some(task) = ui.detail_task(snap) {

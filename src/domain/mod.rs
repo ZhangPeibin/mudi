@@ -1,8 +1,10 @@
+pub mod process;
 pub mod project;
 pub mod provider;
 pub mod session;
 pub mod usage;
 
+pub use process::ProcessIdentity;
 pub use project::{Project, ProjectIdentity};
 pub use provider::{Provider, SourceFormat, SourceMetadata};
 pub use session::{Session, SessionIdentity, SessionProvenance, SessionState};

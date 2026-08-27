@@ -1,7 +1,8 @@
 use mudi::adapters::config::Config;
 use mudi::adapters::persistence::index::Index;
+use mudi::adapters::persistence::session_metadata::SessionLabels;
 use mudi::adapters::providers::claude;
-use mudi::application::session_labels::{CurationDisposition, SessionLabels};
+use mudi::application::session_labels::CurationDisposition;
 use mudi::domain::{Provider, SessionIdentity};
 use std::fs;
 use std::path::PathBuf;

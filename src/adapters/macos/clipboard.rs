@@ -5,9 +5,9 @@
 //!
 //! 从 Rust 架构角度看，这个文件展示了一个很常见的“端口 + 适配器”写法：
 //!
-//! - [`Clipboard`] trait 定义应用真正需要的能力，即“写入文本”；
+//! - [`ClipboardPort`] trait 在 Application 边界定义上层真正需要的能力，即“写入文本”；
 //! - [`MacosClipboard`] 是生产环境适配器，通过 macOS 自带的 `pbcopy` 实现该能力；
-//! - 测试可以实现自己的 `Clipboard`，记录传入值或主动返回错误，而不需要真的修改系统剪贴板。
+//! - 测试可以实现自己的 `ClipboardPort`，记录传入值或主动返回错误，而不需要真的修改系统剪贴板。
 //!
 //! 这样，上层代码依赖的是抽象能力，而不是 `/usr/bin/pbcopy` 这个具体命令。
 
@@ -16,48 +16,22 @@
 // - `io`：让下文可以写 `io::Result`、`io::Error`，而不必反复写完整路径；
 // - `Write`：提供 `write_all` 方法。这个 trait 必须在作用域中，才能对
 //   `ChildStdin` 调用 `write_all`。
+use crate::application::clipboard::ClipboardPort;
 use std::io::{self, Write};
 
 // `Command` 用于配置并启动子进程；`Stdio` 用于配置子进程的标准输入、输出和错误流。
 use std::process::{Command, Stdio};
 
-/// “向系统剪贴板写入一段文本”的抽象接口。
-///
-/// trait 可以理解为一组行为约定：任何类型只要实现了这里的方法，就可以被上层代码
-/// 当作剪贴板使用。上层通常通过 `&mut dyn Clipboard` 接收它，因此既可以传入真实的
-/// [`MacosClipboard`]，也可以传入测试专用的假实现。
-///
-/// 这里没有提供读取方法，是有意缩小接口范围：调用方只依赖当前确实需要的能力。
-pub trait Clipboard {
-    /// 将 `value` 的 UTF-8 字节完整写入剪贴板。
-    ///
-    /// # 参数与借用
-    ///
-    /// - `&mut self`：对实现者进行可变借用。当前的 [`MacosClipboard`] 本身没有字段，
-    ///   实际上不需要修改内部状态；但测试实现可能需要把收到的值存进 `Vec<String>`，
-    ///   所以接口保留可变访问能力。调用期间，Rust 会阻止其他代码同时使用同一个实现者。
-    /// - `value: &str`：借用调用方持有的字符串切片，不获取字符串所有权，也不复制内容。
-    ///   只要本次调用尚未结束，这个引用就必须保持有效。
-    ///
-    /// # 返回值
-    ///
-    /// `io::Result<()>` 是 `Result<(), io::Error>` 的类型别名：
-    ///
-    /// - `Ok(())` 表示写入成功；`()` 是 Rust 的单元类型，表示成功时没有额外数据要返回；
-    /// - `Err(error)` 表示启动进程、写入管道、等待进程或检查退出状态时发生了 I/O 错误。
-    fn write_text(&mut self, value: &str) -> io::Result<()>;
-}
-
 /// 使用 macOS 系统命令 `/usr/bin/pbcopy` 的剪贴板适配器。
 ///
 /// 这是一个“单元结构体”（unit struct）：它没有字段，也不保存状态，所以创建实例时只需写
-/// `MacosClipboard`，不需要花括号或构造函数。这个类型的主要作用是承载 `Clipboard` 实现，
+/// `MacosClipboard`，不需要花括号或构造函数。这个类型的主要作用是承载 `ClipboardPort` 实现，
 /// 把具体的 macOS 行为封装在抽象接口后面。
 pub struct MacosClipboard;
 
 // `impl Trait for Type` 表示“为某个具体类型实现某个 trait”。
-// 实现以后，`MacosClipboard` 就可以出现在任何需要 `Clipboard` 的位置。
-impl Clipboard for MacosClipboard {
+// 实现以后，`MacosClipboard` 就可以出现在任何需要 `ClipboardPort` 的位置。
+impl ClipboardPort for MacosClipboard {
     fn write_text(&mut self, value: &str) -> io::Result<()> {
         // `Command::new` 只创建命令配置，还不会立即启动进程。
         // 使用绝对路径可以避免依赖用户的 `PATH`，明确调用 macOS 系统自带的 pbcopy。

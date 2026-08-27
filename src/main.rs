@@ -23,31 +23,44 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use mudi::adapters::config::Config;
-use mudi::adapters::macos::clipboard::{Clipboard, MacosClipboard};
+use mudi::adapters::handoff::{
+    open_handoff_service_with_current_run_control, DetachedWorkerLauncher, MacosCompletionNotifier,
+    MacosCurrentRunControl,
+};
+use mudi::adapters::handoff_worker::run_worker_from_args;
+use mudi::adapters::macos::clipboard::MacosClipboard;
+use mudi::adapters::managed_sessions::{
+    discover_tmux_executable, run_attach_from_args, MacosManagedTerminalAccess,
+    SystemManagedCurrentRunEvidence, SystemManagedResumeProviderEvidence, SystemProcessEvidence,
+    TmuxLaunchBroker,
+};
+use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
+use mudi::adapters::persistence::session_metadata::SessionLabels;
 use mudi::adapters::persistence::state::StateDatabase;
+use mudi::adapters::project::CanonicalManagedTargetResolver;
+use mudi::adapters::refresh::{open_refresh_service, SystemClock};
 use mudi::adapters::skills::handoff::ManagedHandoffSkills;
+use mudi::adapters::skills::ManagedSkillCatalog;
+use mudi::adapters::successor::{
+    run_successor_from_args, MacosTerminalLauncher, RegistrySuccessorRuntime,
+};
 
+use mudi::application::clipboard::ClipboardPort;
+use mudi::application::handlers::{WorkflowHandlers, WorkflowPorts};
 use mudi::application::handoff::{
-    run_worker_from_args, DetachedWorkerLauncher, HandoffPaths, HandoffService,
-    MacosCurrentRunControl, ProviderExecutables, WorkerLauncher,
+    HandoffPaths, HandoffService, ProviderExecutables, WorkerLauncher,
 };
 use mudi::application::managed_sessions::{
-    discover_tmux_executable, run_attach_from_args, MacosManagedTerminalAccess,
-    ManagedCurrentRunAccessService, ManagedCurrentRunVerifier, ManagedLaunchStore,
-    ManagedResumeVerifier, ManagedSessionService, SystemManagedCurrentRunEvidence,
-    SystemManagedResumeEvidence, TmuxLaunchBroker,
+    ManagedCurrentRunAccessService, ManagedCurrentRunVerifier, ManagedResumeVerifier,
+    ManagedSessionService, SystemManagedResumeEvidence,
 };
 use mudi::application::observation::read_model::{InMemoryReadModelCache, ReadModelCache};
-use mudi::application::observation::refresh::RefreshService;
-use mudi::application::successor::{
-    run_successor_from_args, MacosTerminalLauncher, TerminalLauncher,
-};
-use mudi::application::ApplicationController;
-use mudi::presentation::tui::{draw, Ui};
+use mudi::application::successor::TerminalLauncher;
+use mudi::presentation::tui::{draw, route_action, Ui};
 
 /// Shared read-only projection published by refresh and consumed by the UI.
 type SharedReadModelCache = Arc<dyn ReadModelCache>;
-type TuiController = ApplicationController<DetachedWorkerLauncher, MacosTerminalLauncher>;
+type TuiHandlers = WorkflowHandlers<DetachedWorkerLauncher, MacosTerminalLauncher>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -78,20 +91,23 @@ fn run_non_tui_mode() -> Result<bool> {
 struct TuiRuntime {
     config: Config,
     ui: Ui,
-    controller: TuiController,
+    handlers: TuiHandlers,
     read_model: SharedReadModelCache,
 }
 
 impl TuiRuntime {
     fn build(config: Config) -> Result<Self> {
-        let ui = Ui::load(config.profile_path())?;
-        let controller = build_tui_controller(&config)?;
+        let ui = Ui::load_with_session_metadata(
+            config.profile_path(),
+            Box::new(SessionLabels::load(config.label_store_path())),
+        )?;
+        let handlers = build_tui_handlers(&config)?;
         let read_model: SharedReadModelCache = Arc::new(InMemoryReadModelCache::default());
 
         Ok(Self {
             config,
             ui,
-            controller,
+            handlers,
             read_model,
         })
     }
@@ -100,21 +116,21 @@ impl TuiRuntime {
         let Self {
             config,
             ui,
-            mut controller,
+            mut handlers,
             read_model,
         } = self;
 
         let (rescan_tx, rescan_rx) = mpsc::unbounded_channel::<()>();
         let collector = tokio::spawn(collector_loop(config, read_model.clone(), rescan_rx));
 
-        let result = run_tui(read_model, rescan_tx, ui, &mut controller);
+        let result = run_tui(read_model, rescan_tx, ui, &mut handlers);
 
         collector.abort();
         result
     }
 }
 
-fn build_tui_controller(config: &Config) -> Result<TuiController> {
+fn build_tui_handlers(config: &Config) -> Result<TuiHandlers> {
     let handoff_paths = HandoffPaths {
         task_store: config.task_store_path(),
         artifact_root: config.artifact_root(),
@@ -130,10 +146,17 @@ fn build_tui_controller(config: &Config) -> Result<TuiController> {
     let handoff =
         build_handoff_service(config, mudi_executable, handoff_paths, provider_executables)?;
 
-    let mut controller = ApplicationController::new(handoff, terminal_launcher, managed_sessions)
+    let ports = WorkflowPorts {
+        clock: Box::new(SystemClock),
+        completion_notifier: Box::new(MacosCompletionNotifier),
+        successor_runtime: Arc::new(RegistrySuccessorRuntime),
+        target_resolver: Box::new(CanonicalManagedTargetResolver),
+        session_metadata: Box::new(SessionLabels::load(config.label_store_path())),
+    };
+    let handlers = WorkflowHandlers::new(handoff, terminal_launcher, managed_sessions, ports)
         .with_managed_current_run_access(managed_current_runs);
-    controller.reconcile_tasks(chrono::Utc::now().timestamp_millis())?;
-    Ok(controller)
+    handlers.reconcile_tasks()?;
+    Ok(handlers)
 }
 
 fn build_managed_session_services(
@@ -147,13 +170,17 @@ fn build_managed_session_services(
         Box::new(TmuxLaunchBroker::new(tmux_executable.clone())),
         Box::new(MacosManagedTerminalAccess::new(tmux_executable.clone())),
     )
-    .with_resume_verifier(ManagedResumeVerifier::new(
-        config.clone(),
-        Box::new(SystemManagedResumeEvidence::default()),
-    ));
+    .with_resume_verifier(ManagedResumeVerifier::new(Box::new(
+        SystemManagedResumeEvidence::new(
+            Box::new(SystemProcessEvidence),
+            Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
+        ),
+    )));
     let managed_current_runs = ManagedCurrentRunAccessService::new(
         ManagedLaunchStore::open(config.managed_launch_store_path())?,
-        ManagedCurrentRunVerifier::new(config.clone(), Box::new(SystemManagedCurrentRunEvidence)),
+        ManagedCurrentRunVerifier::new(Box::new(SystemManagedCurrentRunEvidence::new(
+            config.clone(),
+        ))),
         Box::new(MacosManagedTerminalAccess::new(tmux_executable)),
     );
 
@@ -178,13 +205,15 @@ fn build_handoff_service(
     )
     .with_managed_handoff_skills(managed_handoff_skills.clone())
     .with_notifications();
-    let handoff = HandoffService::open_with_current_run_control(
+    let handoff = open_handoff_service_with_current_run_control(
         handoff_paths,
         provider_executables,
         worker_launcher,
         Arc::new(MacosCurrentRunControl::new(claude_sessions_dir)),
     )?
-    .with_managed_handoff_skills(managed_handoff_skills);
+    .with_skill_installer(Arc::new(ManagedSkillCatalog::handoff(
+        managed_handoff_skills,
+    )));
     Ok(handoff)
 }
 
@@ -194,7 +223,7 @@ async fn collector_loop(
     shared: SharedReadModelCache,
     mut rescan_rx: mpsc::UnboundedReceiver<()>,
 ) {
-    let mut refresh = RefreshService::new(cfg);
+    let mut refresh = open_refresh_service(cfg);
 
     loop {
         refresh.refresh_and_publish(shared.as_ref());
@@ -211,7 +240,7 @@ fn run_tui<L: WorkerLauncher, T: TerminalLauncher>(
     shared: SharedReadModelCache,
     rescan_tx: mpsc::UnboundedSender<()>,
     mut ui: Ui,
-    controller: &mut ApplicationController<L, T>,
+    handlers: &mut WorkflowHandlers<L, T>,
 ) -> Result<()> {
     enable_raw_mode()?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -235,7 +264,7 @@ fn run_tui<L: WorkerLauncher, T: TerminalLauncher>(
         &shared,
         &rescan_tx,
         &mut clipboard,
-        controller,
+        handlers,
     );
 
     let leave_result = leave_tui_screen(terminal.backend_mut());
@@ -284,8 +313,8 @@ fn event_loop<B: ratatui::backend::Backend, L: WorkerLauncher, T: TerminalLaunch
     ui: &mut Ui,
     shared: &SharedReadModelCache,
     rescan_tx: &mpsc::UnboundedSender<()>,
-    clipboard: &mut dyn Clipboard,
-    controller: &mut ApplicationController<L, T>,
+    clipboard: &mut dyn ClipboardPort,
+    handlers: &mut WorkflowHandlers<L, T>,
 ) -> Result<()> {
     loop {
         // Rendering reads the latest published projection without owning refresh state.
@@ -303,8 +332,18 @@ fn event_loop<B: ratatui::backend::Backend, L: WorkerLauncher, T: TerminalLaunch
         let terminal_area =
             ratatui::layout::Rect::new(0, 0, terminal_size.width, terminal_size.height);
 
-        let intent = ui.handle_event(input, terminal_area, &snap)?;
-        if controller.handle(intent, snap.as_ref(), ui, clipboard, rescan_tx) {
+        let action = ui.handle_event(input, terminal_area, &snap)?;
+        let mut request_rescan = || {
+            let _ = rescan_tx.send(());
+        };
+        if route_action(
+            action,
+            snap.as_ref(),
+            ui,
+            clipboard,
+            &mut request_rescan,
+            handlers,
+        ) {
             return Ok(());
         }
     }

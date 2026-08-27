@@ -4,7 +4,7 @@ use super::{
     layout::centered_rect, provider_mark, selected_style, theme::Theme, GuideCategory, GuidePane,
     Ui,
 };
-use crate::adapters::config::{CRIT_PCT, WARN_PCT};
+use crate::application::{CRIT_PCT, WARN_PCT};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};

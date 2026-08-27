@@ -1,6 +1,6 @@
 //! Derive and order current Attention Conditions from a Session snapshot.
 
-use crate::adapters::config::{CRIT_PCT, WARN_PCT};
+use crate::application::{CRIT_PCT, WARN_PCT};
 pub use crate::domain::SessionIdentity;
 use crate::domain::{ProjectIdentity, Provider, Session, SessionState};
 use std::cmp::Ordering;

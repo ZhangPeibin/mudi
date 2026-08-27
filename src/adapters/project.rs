@@ -1,5 +1,7 @@
 //! Resolve a Session's working directory into canonical Project identity.
 
+use crate::application::handlers::ManagedTargetResolver;
+use crate::application::managed_sessions::ManagedLaunchTarget;
 use crate::domain::{Project, ProjectIdentity};
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
@@ -14,6 +16,17 @@ pub struct ProjectResolution {
 pub struct CanonicalProjectContext {
     pub project: Project,
     pub working_directory: PathBuf,
+}
+
+pub struct CanonicalManagedTargetResolver;
+
+impl ManagedTargetResolver for CanonicalManagedTargetResolver {
+    fn resolve(&self, directory: &Path) -> Result<ManagedLaunchTarget> {
+        let context = resolve_selected_directory(directory)?;
+        Ok(ManagedLaunchTarget {
+            working_directory: context.working_directory,
+        })
+    }
 }
 
 /// Resolve an explicitly selected local directory without guessing identity.

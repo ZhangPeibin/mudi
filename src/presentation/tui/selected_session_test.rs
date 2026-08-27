@@ -310,14 +310,16 @@ fn details_render_saved_metadata_and_truncate_description_without_changing_it() 
     };
     let description = "A deliberately long Unicode description for compact DETAILS 登录修复";
     let mut ui = Ui::default();
-    ui.labels
-        .set_metadata(
-            Provider::ClaudeCode,
-            "selected",
-            "Readable title",
-            description,
-        )
-        .unwrap();
+    let mut metadata = crate::application::session_labels::SessionMetadataView::default();
+    metadata.set_metadata(
+        crate::domain::SessionIdentity {
+            provider: Provider::ClaudeCode,
+            native_id: "selected".into(),
+        },
+        "Readable title",
+        description,
+    );
+    ui.labels = Box::new(metadata);
 
     let rendered = detail_lines(&snapshot, &ui, 34)
         .iter()

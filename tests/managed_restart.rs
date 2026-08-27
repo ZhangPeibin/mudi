@@ -1,16 +1,17 @@
 use mudi::adapters::config::Config;
+use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
+use mudi::adapters::persistence::session_metadata::SessionLabels;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::{ProviderBindingEvidence, ProviderExecutables};
+use mudi::adapters::refresh::open_refresh_service;
 use mudi::application::managed_sessions::{
     BindingOutcome, BindingReceipt, EvidenceBinder, ManagedCurrentRunEvidence,
     ManagedCurrentRunRecord, ManagedLaunchCleanup, ManagedLaunchEvidence,
-    ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget,
-    ManagedSessionRecord, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
-    ProcessEvidence, ProviderNewCommand, ProviderProcessObservation,
+    ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchTarget, ManagedSessionRecord,
+    ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment, ProcessEvidence,
+    ProviderNewCommand, ProviderProcessObservation,
 };
 use mudi::application::observation::read_model::RefreshHealth;
-use mudi::application::observation::refresh::RefreshService;
-use mudi::application::session_labels::SessionLabels;
 use mudi::domain::{Provider, SourceFormat, SourceMetadata};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -177,7 +178,7 @@ fn startup_refresh_preserves_a_preexisting_uncertain_launch_for_review() {
             cleaned: cleaned.clone(),
         }),
     );
-    let snapshot = RefreshService::new(config)
+    let snapshot = open_refresh_service(config)
         .with_managed_binding_reconciler(reconciler)
         .refresh();
 
@@ -266,7 +267,7 @@ fn verified_managed_relationship_and_local_metadata_survive_restart() {
     let opaque_ref = store.managed_current_runs().unwrap()[0].opaque_ref.clone();
     drop(store);
 
-    let mut first_refresh = RefreshService::new(config.clone())
+    let mut first_refresh = open_refresh_service(config.clone())
         .with_managed_current_run_evidence(Box::new(AcceptCurrentRunEvidence));
     assert_eq!(
         first_refresh.refresh().verified_managed_current_runs[0].opaque_ref,
@@ -274,7 +275,7 @@ fn verified_managed_relationship_and_local_metadata_survive_restart() {
     );
     drop(first_refresh);
 
-    let mut restarted_refresh = RefreshService::new(config.clone())
+    let mut restarted_refresh = open_refresh_service(config.clone())
         .with_managed_current_run_evidence(Box::new(AcceptCurrentRunEvidence));
     let restarted = restarted_refresh.refresh();
     assert_eq!(restarted.verified_managed_current_runs.len(), 1);
@@ -361,7 +362,7 @@ fn corrupted_persisted_identity_stays_unassociated_and_degrades_startup() {
             cleaned: cleaned.clone(),
         }),
     );
-    let snapshot = RefreshService::new(config)
+    let snapshot = open_refresh_service(config)
         .with_managed_binding_reconciler(reconciler)
         .refresh();
 
@@ -403,7 +404,7 @@ fn stale_managed_current_run_is_not_reassociated_or_rewritten_on_restart() {
         .unwrap();
     drop(store);
 
-    let snapshot = RefreshService::new(config)
+    let snapshot = open_refresh_service(config)
         .with_managed_current_run_evidence(Box::new(RejectCurrentRunEvidence))
         .refresh();
 
@@ -463,7 +464,6 @@ struct AcceptCurrentRunEvidence;
 impl ManagedCurrentRunEvidence for AcceptCurrentRunEvidence {
     fn revalidate(
         &self,
-        _config: &Config,
         _run: &ManagedCurrentRunRecord,
         _session: &ManagedSessionRecord,
         _receipt: &BindingReceipt,
@@ -477,7 +477,6 @@ struct RejectCurrentRunEvidence;
 impl ManagedCurrentRunEvidence for RejectCurrentRunEvidence {
     fn revalidate(
         &self,
-        _config: &Config,
         _run: &ManagedCurrentRunRecord,
         _session: &ManagedSessionRecord,
         _receipt: &BindingReceipt,

@@ -250,7 +250,7 @@ fn detail_lines(
         SessionState::Exited => "Exited",
     };
     let mut lines = Vec::new();
-    let hidden_count = super::hidden_tree::counts(snap, &ui.labels).1;
+    let hidden_count = super::hidden_tree::counts(snap, ui.labels.as_ref()).1;
     if hidden_count > 0 {
         lines.push(DetailLine::hidden_list(hidden_count));
         lines.push(DetailLine::Content(Line::from("")));
@@ -475,7 +475,7 @@ pub(super) fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     }
     scroll = scroll.min(max_scroll);
     detail.scroll.set(scroll);
-    let footer = if super::hidden_tree::counts(snap, &ui.labels).1 > 0 {
+    let footer = if super::hidden_tree::counts(snap, ui.labels.as_ref()).1 > 0 {
         " Up/Down Select | Enter Open | c Copy | h Handoff | Esc Close "
     } else {
         " Up/Down Select | c Copy | h Handoff | Esc Close "

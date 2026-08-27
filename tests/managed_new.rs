@@ -1,18 +1,21 @@
+mod support;
+
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mudi::adapters::macos::clipboard::Clipboard;
+use mudi::adapters::handoff::open_handoff_service;
+use mudi::adapters::managed_sessions::{MacosManagedTerminalAccess, TmuxLaunchBroker};
+use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::ProviderExecutables;
 use mudi::adapters::providers::{registry, BINDING_INITIALIZER};
-use mudi::application::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
+use mudi::application::clipboard::ClipboardPort;
+use mudi::application::handoff::{HandoffPaths, WorkerLaunch, WorkerLauncher};
 use mudi::application::managed_sessions::{
-    MacosManagedTerminalAccess, ManagedLaunchBroker, ManagedLaunchEvidence,
-    ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget,
-    ManagedNewRequest, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
-    ProviderNewCommand, TmuxLaunchBroker,
+    ManagedLaunchBroker, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus,
+    ManagedLaunchTarget, ManagedNewRequest, ManagedSessionService, ManagedTerminalAccess,
+    PrivateTmuxEnvironment, ProviderNewCommand,
 };
 use mudi::application::successor::TerminalLauncher;
-use mudi::application::ApplicationController;
 use mudi::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceMetadata, Usage,
 };
@@ -24,6 +27,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use support::{workflow_handlers, TestActionRouter};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -419,7 +423,7 @@ impl TerminalLauncher for NeverOpenSuccessor {
 
 struct NoopClipboard;
 
-impl Clipboard for NoopClipboard {
+impl ClipboardPort for NoopClipboard {
     fn write_text(&mut self, _value: &str) -> std::io::Result<()> {
         Ok(())
     }
@@ -429,7 +433,7 @@ struct RecordingClipboard {
     values: Arc<Mutex<Vec<String>>>,
 }
 
-impl Clipboard for RecordingClipboard {
+impl ClipboardPort for RecordingClipboard {
     fn write_text(&mut self, value: &str) -> std::io::Result<()> {
         self.values.lock().unwrap().push(value.to_string());
         Ok(())
@@ -499,7 +503,7 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
             opened: opened.clone(),
         }),
     );
-    let handoff = HandoffService::open(
+    let handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -508,7 +512,12 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
         NeverLaunchHandoff,
     )
     .unwrap();
-    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions);
+    let mut controller = workflow_handlers(
+        handoff,
+        NeverOpenSuccessor,
+        managed_sessions,
+        temp.path().join("workflow-state.db"),
+    );
     let snapshot = Snapshot {
         ready: true,
         ..Snapshot::default()
@@ -650,7 +659,7 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
             opened: opened.clone(),
         }),
     );
-    let handoff = HandoffService::open(
+    let handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -659,7 +668,12 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
         NeverLaunchHandoff,
     )
     .unwrap();
-    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions);
+    let mut controller = workflow_handlers(
+        handoff,
+        NeverOpenSuccessor,
+        managed_sessions,
+        temp.path().join("workflow-state.db"),
+    );
     let snapshot = Snapshot {
         sessions: vec![session_in_project(&selected)],
         ready: true,
@@ -766,7 +780,7 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
             opened: opened.clone(),
         }),
     );
-    let handoff = HandoffService::open(
+    let handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -775,7 +789,12 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
         NeverLaunchHandoff,
     )
     .unwrap();
-    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions);
+    let mut controller = workflow_handlers(
+        handoff,
+        NeverOpenSuccessor,
+        managed_sessions,
+        temp.path().join("workflow-state.db"),
+    );
     let snapshot = Snapshot {
         sessions: vec![session_in_project(&project_root)],
         ready: true,
@@ -881,7 +900,7 @@ fn application_routes_managed_launch_recovery_without_replaying_provider_launch(
             error: None,
         }),
     );
-    let handoff = HandoffService::open(
+    let handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -890,7 +909,12 @@ fn application_routes_managed_launch_recovery_without_replaying_provider_launch(
         NeverLaunchHandoff,
     )
     .unwrap();
-    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions);
+    let mut controller = workflow_handlers(
+        handoff,
+        NeverOpenSuccessor,
+        managed_sessions,
+        temp.path().join("workflow-state.db"),
+    );
     let mut ui = Ui::default();
     let copied = Arc::new(Mutex::new(Vec::new()));
     let mut clipboard = RecordingClipboard {
@@ -966,7 +990,7 @@ fn failed_managed_terminal_recovery_shows_notice_and_still_rescans() {
             error: Some("Terminal automation denied"),
         }),
     );
-    let handoff = HandoffService::open(
+    let handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -975,7 +999,12 @@ fn failed_managed_terminal_recovery_shows_notice_and_still_rescans() {
         NeverLaunchHandoff,
     )
     .unwrap();
-    let mut controller = ApplicationController::new(handoff, NeverOpenSuccessor, managed_sessions);
+    let mut controller = workflow_handlers(
+        handoff,
+        NeverOpenSuccessor,
+        managed_sessions,
+        temp.path().join("workflow-state.db"),
+    );
     let snapshot = Snapshot::default();
     let mut ui = Ui::default();
     let (rescan_tx, mut rescan_rx) = tokio::sync::mpsc::unbounded_channel();

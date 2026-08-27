@@ -1,9 +1,12 @@
+mod support;
+
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use mudi::adapters::persistence::session_metadata::SessionLabels;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::application::attention::{AttentionEngine, SessionIdentity};
-use mudi::application::session_labels::{CurationDisposition, SessionLabels};
+use mudi::application::session_labels::CurationDisposition;
 use mudi::application::signals::{
     ContextAlertLevel, RecentSignal, RecentSignalKind, SharedProjectRiskChange,
 };
@@ -21,8 +24,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::Terminal;
 
 use std::io;
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use support::{sqlite_workflow_handlers, TestActionRouter};
 
 struct CursorBackend {
     inner: TestBackend,
@@ -601,12 +606,111 @@ fn assert_fixture(rendered: &ProductionRender, fixture: &str, fixture_path: &str
     assert_eq!(rendered.visible_text(), fixture.trim_end_matches('\n'));
 }
 
-fn press(ui: &mut Ui, snapshot: &Snapshot, code: KeyCode) {
-    ui.handle_key(KeyEvent::new(code, KeyModifiers::NONE), snapshot)
-        .unwrap();
+trait KeyDriver {
+    fn drive_key(&mut self, snapshot: &Snapshot, code: KeyCode);
 }
 
-fn save_selected_session_title(ui: &mut Ui, snapshot: &Snapshot, title: &str) {
+impl KeyDriver for Ui {
+    fn drive_key(&mut self, snapshot: &Snapshot, code: KeyCode) {
+        self.handle_key(KeyEvent::new(code, KeyModifiers::NONE), snapshot)
+            .unwrap();
+    }
+}
+
+struct RoutedUi {
+    ui: Ui,
+    handlers: Box<dyn TestActionRouter>,
+    owned_root: Option<PathBuf>,
+}
+
+impl RoutedUi {
+    fn load(profile_path: &std::path::Path) -> Self {
+        let root = profile_path.parent().unwrap();
+        Self {
+            ui: load_ui(profile_path),
+            handlers: Box::new(sqlite_workflow_handlers(root)),
+            owned_root: None,
+        }
+    }
+
+    fn temporary() -> Self {
+        static NONCE: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "mudi-routed-render-{}-{}",
+            std::process::id(),
+            NONCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let profile_path = root.join("profile.json");
+        std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
+        let mut fixture = Self::load(&profile_path);
+        fixture.owned_root = Some(root);
+        fixture
+    }
+}
+
+impl KeyDriver for RoutedUi {
+    fn drive_key(&mut self, snapshot: &Snapshot, code: KeyCode) {
+        struct NoopClipboard;
+
+        impl mudi::application::clipboard::ClipboardPort for NoopClipboard {
+            fn write_text(&mut self, _value: &str) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let action = self
+            .ui
+            .handle_key(KeyEvent::new(code, KeyModifiers::NONE), snapshot)
+            .unwrap();
+        let (rescan_tx, _rescan_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.handlers.handle(
+            action,
+            snapshot,
+            &mut self.ui,
+            &mut NoopClipboard,
+            &rescan_tx,
+        );
+    }
+}
+
+impl Deref for RoutedUi {
+    type Target = Ui;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ui
+    }
+}
+
+impl DerefMut for RoutedUi {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ui
+    }
+}
+
+impl Drop for RoutedUi {
+    fn drop(&mut self) {
+        if let Some(root) = &self.owned_root {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+}
+
+fn press(ui: &mut impl KeyDriver, snapshot: &Snapshot, code: KeyCode) {
+    ui.drive_key(snapshot, code);
+}
+
+fn load_ui(profile_path: &std::path::Path) -> Ui {
+    Ui::load_with_session_metadata(
+        profile_path,
+        Box::new(SessionLabels::load(
+            profile_path.parent().unwrap().join("state.db"),
+        )),
+    )
+    .unwrap()
+}
+
+fn save_selected_session_title(ui: &mut impl KeyDriver, snapshot: &Snapshot, title: &str) {
     press(ui, snapshot, KeyCode::Char('e'));
     press(ui, snapshot, KeyCode::Enter);
     for character in title.chars() {
@@ -640,7 +744,7 @@ fn exited_session_hide_is_confirmed_persisted_and_removed_from_the_normal_tree()
     open.state = SessionState::Busy;
     open.last_activity_ms = snapshot.generated_ms;
     snapshot.sessions = vec![open, exited.clone()];
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Right);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -725,7 +829,7 @@ fn hide_confirmation_revalidates_that_the_session_is_still_exited() {
         ready: true,
         ..Snapshot::default()
     };
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Right);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -787,7 +891,7 @@ fn project_hide_is_a_snapshot_that_skips_and_reports_open_sessions() {
         ready: true,
         ..Snapshot::default()
     };
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Left);
 
     press(&mut ui, &snapshot, KeyCode::Char('H'));
@@ -895,7 +999,7 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
             SessionIdentity::from(&second_project),
         ])
         .unwrap();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = load_ui(&profile_path);
 
     press(&mut ui, &snapshot, KeyCode::Char('h'));
     let collapsed = render(&snapshot, &ui, 120, 30).text;
@@ -915,7 +1019,7 @@ fn hidden_tree_opens_collapsed_and_orders_sessions_newest_first() {
         newest < older,
         "newest Session should render first\n{expanded}"
     );
-    let mut restarted = Ui::load(&profile_path).unwrap();
+    let mut restarted = load_ui(&profile_path);
     press(&mut restarted, &snapshot, KeyCode::Char('h'));
     let restarted = render(&snapshot, &restarted, 120, 30).text;
     assert!(!restarted.contains("Newest hidden"));
@@ -944,7 +1048,7 @@ fn session_detail_hidden_list_entry_opens_the_same_tree_and_restores_its_origin(
     SessionLabels::load(directory.join("state.db"))
         .hide_sessions(&[SessionIdentity::from(hidden)])
         .unwrap();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = load_ui(&profile_path);
 
     press(&mut ui, &snapshot, KeyCode::Enter);
     let detail = render(&snapshot, &ui, 120, 30).text;
@@ -994,7 +1098,7 @@ fn hidden_tree_u_restores_the_selected_session_to_its_origin_inventory() {
     SessionLabels::load(&label_path)
         .hide_sessions(&[SessionIdentity::from(&hidden)])
         .unwrap();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Char('h'));
     press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -1055,7 +1159,7 @@ fn hidden_tree_d_permanently_excludes_metadata_without_touching_provider_jsonl()
     labels
         .hide_sessions(&[SessionIdentity::from(&hidden)])
         .unwrap();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Char('h'));
     press(&mut ui, &snapshot, KeyCode::Enter);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -1128,7 +1232,7 @@ fn hidden_tree_project_delete_applies_to_all_current_hidden_sessions() {
             SessionIdentity::from(&second),
         ])
         .unwrap();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Char('h'));
 
     press(&mut ui, &snapshot, KeyCode::Char('d'));
@@ -1182,7 +1286,7 @@ fn hidden_tree_project_restore_applies_to_all_current_hidden_sessions() {
             SessionIdentity::from(&second),
         ])
         .unwrap();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Char('h'));
 
     press(&mut ui, &snapshot, KeyCode::Char('u'));
@@ -1236,7 +1340,7 @@ fn hidden_exited_visibility_is_consistent_and_only_validated_open_overrides_it()
     SessionLabels::load(directory.join("state.db"))
         .hide_sessions(&[SessionIdentity::from(&session)])
         .unwrap();
-    let ui = Ui::load(&profile_path).unwrap();
+    let ui = load_ui(&profile_path);
 
     let all_hidden = render(&snapshot, &ui, 120, 30).text;
     assert!(!all_hidden.contains("x-exited"));
@@ -1284,7 +1388,7 @@ fn hidden_curation_is_dormant_while_source_evidence_is_absent_and_resumes_on_ret
     SessionLabels::load(&label_path)
         .hide_sessions(&[SessionIdentity::from(&hidden)])
         .unwrap();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = load_ui(&profile_path);
     let absent = Snapshot {
         generated_ms: source.generated_ms,
         ready: true,
@@ -1328,7 +1432,7 @@ fn ui_with_theme(theme: &str) -> Ui {
         format!(r#"{{"help_seen":true,"theme":"{theme}"}}"#),
     )
     .unwrap();
-    let ui = Ui::load(&profile_path).unwrap();
+    let ui = load_ui(&profile_path);
     std::fs::remove_file(profile_path).unwrap();
     ui
 }
@@ -1875,7 +1979,7 @@ fn task_rows_resolve_the_current_session_alias_without_changing_task_identity() 
         deletion_requested_at_ms: None,
         deletion_failure_code: None,
     }];
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     save_selected_session_title(&mut ui, &snapshot, "Release coordinator");
     press(&mut ui, &snapshot, KeyCode::Tab);
     press(&mut ui, &snapshot, KeyCode::Tab);
@@ -2982,7 +3086,7 @@ fn keyboard_resize_adjusts_the_preference_after_the_effective_width_is_clamped()
     )
     .unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = load_ui(&profile_path);
 
     ui.handle_event(
         Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT)),
@@ -2991,7 +3095,7 @@ fn keyboard_resize_adjusts_the_preference_after_the_effective_width_is_clamped()
     )
     .unwrap();
 
-    let reloaded = Ui::load(&profile_path).unwrap();
+    let reloaded = load_ui(&profile_path);
     let restored = render(&snapshot, &reloaded, 120, 30);
     assert!(restored
         .text
@@ -3016,7 +3120,7 @@ fn completed_drag_persists_the_preferred_width_across_terminal_sizes() {
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     let snapshot = production_snapshot();
     let terminal_area = ratatui::layout::Rect::new(0, 0, 120, 30);
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = load_ui(&profile_path);
 
     for kind in [
         MouseEventKind::Down(MouseButton::Left),
@@ -3040,7 +3144,7 @@ fn completed_drag_persists_the_preferred_width_across_terminal_sizes() {
         .unwrap();
     }
 
-    let reloaded = Ui::load(&profile_path).unwrap();
+    let reloaded = load_ui(&profile_path);
     let compact = render(&snapshot, &reloaded, 80, 24);
     assert!(compact
         .text
@@ -3657,7 +3761,7 @@ fn session_tree_keyboard_collapse_and_expand_render_at_supported_sizes() {
 #[test]
 fn now_session_row_uses_the_saved_alias_as_its_title() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
 
     save_selected_session_title(&mut ui, &snapshot, "Auth fix");
 
@@ -3676,7 +3780,7 @@ fn now_session_row_uses_the_saved_alias_as_its_title() {
 #[test]
 fn compact_now_renders_a_readable_unicode_session_title() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
 
     save_selected_session_title(&mut ui, &snapshot, "Dao 文档整理");
 
@@ -3700,7 +3804,7 @@ fn compact_now_renders_a_readable_unicode_session_title() {
 #[test]
 fn compact_now_uses_every_title_cell_before_operational_evidence() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
 
     save_selected_session_title(&mut ui, &snapshot, "0123456789abcdefghijklmnop");
 
@@ -3799,7 +3903,7 @@ fn wide_now_aligns_all_operational_evidence_for_supported_context_values() {
 #[test]
 fn wide_editor_keeps_the_complete_session_title_in_the_inspector() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
 
     save_selected_session_title(&mut ui, &snapshot, "Architecture cleanup");
 
@@ -3825,7 +3929,7 @@ fn long_unicode_now_title_does_not_move_operational_evidence() {
         .find(|line| line.contains("✳ critical"))
         .expect("baseline critical NOW Session should render");
 
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     save_selected_session_title(&mut ui, &snapshot, "Dao 文档整理和项目路线图");
     let aliased = render(&snapshot, &ui, 80, 24);
     let aliased_row = aliased
@@ -3858,7 +3962,7 @@ fn long_unicode_now_title_does_not_move_operational_evidence() {
 #[test]
 fn renaming_a_session_does_not_reorder_visible_session_identities() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     let before = ui
         .visible(&snapshot)
         .into_iter()
@@ -3878,7 +3982,7 @@ fn renaming_a_session_does_not_reorder_visible_session_identities() {
 fn existing_recent_signal_resolves_the_current_session_title() {
     let snapshot = production_snapshot();
     let signal_count = snapshot.recent_signals.len();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     save_selected_session_title(&mut ui, &snapshot, "Auth");
 
     let rendered = render(&snapshot, &ui, 120, 30);
@@ -3895,7 +3999,7 @@ fn existing_recent_signal_resolves_the_current_session_title() {
 fn project_signal_members_resolve_current_provider_qualified_titles() {
     let mut snapshot = production_snapshot();
     snapshot.recent_signals.truncate(1);
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     save_selected_session_title(&mut ui, &snapshot, "Auth");
 
     let rendered = render(&snapshot, &ui, 160, 30);
@@ -3918,7 +4022,7 @@ fn project_signal_members_resolve_current_provider_qualified_titles() {
 fn project_signal_disambiguates_duplicate_member_aliases() {
     let mut snapshot = production_snapshot();
     snapshot.recent_signals.truncate(1);
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     save_selected_session_title(&mut ui, &snapshot, "Pair");
     press(&mut ui, &snapshot, KeyCode::Down);
     save_selected_session_title(&mut ui, &snapshot, "Pair");
@@ -3940,7 +4044,7 @@ fn session_signals_disambiguate_duplicate_visible_aliases() {
         snapshot.recent_signals[1].clone(),
         snapshot.recent_signals[3].clone(),
     ];
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     save_selected_session_title(&mut ui, &snapshot, "Pair");
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -3965,7 +4069,7 @@ fn session_signals_disambiguate_duplicate_visible_aliases() {
 #[test]
 fn wide_now_keeps_duplicate_aliases_distinguishable() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     save_selected_session_title(&mut ui, &snapshot, "Pair");
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -4020,7 +4124,7 @@ fn compact_open_detail_matches_the_reviewed_production_fixture() {
 #[test]
 fn session_detail_separates_the_title_from_the_complete_session_id() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     save_selected_session_title(&mut ui, &snapshot, "Auth fix");
     press(&mut ui, &snapshot, KeyCode::Enter);
 
@@ -4042,7 +4146,7 @@ fn session_detail_separates_the_title_from_the_complete_session_id() {
 #[test]
 fn wide_session_detail_separates_the_title_from_the_complete_session_id() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     save_selected_session_title(&mut ui, &snapshot, "Auth fix");
     press(&mut ui, &snapshot, KeyCode::Enter);
 
@@ -4194,7 +4298,7 @@ fn arrow_and_vim_keys_move_session_editor_focus_while_tab_is_ignored() {
 #[test]
 fn description_editor_accepts_unicode_and_enforces_the_240_character_limit() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     let initial = render(&snapshot, &ui, 120, 30);
     assert_eq!(initial.bordered_region_size("Edit"), (78, 8));
@@ -4394,7 +4498,7 @@ fn edit_session_metadata_survives_reloading_the_ui() {
     let profile_path = directory.join("profile.json");
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
 
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     press(&mut ui, &snapshot, KeyCode::Enter);
@@ -4416,7 +4520,7 @@ fn edit_session_metadata_survives_reloading_the_ui() {
     assert!(directory.join("state.db").exists());
     assert!(!directory.join("session-labels.json").exists());
 
-    let mut reloaded = Ui::load(&profile_path).unwrap();
+    let mut reloaded = load_ui(&profile_path);
     press(&mut reloaded, &snapshot, KeyCode::Char('e'));
     let rendered = render(&snapshot, &reloaded, 80, 24);
     assert!(rendered.text.contains("Auth fix"));
@@ -4438,7 +4542,7 @@ fn deleting_an_existing_alias_and_confirming_clears_the_title() {
     let profile_path = directory.join("profile.json");
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Auth fix".chars() {
@@ -4458,7 +4562,7 @@ fn deleting_an_existing_alias_and_confirming_clears_the_title() {
     press(&mut ui, &snapshot, KeyCode::Char('y'));
     assert!(!render(&snapshot, &ui, 80, 24).cursor_visible);
 
-    let mut reloaded = Ui::load(&profile_path).unwrap();
+    let mut reloaded = load_ui(&profile_path);
     press(&mut reloaded, &snapshot, KeyCode::Char('e'));
     let rendered = render(&snapshot, &reloaded, 80, 24);
     assert!(rendered.text.contains("Title"));
@@ -4481,7 +4585,7 @@ fn malformed_label_store_disables_editing_until_rescan_reloads_it() {
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     std::fs::write(&label_path, b"broken").unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = load_ui(&profile_path);
 
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     let degraded = render(&snapshot, &ui, 160, 30);
@@ -4532,7 +4636,7 @@ fn malformed_label_store_disables_curation_until_rescan_reloads_it() {
         ready: true,
         ..Snapshot::default()
     };
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = load_ui(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Down);
     press(&mut ui, &snapshot, KeyCode::Right);
     press(&mut ui, &snapshot, KeyCode::Down);
@@ -4570,7 +4674,7 @@ fn failed_metadata_save_preserves_both_editor_inputs_for_a_successful_retry() {
     let label_path = directory.join("state.db");
     std::fs::write(&profile_path, br#"{"help_seen":true}"#).unwrap();
     let snapshot = production_snapshot();
-    let mut ui = Ui::load(&profile_path).unwrap();
+    let mut ui = RoutedUi::load(&profile_path);
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     press(&mut ui, &snapshot, KeyCode::Enter);
     for character in "Retry title".chars() {
@@ -4606,7 +4710,7 @@ fn failed_metadata_save_preserves_both_editor_inputs_for_a_successful_retry() {
 #[test]
 fn title_editor_rejects_81_characters_and_accepts_80() {
     let snapshot = production_snapshot();
-    let mut ui = Ui::default();
+    let mut ui = RoutedUi::temporary();
     press(&mut ui, &snapshot, KeyCode::Char('e'));
     press(&mut ui, &snapshot, KeyCode::Enter);
     for _ in 0..81 {

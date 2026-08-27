@@ -1,7 +1,7 @@
 //! Current Context 的语义角色和共享进度呈现。
 
 use super::theme::Theme;
-use crate::adapters::config::{CRIT_PCT, WARN_PCT};
+use crate::application::{CRIT_PCT, WARN_PCT};
 use crate::domain::{ContextState, SessionState};
 use crate::presentation::app::fmt_tokens;
 use ratatui::style::{Modifier, Style};

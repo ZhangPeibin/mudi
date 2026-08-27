@@ -1,22 +1,28 @@
+mod support;
+
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mudi::adapters::config::Config;
-use mudi::adapters::macos::clipboard::Clipboard;
+use mudi::adapters::handoff::open_handoff_service;
+use mudi::adapters::managed_sessions::{
+    SystemManagedResumeProviderEvidence, SystemProcessEvidence,
+};
+use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::{registry, ProviderBindingEvidence, ProviderExecutables};
-use mudi::application::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
+use mudi::adapters::refresh::open_refresh_service;
+use mudi::application::clipboard::ClipboardPort;
+use mudi::application::handoff::{HandoffPaths, WorkerLaunch, WorkerLauncher};
 use mudi::application::managed_sessions::{
     BindingOutcome, EvidenceBinder, ManagedCurrentRunLifecycle, ManagedLaunchBroker,
-    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStore,
-    ManagedLaunchTarget, ManagedResumeEvidence, ManagedResumeEvidenceCandidate,
-    ManagedResumeProviderEvidence, ManagedResumeRequest, ManagedResumeVerifier,
-    ManagedSessionRecord, ManagedSessionService, ManagedTerminalAccess, ProcessEvidence,
-    ProviderProcessObservation, SystemManagedResumeEvidence, SystemProcessEvidence,
+    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchTarget,
+    ManagedResumeEvidence, ManagedResumeEvidenceCandidate, ManagedResumeProviderEvidence,
+    ManagedResumeRequest, ManagedResumeVerifier, ManagedSessionRecord, ManagedSessionService,
+    ManagedTerminalAccess, ProcessEvidence, ProviderProcessObservation,
+    SystemManagedResumeEvidence,
 };
 use mudi::application::observation::read_model::{ManagedResumeSummary, RefreshSnapshot};
-use mudi::application::observation::refresh::RefreshService;
 use mudi::application::successor::TerminalLauncher;
-use mudi::application::ApplicationController;
 use mudi::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
     SourceFormat, SourceMetadata, Usage,
@@ -29,6 +35,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use support::{workflow_handlers, TestActionRouter};
 
 #[test]
 fn provider_adapters_build_exact_interactive_resume_commands() {
@@ -86,13 +93,10 @@ fn verified_exited_session_launches_an_exact_resume_from_a_durable_registration(
             opened: opened.clone(),
         }),
     )
-    .with_resume_verifier(ManagedResumeVerifier::new(
-        config,
-        Box::new(FixedResumeEvidence {
-            lifecycle: ManagedCurrentRunLifecycle::Exited,
-            verified: verified.clone(),
-        }),
-    ));
+    .with_resume_verifier(ManagedResumeVerifier::new(Box::new(FixedResumeEvidence {
+        lifecycle: ManagedCurrentRunLifecycle::Exited,
+        verified: verified.clone(),
+    })));
 
     let outcome = service
         .start_resume(
@@ -172,13 +176,10 @@ fn resume_binding_rejects_self_consistent_evidence_for_a_different_native_sessio
             opened: Arc::new(Mutex::new(Vec::new())),
         }),
     )
-    .with_resume_verifier(ManagedResumeVerifier::new(
-        config,
-        Box::new(FixedResumeEvidence {
-            lifecycle: ManagedCurrentRunLifecycle::Exited,
-            verified: Arc::new(Mutex::new(Vec::new())),
-        }),
-    ));
+    .with_resume_verifier(ManagedResumeVerifier::new(Box::new(FixedResumeEvidence {
+        lifecycle: ManagedCurrentRunLifecycle::Exited,
+        verified: Arc::new(Mutex::new(Vec::new())),
+    })));
     let outcome = service
         .start_resume(
             ManagedResumeRequest {
@@ -266,13 +267,10 @@ fn successful_resume_atomically_establishes_a_distinct_run_and_new_receipt() {
             opened: Arc::new(Mutex::new(Vec::new())),
         }),
     )
-    .with_resume_verifier(ManagedResumeVerifier::new(
-        config,
-        Box::new(FixedResumeEvidence {
-            lifecycle: ManagedCurrentRunLifecycle::Exited,
-            verified: Arc::new(Mutex::new(Vec::new())),
-        }),
-    ));
+    .with_resume_verifier(ManagedResumeVerifier::new(Box::new(FixedResumeEvidence {
+        lifecycle: ManagedCurrentRunLifecycle::Exited,
+        verified: Arc::new(Mutex::new(Vec::new())),
+    })));
     let outcome = service
         .start_resume(
             ManagedResumeRequest {
@@ -383,13 +381,10 @@ fn claude_resume_lifecycle_uses_exact_identity_and_establishes_a_distinct_run() 
             opened: Arc::new(Mutex::new(Vec::new())),
         }),
     )
-    .with_resume_verifier(ManagedResumeVerifier::new(
-        config,
-        Box::new(FixedResumeEvidence {
-            lifecycle: ManagedCurrentRunLifecycle::Exited,
-            verified: Arc::new(Mutex::new(Vec::new())),
-        }),
-    ));
+    .with_resume_verifier(ManagedResumeVerifier::new(Box::new(FixedResumeEvidence {
+        lifecycle: ManagedCurrentRunLifecycle::Exited,
+        verified: Arc::new(Mutex::new(Vec::new())),
+    })));
     let outcome = service
         .start_resume(
             ManagedResumeRequest {
@@ -485,13 +480,10 @@ fn pending_resume_is_unique_and_cancel_clears_it_for_a_later_authorization() {
             opened: Arc::new(Mutex::new(Vec::new())),
         }),
     )
-    .with_resume_verifier(ManagedResumeVerifier::new(
-        config,
-        Box::new(FixedResumeEvidence {
-            lifecycle: ManagedCurrentRunLifecycle::Exited,
-            verified: Arc::new(Mutex::new(Vec::new())),
-        }),
-    ));
+    .with_resume_verifier(ManagedResumeVerifier::new(Box::new(FixedResumeEvidence {
+        lifecycle: ManagedCurrentRunLifecycle::Exited,
+        verified: Arc::new(Mutex::new(Vec::new())),
+    })));
     let first = service
         .start_resume(
             ManagedResumeRequest {
@@ -586,13 +578,10 @@ fn open_or_unknown_prior_run_never_reaches_the_resume_launch_broker() {
                     opened: opened.clone(),
                 }),
             )
-            .with_resume_verifier(ManagedResumeVerifier::new(
-                config,
-                Box::new(FixedResumeEvidence {
-                    lifecycle,
-                    verified: Arc::new(Mutex::new(Vec::new())),
-                }),
-            ));
+            .with_resume_verifier(ManagedResumeVerifier::new(Box::new(FixedResumeEvidence {
+                lifecycle,
+                verified: Arc::new(Mutex::new(Vec::new())),
+            })));
 
             assert!(service
                 .start_resume(
@@ -640,13 +629,10 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
         Box::new(FailingLaunchBroker),
         Box::new(NeverTerminal),
     )
-    .with_resume_verifier(ManagedResumeVerifier::new(
-        config.clone(),
-        Box::new(FixedResumeEvidence {
-            lifecycle: ManagedCurrentRunLifecycle::Exited,
-            verified: Arc::new(Mutex::new(Vec::new())),
-        }),
-    ));
+    .with_resume_verifier(ManagedResumeVerifier::new(Box::new(FixedResumeEvidence {
+        lifecycle: ManagedCurrentRunLifecycle::Exited,
+        verified: Arc::new(Mutex::new(Vec::new())),
+    })));
     assert!(launch_failure
         .start_resume(
             ManagedResumeRequest {
@@ -699,13 +685,10 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
         }),
         Box::new(FailingTerminal),
     )
-    .with_resume_verifier(ManagedResumeVerifier::new(
-        config,
-        Box::new(FixedResumeEvidence {
-            lifecycle: ManagedCurrentRunLifecycle::Exited,
-            verified: Arc::new(Mutex::new(Vec::new())),
-        }),
-    ));
+    .with_resume_verifier(ManagedResumeVerifier::new(Box::new(FixedResumeEvidence {
+        lifecycle: ManagedCurrentRunLifecycle::Exited,
+        verified: Arc::new(Mutex::new(Vec::new())),
+    })));
     let outcome = terminal_failure
         .start_resume(
             ManagedResumeRequest {
@@ -807,10 +790,11 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
         binding_receipt_id: receipt.id.clone(),
     };
 
-    let exited = SystemManagedResumeEvidence::new(Box::new(FixedObservation(
-        ProviderProcessObservation::Absent,
-    )))
-    .observe(&config, &run, &session, &receipt)
+    let exited = SystemManagedResumeEvidence::new(
+        Box::new(FixedObservation(ProviderProcessObservation::Absent)),
+        Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
+    )
+    .observe(&run, &session, &receipt)
     .unwrap();
     assert_eq!(exited, ManagedCurrentRunLifecycle::Exited);
 
@@ -820,26 +804,33 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
     };
     fs::create_dir_all(&broken_config.claude_dir).unwrap();
     fs::write(broken_config.claude_sessions_dir(), "not a directory").unwrap();
-    let failed_probe = SystemManagedResumeEvidence::new(Box::new(FixedObservation(
-        ProviderProcessObservation::Absent,
-    )))
-    .observe(&broken_config, &run, &session, &receipt)
+    let failed_probe = SystemManagedResumeEvidence::new(
+        Box::new(FixedObservation(ProviderProcessObservation::Absent)),
+        Box::new(SystemManagedResumeProviderEvidence::new(
+            broken_config.clone(),
+        )),
+    )
+    .observe(&run, &session, &receipt)
     .unwrap();
     assert_eq!(failed_probe, ManagedCurrentRunLifecycle::Unknown);
 
-    let unknown = SystemManagedResumeEvidence::new(Box::new(FixedObservation(
-        ProviderProcessObservation::Unknown,
-    )))
-    .observe(&config, &run, &session, &receipt)
+    let unknown = SystemManagedResumeEvidence::new(
+        Box::new(FixedObservation(ProviderProcessObservation::Unknown)),
+        Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
+    )
+    .observe(&run, &session, &receipt)
     .unwrap();
     assert_eq!(unknown, ManagedCurrentRunLifecycle::Unknown);
-    let reused = SystemManagedResumeEvidence::new(Box::new(FixedObservation(
-        ProviderProcessObservation::Live(ProcessIdentity {
-            pid: prior_process.pid,
-            started_at_ms: 99_000,
-        }),
-    )))
-    .observe(&config, &run, &session, &receipt)
+    let reused = SystemManagedResumeEvidence::new(
+        Box::new(FixedObservation(ProviderProcessObservation::Live(
+            ProcessIdentity {
+                pid: prior_process.pid,
+                started_at_ms: 99_000,
+            },
+        ))),
+        Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
+    )
+    .observe(&run, &session, &receipt)
     .unwrap();
     assert_eq!(reused, ManagedCurrentRunLifecycle::Unknown);
 
@@ -864,10 +855,11 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
         .to_string(),
     )
     .unwrap();
-    let externally_open = SystemManagedResumeEvidence::new(Box::new(FixedObservation(
-        ProviderProcessObservation::Absent,
-    )))
-    .observe(&config, &run, &session, &receipt)
+    let externally_open = SystemManagedResumeEvidence::new(
+        Box::new(FixedObservation(ProviderProcessObservation::Absent)),
+        Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
+    )
+    .observe(&run, &session, &receipt)
     .unwrap();
     assert_eq!(externally_open, ManagedCurrentRunLifecycle::Open);
     let _ = external_child.kill();
@@ -999,7 +991,7 @@ fn refresh_projects_resume_eligibility_only_for_verified_exited_evidence() {
             },
         );
         drop(store);
-        let mut refresh = RefreshService::new(config).with_managed_resume_evidence(Box::new(
+        let mut refresh = open_refresh_service(config).with_managed_resume_evidence(Box::new(
             FixedResumeEvidence {
                 lifecycle,
                 verified: Arc::new(Mutex::new(Vec::new())),
@@ -1045,9 +1037,8 @@ fn bulk_resume_projection_samples_process_and_provider_evidence_once() {
     let process_bulk = Arc::new(AtomicUsize::new(0));
     let provider_single = Arc::new(AtomicUsize::new(0));
     let provider_bulk = Arc::new(AtomicUsize::new(0));
-    let verifier = ManagedResumeVerifier::new(
-        config,
-        Box::new(SystemManagedResumeEvidence::with_evidence(
+    let verifier =
+        ManagedResumeVerifier::new(Box::new(SystemManagedResumeEvidence::with_evidence(
             Box::new(CountingProcessEvidence {
                 single: process_single.clone(),
                 bulk: process_bulk.clone(),
@@ -1056,8 +1047,7 @@ fn bulk_resume_projection_samples_process_and_provider_evidence_once() {
                 single: provider_single.clone(),
                 bulk: provider_bulk.clone(),
             }),
-        )),
-    );
+        )));
 
     let eligible = verifier.verified_exited_sessions(&store).unwrap();
 
@@ -1085,9 +1075,8 @@ fn empty_resume_projection_samples_no_system_evidence() {
     let process_bulk = Arc::new(AtomicUsize::new(0));
     let provider_single = Arc::new(AtomicUsize::new(0));
     let provider_bulk = Arc::new(AtomicUsize::new(0));
-    let verifier = ManagedResumeVerifier::new(
-        config,
-        Box::new(SystemManagedResumeEvidence::with_evidence(
+    let verifier =
+        ManagedResumeVerifier::new(Box::new(SystemManagedResumeEvidence::with_evidence(
             Box::new(CountingProcessEvidence {
                 single: process_single.clone(),
                 bulk: process_bulk.clone(),
@@ -1096,8 +1085,7 @@ fn empty_resume_projection_samples_no_system_evidence() {
                 single: provider_single.clone(),
                 bulk: provider_bulk.clone(),
             }),
-        )),
-    );
+        )));
 
     assert!(verifier
         .verified_exited_sessions(&store)
@@ -1139,14 +1127,11 @@ fn application_routes_authorized_resume_and_requests_a_fresh_projection() {
             opened: opened.clone(),
         }),
     )
-    .with_resume_verifier(ManagedResumeVerifier::new(
-        config,
-        Box::new(FixedResumeEvidence {
-            lifecycle: ManagedCurrentRunLifecycle::Exited,
-            verified: Arc::new(Mutex::new(Vec::new())),
-        }),
-    ));
-    let handoff = HandoffService::open(
+    .with_resume_verifier(ManagedResumeVerifier::new(Box::new(FixedResumeEvidence {
+        lifecycle: ManagedCurrentRunLifecycle::Exited,
+        verified: Arc::new(Mutex::new(Vec::new())),
+    })));
+    let handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.0.join("tasks.db"),
             artifact_root: temp.0.join("artifacts"),
@@ -1155,8 +1140,12 @@ fn application_routes_authorized_resume_and_requests_a_fresh_projection() {
         NeverHandoffWorker,
     )
     .unwrap();
-    let mut controller =
-        ApplicationController::new(handoff, NeverSuccessorTerminal, managed_sessions);
+    let mut controller = workflow_handlers(
+        handoff,
+        NeverSuccessorTerminal,
+        managed_sessions,
+        temp.0.join("workflow-state.db"),
+    );
     let snapshot = RefreshSnapshot {
         sessions: vec![display_session(
             SessionState::Exited,
@@ -1209,7 +1198,7 @@ impl TerminalLauncher for NeverSuccessorTerminal {
 
 struct NoopClipboard;
 
-impl Clipboard for NoopClipboard {
+impl ClipboardPort for NoopClipboard {
     fn write_text(&mut self, _value: &str) -> std::io::Result<()> {
         Ok(())
     }
@@ -1314,7 +1303,6 @@ struct CountingProviderEvidence {
 impl ManagedResumeProviderEvidence for CountingProviderEvidence {
     fn observe(
         &self,
-        _config: &Config,
         _run: &mudi::application::managed_sessions::ManagedCurrentRunRecord,
         _session: &ManagedSessionRecord,
         _receipt: &mudi::application::managed_sessions::BindingReceipt,
@@ -1325,7 +1313,6 @@ impl ManagedResumeProviderEvidence for CountingProviderEvidence {
 
     fn observe_many(
         &self,
-        _config: &Config,
         candidates: &[ManagedResumeEvidenceCandidate],
     ) -> Vec<Result<ManagedCurrentRunLifecycle>> {
         self.bulk.fetch_add(1, Ordering::SeqCst);
@@ -1339,7 +1326,6 @@ impl ManagedResumeProviderEvidence for CountingProviderEvidence {
 impl ManagedResumeEvidence for FixedResumeEvidence {
     fn observe(
         &self,
-        _config: &Config,
         run: &mudi::application::managed_sessions::ManagedCurrentRunRecord,
         session: &ManagedSessionRecord,
         _receipt: &mudi::application::managed_sessions::BindingReceipt,

@@ -1,4 +1,4 @@
-//! Collector: discover source files, drive incremental indexing, and build the
+//! Collector adapter: discover source files, drive incremental indexing, and build the
 //! normalized snapshot the UI renders.
 
 use crate::adapters::config::Config;
@@ -14,14 +14,9 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// Progress reported while (re)indexing.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ScanStats {
-    pub discovered: usize,
-    pub parsed: usize,
-    pub skipped: usize,
-    pub pruned: usize,
-}
+use crate::application::observation::read_model::RefreshDiagnostic;
+use crate::application::observation::read_model::ScanStats;
+use crate::application::observation::refresh::{ObservationBatch, SessionObservationSource};
 
 /// Incrementally refresh the index from source: parse changed/new files, skip
 /// unchanged ones, and prune sessions whose source vanished. Each provider's
@@ -329,6 +324,86 @@ pub fn sort_for_display(sessions: &mut [Session]) {
             .cmp(&b.state.sort_rank())
             .then(b.last_activity_ms.cmp(&a.last_activity_ms))
     });
+}
+
+pub struct IndexedObservationSource {
+    config: Config,
+    index: std::result::Result<Index, String>,
+    models: ModelCatalog,
+    project_resolver: ProjectResolverCache,
+}
+
+impl IndexedObservationSource {
+    pub fn new(config: Config) -> Self {
+        let index = Index::open(&config.index_path()).map_err(|error| error.to_string());
+        let models = ModelCatalog::load(Some(&config.model_catalog_override_path()));
+        Self {
+            config,
+            index,
+            models,
+            project_resolver: ProjectResolverCache,
+        }
+    }
+}
+
+impl SessionObservationSource for IndexedObservationSource {
+    fn refresh(&mut self) -> ObservationBatch {
+        let mut diagnostics = Vec::new();
+        let mut stats = ScanStats::default();
+        let mut sessions = Vec::new();
+        match self.index.as_mut() {
+            Ok(index) => match refresh_checked(&self.config, index) {
+                Ok(scanned) => {
+                    stats = scanned;
+                    match build_sessions_with_resolver(
+                        &self.config,
+                        index,
+                        &self.models,
+                        &mut self.project_resolver,
+                    ) {
+                        Ok(built) => {
+                            sessions = built.sessions;
+                            diagnostics.extend(built.project_diagnostics.into_iter().map(
+                                |diagnostic| {
+                                    RefreshDiagnostic::new(
+                                        "Project Resolver",
+                                        format!("{}: {}", diagnostic.cwd, diagnostic.message),
+                                    )
+                                },
+                            ));
+                        }
+                        Err(error) => diagnostics
+                            .push(RefreshDiagnostic::new("Index read", error.to_string())),
+                    }
+                }
+                Err(error) => {
+                    diagnostics.push(RefreshDiagnostic::new("Index refresh", error.to_string()));
+                    if let Ok(built) = build_sessions_with_resolver(
+                        &self.config,
+                        index,
+                        &self.models,
+                        &mut self.project_resolver,
+                    ) {
+                        sessions = built.sessions;
+                        diagnostics.extend(built.project_diagnostics.into_iter().map(
+                            |diagnostic| {
+                                RefreshDiagnostic::new(
+                                    "Project Resolver",
+                                    format!("{}: {}", diagnostic.cwd, diagnostic.message),
+                                )
+                            },
+                        ));
+                    }
+                }
+            },
+            Err(error) => diagnostics.push(RefreshDiagnostic::new("Index", error.clone())),
+        }
+        ObservationBatch {
+            stats,
+            sessions,
+            diagnostics,
+        }
+    }
 }
 
 #[cfg(test)]

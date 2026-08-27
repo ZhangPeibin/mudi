@@ -2,6 +2,7 @@
 
 pub mod handoff;
 
+pub use crate::application::handoff::SkillInstaller;
 use crate::domain::Provider;
 use anyhow::Result;
 use handoff::ManagedHandoffSkills;
@@ -22,14 +23,6 @@ pub const HANDOFF_SKILL: SkillDefinition = SkillDefinition {
 /// Resolves a locally declared managed Skill without inspecting provider content.
 pub trait SkillCatalog {
     fn declared(&self, id: &str) -> Option<SkillDefinition>;
-}
-
-/// Installs or verifies owner-only managed copies and renders worker configuration.
-pub trait SkillInstaller: Send + Sync + std::fmt::Debug {
-    fn install_for_first_use(&self) -> Result<()>;
-    fn verify(&self, provider: Provider) -> std::result::Result<(), String>;
-    fn invocation(&self, provider: Provider) -> std::result::Result<String, String>;
-    fn worker_roots(&self) -> Option<(PathBuf, PathBuf)>;
 }
 
 /// The catalog and installer for the current Handoff Skill declaration.

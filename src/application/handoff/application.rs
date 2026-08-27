@@ -4,55 +4,35 @@ use super::*;
 
 pub struct HandoffService<L> {
     paths: HandoffPaths,
-    executables: ProviderExecutables,
+    executables: Box<dyn ProviderExecutableResolver>,
     launcher: L,
-    store: TaskStore,
+    store: Box<dyn TaskRepository>,
     current_run_control: Arc<dyn CurrentRunControl>,
+    task_ids: Arc<dyn TaskIdGenerator>,
+    successor_runtime: Arc<dyn SuccessorRuntime>,
     skill_installer: Option<Arc<dyn SkillInstaller>>,
 }
 
 impl<L: WorkerLauncher> HandoffService<L> {
-    pub fn open(
+    pub fn new(
         paths: HandoffPaths,
-        executables: ProviderExecutables,
-        launcher: L,
-    ) -> Result<Self> {
-        let store = TaskStore::open(&paths.task_store)?;
-        Ok(Self {
-            paths,
-            executables,
-            launcher,
-            store,
-            current_run_control: Arc::new(NoopCurrentRunControl),
-            skill_installer: None,
-        })
-    }
-
-    pub fn open_with_current_run_control(
-        paths: HandoffPaths,
-        executables: ProviderExecutables,
+        executables: impl ProviderExecutableResolver + 'static,
         launcher: L,
         current_run_control: Arc<dyn CurrentRunControl>,
+        task_ids: Arc<dyn TaskIdGenerator>,
+        successor_runtime: Arc<dyn SuccessorRuntime>,
+        store: impl TaskRepository + 'static,
     ) -> Result<Self> {
-        let store = TaskStore::open(&paths.task_store)?;
         Ok(Self {
             paths,
-            executables,
+            executables: Box::new(executables),
             launcher,
-            store,
+            store: Box::new(store),
             current_run_control,
+            task_ids,
+            successor_runtime,
             skill_installer: None,
         })
-    }
-
-    pub fn with_managed_handoff_skills(
-        mut self,
-        managed_handoff_skills: crate::adapters::skills::handoff::ManagedHandoffSkills,
-    ) -> Self {
-        self.skill_installer = Some(Arc::new(ManagedSkillCatalog::handoff(
-            managed_handoff_skills,
-        )));
-        self
     }
 
     pub fn with_skill_installer(mut self, skill_installer: Arc<dyn SkillInstaller>) -> Self {
@@ -84,20 +64,16 @@ impl<L: WorkerLauncher> HandoffService<L> {
         now_ms: i64,
         retry_of_task_id: Option<String>,
     ) -> Result<OperationTask, HandoffStartError> {
-        self.preflight_exited(session, successor_provider)?;
+        let successor_executable = self.preflight_exited(session, successor_provider)?;
         let task = OperationTask {
-            id: new_task_id(),
+            id: self.task_ids.new_task_id(),
             state: OperationTaskState::Queued,
             source_provider: session.provider,
             source_session_id: session.id.clone(),
             source_record_path: session.source.path.clone(),
             source_working_directory: PathBuf::from(session.cwd.as_deref().unwrap_or_default()),
             successor_provider,
-            successor_executable: self
-                .executables
-                .executable_for(successor_provider)
-                .expect("preflight validates the Successor Provider executable")
-                .to_path_buf(),
+            successor_executable,
             created_at_ms: now_ms,
             state_changed_at_ms: now_ms,
             worker_process_identity: None,
@@ -174,7 +150,7 @@ impl<L: WorkerLauncher> HandoffService<L> {
                 "ending the Current Run was not authorized",
             ));
         }
-        self.preflight_common(session, successor_provider)?;
+        let successor_executable = self.preflight_common(session, successor_provider)?;
         let observation = self
             .current_run_control
             .observe(session.provider, &session.id, &session.source.path)
@@ -195,18 +171,14 @@ impl<L: WorkerLauncher> HandoffService<L> {
             }
         };
         let task = OperationTask {
-            id: new_task_id(),
+            id: self.task_ids.new_task_id(),
             state: OperationTaskState::Waiting,
             source_provider: session.provider,
             source_session_id: session.id.clone(),
             source_record_path: session.source.path.clone(),
             source_working_directory: PathBuf::from(session.cwd.as_deref().unwrap_or_default()),
             successor_provider,
-            successor_executable: self
-                .executables
-                .executable_for(successor_provider)
-                .expect("preflight validates the Successor Provider executable")
-                .to_path_buf(),
+            successor_executable,
             created_at_ms: now_ms,
             state_changed_at_ms: now_ms,
             worker_process_identity: None,
@@ -319,12 +291,16 @@ impl<L: WorkerLauncher> HandoffService<L> {
         if task.termination_requested_at_ms.is_some() {
             return Ok(task);
         }
-        if !crate::adapters::providers::state::process_identity_is_live(provider) {
+        if !self.current_run_control.process_is_live(provider) {
             self.store
                 .mark_cancelled(task_id, now_ms, "cancelled_by_user")?;
         } else {
             self.store.mark_termination_requested(task_id, now_ms)?;
-            if request_graceful_process_exit(provider).is_err() {
+            if self
+                .current_run_control
+                .request_graceful_exit(provider)
+                .is_err()
+            {
                 self.store
                     .mark_interrupted(task_id, now_ms, "provider_termination_uncertain")?;
             }
@@ -342,13 +318,19 @@ impl<L: WorkerLauncher> HandoffService<L> {
             }
             if task.state == OperationTaskState::Interrupted
                 && task.retry_ready_at_ms.is_none()
-                && prior_execution_processes_are_absent(&task)
+                && prior_execution_processes_are_absent(&task, self.current_run_control.as_ref())
             {
                 self.store.mark_retry_ready(&task.id, now_ms)?;
                 continue;
             }
             if task.state == OperationTaskState::Running
-                && reconcile_declared_result(&self.store, &self.paths, &task, now_ms)?
+                && reconcile_declared_result(
+                    self.store.as_ref(),
+                    &self.paths,
+                    &task,
+                    now_ms,
+                    self.successor_runtime.as_ref(),
+                )?
             {
                 continue;
             }
@@ -358,9 +340,9 @@ impl<L: WorkerLauncher> HandoffService<L> {
                 self.store
                     .mark_failed(&task.id, now_ms, "worker_start_deadline_exceeded")?;
             } else if task.state == OperationTaskState::Waiting
-                && task.worker_process_identity.is_some_and(|process| {
-                    !crate::adapters::providers::state::process_identity_is_live(process)
-                })
+                && task
+                    .worker_process_identity
+                    .is_some_and(|process| !self.current_run_control.process_is_live(process))
             {
                 if task.control_used_at_ms.is_none() {
                     self.store
@@ -402,9 +384,13 @@ impl<L: WorkerLauncher> HandoffService<L> {
                 let Some(provider) = task.provider_process_identity else {
                     continue;
                 };
-                if crate::adapters::providers::state::process_identity_is_live(provider) {
+                if self.current_run_control.process_is_live(provider) {
                     self.store.mark_termination_requested(&task.id, now_ms)?;
-                    if request_graceful_process_exit(provider).is_err() {
+                    if self
+                        .current_run_control
+                        .request_graceful_exit(provider)
+                        .is_err()
+                    {
                         self.store.mark_interrupted(
                             &task.id,
                             now_ms,
@@ -415,10 +401,10 @@ impl<L: WorkerLauncher> HandoffService<L> {
             } else if task.state == OperationTaskState::Running {
                 let worker_live = task
                     .worker_process_identity
-                    .is_some_and(crate::adapters::providers::state::process_identity_is_live);
+                    .is_some_and(|process| self.current_run_control.process_is_live(process));
                 let provider_live = task
                     .provider_process_identity
-                    .is_some_and(crate::adapters::providers::state::process_identity_is_live);
+                    .is_some_and(|process| self.current_run_control.process_is_live(process));
                 if worker_live || provider_live {
                     continue;
                 }
@@ -510,7 +496,7 @@ impl<L: WorkerLauncher> HandoffService<L> {
         &self,
         session: &Session,
         successor_provider: Provider,
-    ) -> Result<(), HandoffStartError> {
+    ) -> Result<PathBuf, HandoffStartError> {
         if session.state != SessionState::Exited {
             return Err(HandoffStartError::Ineligible("source Session is Open"));
         }
@@ -521,7 +507,7 @@ impl<L: WorkerLauncher> HandoffService<L> {
         &self,
         session: &Session,
         successor_provider: Provider,
-    ) -> Result<(), HandoffStartError> {
+    ) -> Result<PathBuf, HandoffStartError> {
         if session.id.is_empty() {
             return Err(HandoffStartError::Ineligible(
                 "native Session ID is unavailable",
@@ -536,16 +522,22 @@ impl<L: WorkerLauncher> HandoffService<L> {
                 "source Session already has a non-terminal Operation Task",
             ));
         }
-        if self.executables.executable_for(session.provider).is_none() {
+        if self
+            .executables
+            .resolve_executable(session.provider)
+            .is_none()
+        {
             return Err(HandoffStartError::Ineligible(
                 "source Provider CLI is unavailable",
             ));
         }
-        if self
+        let successor_executable = self
             .executables
-            .executable_for(successor_provider)
-            .is_none()
-        {
+            .resolve_executable(successor_provider)
+            .ok_or(HandoffStartError::Ineligible(
+                "selected Successor Provider CLI is unavailable",
+            ))?;
+        if successor_executable.as_os_str().is_empty() {
             return Err(HandoffStartError::Ineligible(
                 "selected Successor Provider CLI is unavailable",
             ));
@@ -570,7 +562,7 @@ impl<L: WorkerLauncher> HandoffService<L> {
                 .install_for_first_use()
                 .map_err(HandoffStartError::ManagedSkill)?;
         }
-        Ok(())
+        Ok(successor_executable)
     }
 }
 
@@ -762,22 +754,26 @@ fn remove_if_present(
     }
 }
 
-fn prior_execution_processes_are_absent(task: &OperationTask) -> bool {
-    let worker_absent = task.worker_process_identity.is_some_and(|process| {
-        !crate::adapters::providers::state::process_identity_is_live(process)
-    });
+fn prior_execution_processes_are_absent(
+    task: &OperationTask,
+    control: &dyn CurrentRunControl,
+) -> bool {
+    let worker_absent = task
+        .worker_process_identity
+        .is_some_and(|process| !control.process_is_live(process));
     let provider_absent = match task.provider_process_identity {
-        Some(process) => !crate::adapters::providers::state::process_identity_is_live(process),
+        Some(process) => !control.process_is_live(process),
         None => task.prompt_sent_at_ms.is_none(),
     };
     worker_absent && provider_absent
 }
 
 fn reconcile_declared_result(
-    store: &TaskStore,
+    store: &dyn TaskRepository,
     paths: &HandoffPaths,
     task: &OperationTask,
     now_ms: i64,
+    successor_runtime: &dyn SuccessorRuntime,
 ) -> Result<bool> {
     let artifact_path = paths.artifact_root.join(&task.id).join("handoff.md");
     let Ok(candidate) = fs::read_to_string(&artifact_path) else {
@@ -786,7 +782,11 @@ fn reconcile_declared_result(
     if crate::application::handoff::artifact::validate(&candidate).is_err() {
         return Ok(false);
     }
-    let plan = crate::application::successor::build_launch_plan(task, artifact_path.clone())?;
+    let plan = crate::application::successor::build_launch_plan(
+        task,
+        artifact_path.clone(),
+        successor_runtime,
+    )?;
     store.mark_ready(&task.id, now_ms, &artifact_path, &plan)?;
     Ok(true)
 }

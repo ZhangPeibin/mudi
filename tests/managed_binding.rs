@@ -1,16 +1,18 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mudi::adapters::config::Config;
+use mudi::adapters::managed_sessions::SystemProcessEvidence;
+use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
+use mudi::adapters::persistence::session_metadata::SessionLabels;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::{registry, ProviderBindingEvidence};
+use mudi::adapters::refresh::open_refresh_service;
 use mudi::application::managed_sessions::{
     BindingOutcome, EvidenceBinder, LaunchIdentityAssociationOutcome, ManagedLaunchAction,
     ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus,
-    ManagedLaunchStore, ManagedLaunchTarget, PrivateTmuxEnvironment, ProcessEvidence,
-    ProviderNewCommand, ProviderProcessObservation, SystemProcessEvidence,
+    ManagedLaunchTarget, PrivateTmuxEnvironment, ProcessEvidence, ProviderNewCommand,
+    ProviderProcessObservation,
 };
 use mudi::application::observation::read_model::{ManagedLaunchSummary, ManagedTerminalState};
-use mudi::application::observation::refresh::RefreshService;
-use mudi::application::session_labels::SessionLabels;
 use mudi::domain::{
     ContextState, Provider, Session, SessionProvenance, SessionState, SourceFormat, SourceMetadata,
     Usage,
@@ -680,7 +682,7 @@ fn refresh_publishes_metadata_only_managed_launch_recovery_state() {
         .insert(&registration)
         .unwrap();
 
-    let snapshot = RefreshService::new(config).refresh();
+    let snapshot = open_refresh_service(config).refresh();
 
     assert_eq!(snapshot.managed_launches.len(), 1);
     let launch = &snapshot.managed_launches[0];
@@ -1062,7 +1064,7 @@ fn claude_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
         .unwrap();
     let mut ui = load_ui_before_binding(&config);
 
-    let mut refresh = RefreshService::new(config.clone());
+    let mut refresh = open_refresh_service(config.clone());
     let snapshot = refresh.refresh();
 
     assert_managed_refresh(
@@ -1164,7 +1166,7 @@ fn codex_first_prompt_refresh_replaces_binding_with_a_managed_project_row() {
     );
     let mut ui = load_ui_before_binding(&config);
 
-    let snapshot = RefreshService::new(config.clone()).refresh();
+    let snapshot = open_refresh_service(config.clone()).refresh();
 
     assert_managed_refresh(
         &config,
@@ -1297,7 +1299,7 @@ fn assert_title_survives_binding(provider: Provider) {
         .unwrap();
     let mut ui = load_ui_before_binding(&config);
 
-    let mut refresh = RefreshService::new(config.clone());
+    let mut refresh = open_refresh_service(config.clone());
     let snapshot = refresh.refresh();
 
     let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
@@ -1338,7 +1340,7 @@ fn assert_title_survives_binding(provider: Provider) {
     assert_eq!(fs::read(config.label_store_path()).unwrap(), label_bytes);
     drop(refresh);
 
-    let mut restarted_refresh = RefreshService::new(config.clone());
+    let mut restarted_refresh = open_refresh_service(config.clone());
     let restarted = restarted_refresh.refresh();
     assert_eq!(fs::read(config.label_store_path()).unwrap(), label_bytes);
     assert!(restarted.managed_launches.is_empty());
@@ -1434,7 +1436,7 @@ fn conflicting_launch_registration_cannot_replace_an_associated_title() {
     store.insert(&conflicting).unwrap();
     drop(store);
 
-    let mut refresh = RefreshService::new(config.clone());
+    let mut refresh = open_refresh_service(config.clone());
     refresh.refresh();
 
     let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
@@ -1543,7 +1545,11 @@ fn assert_managed_refresh(
 
 fn load_ui_before_binding(config: &Config) -> Ui {
     fs::write(config.profile_path(), r#"{"help_seen":true}"#).unwrap();
-    Ui::load(config.profile_path()).unwrap()
+    Ui::load_with_session_metadata(
+        config.profile_path(),
+        Box::new(SessionLabels::load(config.label_store_path())),
+    )
+    .unwrap()
 }
 
 fn render_ui(ui: &Ui, snapshot: &Snapshot) -> String {

@@ -1,8 +1,7 @@
 //! Handoff application and Worker data contracts.
 
-use crate::adapters::providers::state::ProcessIdentity;
 use crate::application::tasks::OperationTaskState;
-use crate::domain::Provider;
+use crate::domain::{ProcessIdentity, Provider};
 use std::fmt;
 use std::path::PathBuf;
 

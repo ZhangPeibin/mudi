@@ -4,12 +4,16 @@
 //! and once when crossing Critical (85%). Reset when context drops below a threshold —
 //! including after Compaction, which lowers the raw context.
 
-use crate::adapters::config::{CRIT_PCT, WARN_PCT};
-use crate::application::session_labels::SessionLabels;
+#[cfg(test)]
+use crate::application::session_labels::SessionMetadataQuery;
+use crate::application::session_labels::{short_session_id, SessionMetadataRepository};
+use crate::application::{CRIT_PCT, WARN_PCT};
 use crate::domain::{Provider, Session};
 use std::collections::HashMap;
-use std::path::Path;
-use std::process::Command;
+
+pub trait NotificationPort: Send + Sync {
+    fn notify(&self, message: &str);
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
@@ -54,39 +58,32 @@ pub fn counts(sessions: &[Session]) -> AlertCounts {
 }
 
 /// Tracks per-session alert level so each threshold notifies only once per crossing.
-#[derive(Default)]
 pub struct AlertEngine {
     seen: HashMap<(Provider, String), Level>,
-    labels: SessionLabels,
-    /// When false, notifications are computed but not delivered (tests).
-    deliver: bool,
+    labels: Box<dyn SessionMetadataRepository>,
+    notifications: Box<dyn NotificationPort>,
 }
 
 impl AlertEngine {
-    pub fn new(label_store_path: impl AsRef<Path>) -> Self {
+    pub fn new(
+        labels: Box<dyn SessionMetadataRepository>,
+        notifications: Box<dyn NotificationPort>,
+    ) -> Self {
         AlertEngine {
             seen: HashMap::new(),
-            labels: SessionLabels::load(label_store_path),
-            deliver: true,
+            labels,
+            notifications,
         }
+    }
+
+    #[cfg(test)]
+    fn silent_with_labels(labels: impl SessionMetadataRepository + 'static) -> Self {
+        Self::new(Box::new(labels), Box::new(SilentNotifications))
     }
 
     #[cfg(test)]
     fn silent() -> Self {
-        AlertEngine {
-            seen: HashMap::new(),
-            labels: SessionLabels::default(),
-            deliver: false,
-        }
-    }
-
-    #[cfg(test)]
-    fn silent_with_labels(labels: SessionLabels) -> Self {
-        AlertEngine {
-            seen: HashMap::new(),
-            labels,
-            deliver: false,
-        }
+        Self::silent_with_labels(TestSessionMetadata::default())
     }
 
     /// Update state from the latest snapshot, emitting notifications for upward
@@ -115,7 +112,7 @@ impl AlertEngine {
             // Notify only on upward crossings into a higher band.
             if level > prev {
                 let title = self.labels.title(s.provider, &s.id);
-                let short_id = SessionLabels::short_id(&s.id);
+                let short_id = short_session_id(&s.id);
                 let msg = match level {
                     Level::Crit => format!(
                         "CRITICAL: {title} · {} · {} · {short_id} · Current Context {:.0}%",
@@ -131,9 +128,7 @@ impl AlertEngine {
                     ),
                     Level::None => unreachable!(),
                 };
-                if self.deliver {
-                    notify(&msg);
-                }
+                self.notifications.notify(&msg);
                 messages.push(msg);
             }
 
@@ -144,16 +139,179 @@ impl AlertEngine {
     }
 }
 
-/// Post a macOS notification via `osascript`. Best-effort; failures are ignored.
-fn notify(message: &str) {
-    let script = format!("display notification {:?} with title \"Mudi\"", message);
-    let _ = Command::new("osascript").arg("-e").arg(script).spawn();
+#[cfg(test)]
+struct SilentNotifications;
+
+#[cfg(test)]
+impl NotificationPort for SilentNotifications {
+    fn notify(&self, _message: &str) {}
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestSessionMetadata {
+    aliases: HashMap<(Provider, String), String>,
+    descriptions: HashMap<(Provider, String), String>,
+    curation: HashMap<(Provider, String), crate::application::session_labels::CurationDisposition>,
+    external_aliases: Option<SharedAliasMap>,
+}
+
+#[cfg(test)]
+type AliasMap = HashMap<(Provider, String), String>;
+
+#[cfg(test)]
+type SharedAliasMap = std::sync::Arc<std::sync::Mutex<AliasMap>>;
+
+#[cfg(test)]
+impl TestSessionMetadata {
+    fn reloadable() -> (Self, SharedAliasMap) {
+        let aliases = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+        (
+            Self {
+                external_aliases: Some(aliases.clone()),
+                ..Self::default()
+            },
+            aliases,
+        )
+    }
+}
+
+#[cfg(test)]
+impl SessionMetadataQuery for TestSessionMetadata {
+    fn is_editable(&self) -> bool {
+        true
+    }
+
+    fn error(&self) -> Option<&str> {
+        None
+    }
+
+    fn reload(&mut self) {
+        if let Some(external) = &self.external_aliases {
+            self.aliases = external
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+        }
+    }
+
+    fn alias(&self, provider: Provider, native_id: &str) -> Option<&str> {
+        self.aliases
+            .get(&(provider, native_id.to_string()))
+            .map(String::as_str)
+    }
+
+    fn description(&self, provider: Provider, native_id: &str) -> Option<&str> {
+        self.descriptions
+            .get(&(provider, native_id.to_string()))
+            .map(String::as_str)
+    }
+
+    fn disposition(
+        &self,
+        provider: Provider,
+        native_id: &str,
+    ) -> Option<crate::application::session_labels::CurationDisposition> {
+        self.curation
+            .get(&(provider, native_id.to_string()))
+            .copied()
+    }
+}
+
+#[cfg(test)]
+impl SessionMetadataRepository for TestSessionMetadata {
+    fn hide_sessions(
+        &mut self,
+        sessions: &[crate::domain::SessionIdentity],
+    ) -> std::io::Result<()> {
+        for session in sessions {
+            self.curation.insert(
+                (session.provider, session.native_id.clone()),
+                crate::application::session_labels::CurationDisposition::Hidden,
+            );
+        }
+        Ok(())
+    }
+
+    fn remove_from_hide(
+        &mut self,
+        sessions: &[crate::domain::SessionIdentity],
+    ) -> std::io::Result<()> {
+        for session in sessions {
+            self.curation
+                .remove(&(session.provider, session.native_id.clone()));
+        }
+        Ok(())
+    }
+
+    fn permanently_exclude_sessions(
+        &mut self,
+        sessions: &[crate::domain::SessionIdentity],
+    ) -> std::io::Result<()> {
+        for session in sessions {
+            self.curation.insert(
+                (session.provider, session.native_id.clone()),
+                crate::application::session_labels::CurationDisposition::PermanentlyExcluded,
+            );
+        }
+        Ok(())
+    }
+
+    fn set_alias(
+        &mut self,
+        provider: Provider,
+        native_id: &str,
+        alias: &str,
+    ) -> std::io::Result<()> {
+        self.aliases
+            .insert((provider, native_id.to_string()), alias.to_string());
+        Ok(())
+    }
+
+    fn associate_alias(
+        &mut self,
+        provider: Provider,
+        native_id: &str,
+        alias: &str,
+    ) -> std::io::Result<bool> {
+        if self.alias(provider, native_id).is_some() {
+            return Ok(false);
+        }
+        self.set_alias(provider, native_id, alias)?;
+        Ok(true)
+    }
+
+    fn clear_title(&mut self, provider: Provider, native_id: &str) -> std::io::Result<()> {
+        self.aliases.remove(&(provider, native_id.to_string()));
+        Ok(())
+    }
+
+    fn set_description(
+        &mut self,
+        provider: Provider,
+        native_id: &str,
+        description: &str,
+    ) -> std::io::Result<()> {
+        self.descriptions
+            .insert((provider, native_id.to_string()), description.to_string());
+        Ok(())
+    }
+
+    fn set_metadata(
+        &mut self,
+        provider: Provider,
+        native_id: &str,
+        title: &str,
+        description: &str,
+    ) -> std::io::Result<()> {
+        self.set_alias(provider, native_id, title)?;
+        self.set_description(provider, native_id, description)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::session_labels::SessionLabels;
     use crate::domain::{ContextState, Project, ProjectIdentity, SessionState};
     use std::path::PathBuf;
 
@@ -185,7 +343,7 @@ mod tests {
 
     #[test]
     fn context_notification_identifies_the_session_with_its_current_title() {
-        let mut labels = SessionLabels::default();
+        let mut labels = TestSessionMetadata::default();
         labels
             .set_alias(Provider::ClaudeCode, "claude-session-12345678", "Auth fix")
             .unwrap();
@@ -208,11 +366,7 @@ mod tests {
 
     #[test]
     fn renaming_a_session_does_not_emit_another_context_notification() {
-        let directory =
-            std::env::temp_dir().join(format!("mudi-alert-title-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("state.db");
-        let mut labels = SessionLabels::load(&path);
+        let (mut labels, external_aliases) = TestSessionMetadata::reloadable();
         labels
             .set_alias(Provider::ClaudeCode, "claude-session", "Before")
             .unwrap();
@@ -220,12 +374,12 @@ mod tests {
         let session = open_session("claude-session", 180_000, 200_000, SessionState::Busy);
         assert_eq!(engine.update(std::slice::from_ref(&session)).len(), 1);
 
-        SessionLabels::load(&path)
-            .set_alias(Provider::ClaudeCode, "claude-session", "After")
-            .unwrap();
+        external_aliases.lock().unwrap().insert(
+            (Provider::ClaudeCode, "claude-session".into()),
+            "After".into(),
+        );
 
         assert!(engine.update(&[session]).is_empty());
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

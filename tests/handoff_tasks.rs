@@ -1,12 +1,19 @@
 use mudi::adapters::config::Config;
+use mudi::adapters::handoff::{
+    open_handoff_service, open_handoff_service_with_current_run_control, DetachedWorkerLauncher,
+    MacosCurrentRunControl,
+};
+use mudi::adapters::handoff_worker::HandoffWorker;
+use mudi::adapters::persistence::tasks::TaskStore;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::skills::handoff::ManagedHandoffSkills;
+use mudi::adapters::skills::ManagedSkillCatalog;
+use mudi::adapters::successor::RegistrySuccessorRuntime;
 use mudi::application::handoff::{
-    CompletionNotice, CompletionNotifier, CurrentRunControl, CurrentRunObservation,
-    DetachedWorkerLauncher, HandoffPaths, HandoffService, HandoffWorker, MacosCurrentRunControl,
-    ProviderExecutables, WorkerLaunch, WorkerLauncher,
+    CompletionNotice, CompletionNotifier, CurrentRunControl, CurrentRunObservation, HandoffPaths,
+    HandoffService, ProviderExecutables, WorkerLaunch, WorkerLauncher,
 };
-use mudi::application::tasks::{OperationTaskState, TaskStore};
+use mudi::application::tasks::OperationTaskState;
 use mudi::domain::{
     ContextState, Provider, Session, SessionState, SourceFormat, SourceMetadata, Usage,
 };
@@ -24,6 +31,16 @@ use std::time::{Duration, Instant};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+trait HandoffTestSkills<L> {
+    fn with_managed_handoff_skills(self, skills: ManagedHandoffSkills) -> Self;
+}
+
+impl<L: WorkerLauncher> HandoffTestSkills<L> for HandoffService<L> {
+    fn with_managed_handoff_skills(self, skills: ManagedHandoffSkills) -> Self {
+        self.with_skill_installer(Arc::new(ManagedSkillCatalog::handoff(skills)))
+    }
+}
 
 struct TempDir(PathBuf);
 
@@ -133,6 +150,10 @@ impl CurrentRunControl for FakeCurrentRunControl {
             anyhow::bail!("graceful exit outcome is uncertain");
         }
         Ok(())
+    }
+
+    fn process_is_live(&self, _process: ProcessIdentity) -> bool {
+        false
     }
 
     fn now_ms(&self) -> i64 {
@@ -272,7 +293,7 @@ fn open_session_without_exact_process_identity_is_ineligible_without_a_task() {
     };
     let launcher = RecordingWorkerLauncher::default();
     let launches = launcher.launches.clone();
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths,
         ProviderExecutables::new(claude, codex),
         launcher,
@@ -500,7 +521,7 @@ fn explicit_authorization_persists_a_queued_handoff_task_for_an_exited_session()
 
     let launcher = RecordingWorkerLauncher::default();
     let launches = launcher.launches.clone();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -542,7 +563,7 @@ fn confirmed_cancellation_before_worker_start_cancels_without_another_launch() {
     executable(&codex);
     let launcher = RecordingWorkerLauncher::default();
     let launches = launcher.launches.clone();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -583,7 +604,7 @@ fn worker_observes_queued_cancellation_before_sending_a_prompt() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -615,7 +636,7 @@ fn reconciliation_fails_queued_task_without_worker_startup_after_thirty_seconds(
     fs::create_dir(&cwd).unwrap();
     executable(&claude);
     executable(&codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -684,7 +705,7 @@ fn explicitly_authorized_busy_current_run_persists_waiting_authority_and_deadlin
     let exit_requests = current_run.graceful_exit_requests.clone();
     let launcher = RecordingWorkerLauncher::default();
     let launches = launcher.launches.clone();
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -733,7 +754,7 @@ fn declining_current_run_authority_creates_no_operation_task() {
     let observe_calls = current_run.observe_calls.clone();
     let launcher = RecordingWorkerLauncher::default();
     let launches = launcher.launches.clone();
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -789,7 +810,7 @@ fn busy_current_run_is_never_terminated_before_it_exits_naturally() {
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -839,7 +860,7 @@ fn waiting_task_records_the_time_when_generation_actually_finishes() {
     };
     let executables = ProviderExecutables::new(claude, codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -889,7 +910,7 @@ fn idle_current_run_is_revalidated_before_graceful_exit_is_requested() {
     };
     let executables = ProviderExecutables::new(claude, codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -939,7 +960,7 @@ fn current_run_that_exits_during_revalidation_resumes_without_using_control() {
     };
     let executables = ProviderExecutables::new(claude, codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -993,7 +1014,7 @@ fn current_run_that_becomes_busy_during_revalidation_returns_to_waiting() {
     };
     let executables = ProviderExecutables::new(claude, codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1046,7 +1067,7 @@ fn changed_process_identity_interrupts_without_control_or_resume() {
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1100,7 +1121,7 @@ fn uncertain_graceful_exit_outcome_interrupts_without_resume() {
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1147,7 +1168,7 @@ fn uncertain_current_run_observation_interrupts_without_resume() {
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1201,7 +1222,7 @@ fn unused_current_run_authority_expires_after_two_hours_and_never_acts_later() {
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1256,7 +1277,7 @@ fn delayed_graceful_exit_is_requested_once_and_resume_waits_for_exit() {
     };
     let executables = ProviderExecutables::new(claude, codex);
     let control: Arc<dyn CurrentRunControl> = Arc::new(current_run);
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1299,7 +1320,7 @@ fn restart_preserves_waiting_authority_and_rejects_a_second_task() {
     let mut session = exited_session(source_path, cwd);
     session.state = SessionState::Busy;
     let task = {
-        let mut handoff = HandoffService::open_with_current_run_control(
+        let mut handoff = open_handoff_service_with_current_run_control(
             paths.clone(),
             executables.clone(),
             RecordingWorkerLauncher::default(),
@@ -1324,7 +1345,7 @@ fn restart_preserves_waiting_authority_and_rejects_a_second_task() {
     );
     let exit_requests = restarted_control.graceful_exit_requests.clone();
     let control: Arc<dyn CurrentRunControl> = Arc::new(restarted_control);
-    let mut restarted = HandoffService::open_with_current_run_control(
+    let mut restarted = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         launches_after_restart,
@@ -1364,7 +1385,7 @@ fn a_source_session_cannot_have_two_non_terminal_handoff_tasks() {
     executable(&codex);
     let launcher = RecordingWorkerLauncher::default();
     let launches = launcher.launches.clone();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -1402,7 +1423,7 @@ fn worker_publishes_a_valid_artifact_before_the_task_becomes_ready() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1453,7 +1474,7 @@ fn restarting_mudi_preserves_the_ready_task_and_handoff_result() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1470,7 +1491,7 @@ fn restarting_mudi_preserves_the_ready_task_and_handoff_result() {
     drop(handoff);
 
     let restarted =
-        HandoffService::open(paths, executables, RecordingWorkerLauncher::default()).unwrap();
+        open_handoff_service(paths, executables, RecordingWorkerLauncher::default()).unwrap();
     let retained = restarted.task(&task.id).unwrap().unwrap();
 
     assert_eq!(retained.state, OperationTaskState::Ready);
@@ -1498,7 +1519,7 @@ fn codex_worker_uses_the_same_artifact_contract_inside_a_read_only_sandbox() {
     let mut session = exited_session(source_path, cwd.clone());
     session.provider = Provider::CodexCli;
     session.id = "codex-native-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1545,7 +1566,7 @@ fn codex_handoff_generates_from_a_non_git_project() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-non-git-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1583,7 +1604,7 @@ fn first_codex_handoff_installs_managed_skills_and_invokes_the_named_skill() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-native-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1697,7 +1718,7 @@ fn claude_handoff_invokes_the_managed_skill_without_other_customizations_or_tool
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -1759,7 +1780,7 @@ fn first_use_updates_an_older_mudi_managed_skill_before_task_creation() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-stale-skill-session".into();
-    let mut handoff = HandoffService::open(paths, executables, RecordingWorkerLauncher::default())
+    let mut handoff = open_handoff_service(paths, executables, RecordingWorkerLauncher::default())
         .unwrap()
         .with_managed_handoff_skills(ManagedHandoffSkills::new(
             codex_skills,
@@ -1803,7 +1824,7 @@ fn preflight_reports_a_newer_managed_skill_as_out_of_date_without_downgrading_it
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-newer-skill-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths,
         ProviderExecutables::new(claude, codex),
         RecordingWorkerLauncher::default(),
@@ -1853,7 +1874,7 @@ fn preflight_refuses_to_overwrite_an_unrelated_same_name_skill() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-conflicting-skill-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths,
         ProviderExecutables::new(claude, codex),
         RecordingWorkerLauncher::default(),
@@ -1905,7 +1926,7 @@ fn preflight_reports_an_unreadable_managed_skill_before_task_creation() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-unreadable-skill-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths,
         ProviderExecutables::new(claude, codex),
         RecordingWorkerLauncher::default(),
@@ -1951,7 +1972,7 @@ fn preflight_rejects_a_same_name_skill_file_symlink_before_task_creation() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-symlinked-skill-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths,
         ProviderExecutables::new(claude, codex),
         RecordingWorkerLauncher::default(),
@@ -2001,7 +2022,7 @@ fn worker_records_a_bounded_failure_if_the_managed_skill_disappears_after_prefli
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-missing-worker-skill".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2059,7 +2080,7 @@ fn worker_uses_an_existing_legacy_managed_skill_during_the_transition() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-legacy-skill-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2121,7 +2142,7 @@ fn every_source_and_successor_provider_combination_builds_a_structured_launch_pl
         let mut session = exited_session(source_path, cwd.clone());
         session.provider = source_provider;
         session.id = format!("{}-source", source_provider.as_str());
-        let mut handoff = HandoffService::open(
+        let mut handoff = open_handoff_service(
             paths.clone(),
             executables.clone(),
             RecordingWorkerLauncher::default(),
@@ -2190,7 +2211,7 @@ fn copied_successor_command_preserves_adversarial_paths_and_arguments_exactly() 
             .join("Artifacts 'quoted' $value; \u{4ea4}\u{63a5}"),
     };
     let executables = ProviderExecutables::new(claude, codex.clone());
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2207,7 +2228,9 @@ fn copied_successor_command_preserves_adversarial_paths_and_arguments_exactly() 
         .run(&task.id, 20_000)
         .unwrap();
 
-    let command = mudi::application::successor::render_successor_command(&ready).unwrap();
+    let command =
+        mudi::application::successor::render_successor_command(&ready, &RegistrySuccessorRuntime)
+            .unwrap();
     let status = Command::new("/bin/sh")
         .args(["-c", &command])
         .status()
@@ -2242,7 +2265,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2262,7 +2285,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
     let mut missing = ready.clone();
     missing.successor_launch_plan = None;
     assert_eq!(
-        mudi::application::successor::render_successor_command(&missing)
+        mudi::application::successor::render_successor_command(&missing, &RegistrySuccessorRuntime)
             .unwrap_err()
             .to_string(),
         "Ready Task has no Successor Launch Plan"
@@ -2275,9 +2298,12 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
         .unwrap()
         .artifact_path = temp.path().join("different.md");
     assert_eq!(
-        mudi::application::successor::render_successor_command(&mismatched)
-            .unwrap_err()
-            .to_string(),
+        mudi::application::successor::render_successor_command(
+            &mismatched,
+            &RegistrySuccessorRuntime
+        )
+        .unwrap_err()
+        .to_string(),
         "Successor Launch Plan does not match its Operation Task"
     );
 
@@ -2289,9 +2315,12 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
         .arguments
         .push("; touch injected".into());
     assert_eq!(
-        mudi::application::successor::render_successor_command(&tampered)
-            .unwrap_err()
-            .to_string(),
+        mudi::application::successor::render_successor_command(
+            &tampered,
+            &RegistrySuccessorRuntime
+        )
+        .unwrap_err()
+        .to_string(),
         "Successor arguments do not match the Handoff Artifact"
     );
 
@@ -2303,9 +2332,12 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
     plan.arguments.pop();
     plan.executable = PathBuf::from("/bin/sh");
     assert_eq!(
-        mudi::application::successor::render_successor_command(&substituted_executable)
-            .unwrap_err()
-            .to_string(),
+        mudi::application::successor::render_successor_command(
+            &substituted_executable,
+            &RegistrySuccessorRuntime
+        )
+        .unwrap_err()
+        .to_string(),
         "Successor Launch Plan does not match its Operation Task"
     );
     assert!(!temp.path().join("injected").exists());
@@ -2320,7 +2352,7 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
         .unwrap();
     drop(connection);
     let reopened =
-        HandoffService::open(paths, executables, RecordingWorkerLauncher::default()).unwrap();
+        open_handoff_service(paths, executables, RecordingWorkerLauncher::default()).unwrap();
     assert_eq!(
         reopened.task(&task.id).unwrap_err().to_string(),
         "unknown selected Successor Provider \"tampered\""
@@ -2330,7 +2362,8 @@ fn malformed_missing_and_tampered_successor_plans_are_rejected() {
 #[cfg(unix)]
 #[test]
 fn terminal_app_launches_the_foreground_helper_and_failure_preserves_the_ready_result() {
-    use mudi::application::successor::{MacosTerminalLauncher, TerminalLauncher};
+    use mudi::adapters::successor::MacosTerminalLauncher;
+    use mudi::application::successor::TerminalLauncher;
 
     let temp = TempDir::new("terminal-app-launcher");
     let source_path = temp.path().join("source.jsonl");
@@ -2348,7 +2381,7 @@ fn terminal_app_launches_the_foreground_helper_and_failure_preserves_the_ready_r
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2427,7 +2460,11 @@ fn terminal_app_launches_the_foreground_helper_and_failure_preserves_the_ready_r
         metadata.failure_code.as_deref(),
         Some("terminal_app_launch_failed")
     );
-    assert!(mudi::application::successor::render_successor_command(&retained).is_ok());
+    assert!(mudi::application::successor::render_successor_command(
+        &retained,
+        &RegistrySuccessorRuntime
+    )
+    .is_ok());
 }
 
 #[cfg(unix)]
@@ -2457,7 +2494,7 @@ fn foreground_helper_inherits_interactive_streams_waits_and_persists_no_conversa
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2556,7 +2593,7 @@ fn foreground_helper_links_claude_after_exact_pid_state_evidence_appears() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-source-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2614,7 +2651,7 @@ fn foreground_helper_links_claude_after_exact_pid_state_evidence_appears() {
     };
 
     assert!(
-        mudi::application::successor::run_successor_from_args_with_config(
+        mudi::adapters::successor::run_successor_from_args_with_config(
             [
                 "mudi".into(),
                 "--launch-successor".into(),
@@ -2666,7 +2703,7 @@ fn foreground_helper_links_codex_only_to_the_rollout_held_by_the_exact_process()
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex.clone());
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2711,7 +2748,7 @@ fn foreground_helper_links_codex_only_to_the_rollout_held_by_the_exact_process()
     };
 
     assert!(
-        mudi::application::successor::run_successor_from_args_with_config(
+        mudi::adapters::successor::run_successor_from_args_with_config(
             [
                 "mudi".into(),
                 "--launch-successor".into(),
@@ -2760,7 +2797,7 @@ fn concurrent_same_directory_claude_launches_link_each_task_by_its_own_process()
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2821,7 +2858,7 @@ fn concurrent_same_directory_claude_launches_link_each_task_by_its_own_process()
     };
     let launch = |task_id: String, config: Config, task_store: PathBuf| {
         std::thread::spawn(move || {
-            mudi::application::successor::run_successor_from_args_with_config(
+            mudi::adapters::successor::run_successor_from_args_with_config(
                 [
                     "mudi".into(),
                     "--launch-successor".into(),
@@ -2878,7 +2915,7 @@ fn concurrent_same_directory_codex_launches_link_each_task_by_its_held_rollout()
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex.clone());
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -2917,7 +2954,7 @@ fn concurrent_same_directory_codex_launches_link_each_task_by_its_held_rollout()
     };
     let launch = |task_id: String, config: Config, task_store: PathBuf| {
         std::thread::spawn(move || {
-            mudi::application::successor::run_successor_from_args_with_config(
+            mudi::adapters::successor::run_successor_from_args_with_config(
                 [
                     "mudi".into(),
                     "--launch-successor".into(),
@@ -2980,7 +3017,7 @@ fn foreground_helper_launch_failure_is_bounded_and_preserves_the_ready_result() 
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3021,7 +3058,11 @@ fn foreground_helper_launch_failure_is_bounded_and_preserves_the_ready_result() 
         metadata.failure_code.as_deref(),
         Some("successor_provider_start_failed")
     );
-    assert!(mudi::application::successor::render_successor_command(&retained).is_ok());
+    assert!(mudi::application::successor::render_successor_command(
+        &retained,
+        &RegistrySuccessorRuntime
+    )
+    .is_ok());
 }
 
 #[test]
@@ -3041,7 +3082,7 @@ fn preflight_rejects_missing_exited_session_evidence_before_task_creation() {
         task_store: temp.path().join("tasks.db"),
         artifact_root: temp.path().join("artifacts"),
     };
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         ProviderExecutables::new(claude.clone(), codex.clone()),
         launcher,
@@ -3065,7 +3106,7 @@ fn preflight_rejects_missing_exited_session_evidence_before_task_creation() {
     no_cwd.cwd = None;
     assert!(handoff.authorize_exited(&no_cwd, 10_000).is_err());
 
-    let mut no_cli = HandoffService::open(
+    let mut no_cli = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("missing-cli-tasks.db"),
             artifact_root: temp.path().join("missing-cli-artifacts"),
@@ -3092,7 +3133,7 @@ fn preflight_rejects_a_missing_selected_successor_cli_before_task_creation() {
     executable(&claude);
     let launcher = RecordingWorkerLauncher::default();
     let launches = launcher.launches.clone();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -3135,7 +3176,7 @@ fn completed_artifact_is_atomically_published_with_owner_only_permissions() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3184,7 +3225,7 @@ fn task_store_never_contains_prompt_or_artifact_content() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3236,7 +3277,7 @@ fn candidate_with_an_extra_contract_section_is_rejected() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3272,7 +3313,7 @@ fn artifact_publication_failure_becomes_a_known_failed_task() {
         artifact_root: blocked_artifact_root,
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3305,7 +3346,7 @@ fn authoritative_task_store_is_owner_only() {
     executable(&claude);
     executable(&codex);
 
-    let _handoff = HandoffService::open(
+    let _handoff = open_handoff_service(
         HandoffPaths {
             task_store: task_store.clone(),
             artifact_root: private_data.join("artifacts"),
@@ -3346,7 +3387,7 @@ fn artifact_publication_refuses_a_symlinked_artifact_root() {
         artifact_root,
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3387,7 +3428,7 @@ fn invalid_provider_markdown_fails_without_publishing_an_artifact() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3433,7 +3474,7 @@ fn invalid_codex_markdown_fails_without_publishing_an_artifact() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-native-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3471,7 +3512,7 @@ fn a_known_provider_failure_becomes_failed_without_storing_provider_output() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3512,7 +3553,7 @@ fn a_known_codex_failure_becomes_failed_without_an_artifact() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-native-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3548,7 +3589,7 @@ fn provider_nonzero_exit_is_retained_as_execution_trace_metadata() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3591,7 +3632,7 @@ fn interrupted_provider_output_never_becomes_a_completed_artifact() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3637,7 +3678,7 @@ fn interrupted_codex_output_never_becomes_a_completed_artifact() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-native-session".into();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3677,7 +3718,7 @@ fn candidate_containing_secret_material_is_rejected_before_publication() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3716,7 +3757,7 @@ fn candidate_containing_a_complete_transcript_section_is_rejected() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3755,7 +3796,7 @@ fn candidate_containing_a_raw_tool_output_section_is_rejected() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -3789,7 +3830,7 @@ fn worker_launch_failure_is_persisted_as_a_failed_operation_task() {
     fs::create_dir(&cwd).unwrap();
     executable(&claude);
     executable(&codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -3832,7 +3873,7 @@ fn detached_worker_completes_after_the_launching_service_is_dropped() {
         executables.clone(),
         claude_sessions_dir,
     );
-    let mut handoff = HandoffService::open(paths.clone(), executables.clone(), launcher).unwrap();
+    let mut handoff = open_handoff_service(paths.clone(), executables.clone(), launcher).unwrap();
 
     let task = handoff
         .authorize_exited(&exited_session(source_path, cwd), 10_000)
@@ -3840,7 +3881,7 @@ fn detached_worker_completes_after_the_launching_service_is_dropped() {
     drop(handoff);
 
     let observer =
-        HandoffService::open(paths, executables, RecordingWorkerLauncher::default()).unwrap();
+        open_handoff_service(paths, executables, RecordingWorkerLauncher::default()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let completed = loop {
         let observed = observer.task(&task.id).unwrap().unwrap();
@@ -3889,7 +3930,7 @@ fn detached_worker_receives_managed_skill_roots_and_revalidates_the_installation
         claude_sessions_dir,
     )
     .with_managed_handoff_skills(skills.clone());
-    let mut handoff = HandoffService::open(paths.clone(), executables.clone(), launcher)
+    let mut handoff = open_handoff_service(paths.clone(), executables.clone(), launcher)
         .unwrap()
         .with_managed_handoff_skills(skills);
 
@@ -3936,7 +3977,7 @@ fn running_task_persists_revalidatable_worker_and_provider_evidence() {
         temp.path().join("claude-sessions"),
     );
     fs::create_dir(temp.path().join("claude-sessions")).unwrap();
-    let mut handoff = HandoffService::open(paths.clone(), executables.clone(), launcher).unwrap();
+    let mut handoff = open_handoff_service(paths.clone(), executables.clone(), launcher).unwrap();
     let task = handoff
         .authorize_exited(&exited_session(source_path, cwd), 10_000)
         .unwrap();
@@ -3993,7 +4034,7 @@ fn reconciliation_promotes_only_the_declared_final_artifact_after_publication_cr
         temp.path().join("claude-sessions"),
     );
     fs::create_dir(temp.path().join("claude-sessions")).unwrap();
-    let mut handoff = HandoffService::open(paths.clone(), executables, launcher).unwrap();
+    let mut handoff = open_handoff_service(paths.clone(), executables, launcher).unwrap();
     let task = handoff
         .authorize_exited(&exited_session(source_path, cwd), 10_000)
         .unwrap();
@@ -4055,7 +4096,7 @@ fn reconciliation_keeps_the_successor_executable_selected_at_authorization() {
         temp.path().join("claude-sessions"),
     );
     fs::create_dir(temp.path().join("claude-sessions")).unwrap();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         ProviderExecutables::new(claude.clone(), selected_codex.clone()),
         launcher,
@@ -4086,7 +4127,7 @@ fn reconciliation_keeps_the_successor_executable_selected_at_authorization() {
     fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
     fs::write(&artifact_path, valid_handoff()).unwrap();
     drop(handoff);
-    let restarted = HandoffService::open(
+    let restarted = open_handoff_service(
         paths,
         ProviderExecutables::new(claude, later_codex),
         RecordingWorkerLauncher::default(),
@@ -4103,7 +4144,11 @@ fn reconciliation_keeps_the_successor_executable_selected_at_authorization() {
             .map(|plan| &plan.executable),
         Some(&selected_codex)
     );
-    assert!(mudi::application::successor::render_successor_command(&ready).is_ok());
+    assert!(mudi::application::successor::render_successor_command(
+        &ready,
+        &RegistrySuccessorRuntime
+    )
+    .is_ok());
     std::thread::sleep(Duration::from_millis(1_100));
 }
 
@@ -4130,7 +4175,7 @@ fn confirmed_cancellation_after_prompt_gracefully_stops_the_owned_provider() {
         temp.path().join("claude-sessions"),
     );
     fs::create_dir(temp.path().join("claude-sessions")).unwrap();
-    let mut handoff = HandoffService::open(paths, executables, launcher).unwrap();
+    let mut handoff = open_handoff_service(paths, executables, launcher).unwrap();
     let task = handoff
         .authorize_exited(&exited_session(source_path, cwd), 10_000)
         .unwrap();
@@ -4192,7 +4237,7 @@ fn valid_result_completed_during_cancellation_becomes_ready() {
         temp.path().join("claude-sessions"),
     );
     fs::create_dir(temp.path().join("claude-sessions")).unwrap();
-    let mut handoff = HandoffService::open(paths, executables, launcher).unwrap();
+    let mut handoff = open_handoff_service(paths, executables, launcher).unwrap();
     let task = handoff
         .authorize_exited(&exited_session(source_path, cwd), 10_000)
         .unwrap();
@@ -4245,7 +4290,7 @@ fn running_deadline_gracefully_stops_provider_and_resolves_known_failure() {
         temp.path().join("claude-sessions"),
     );
     fs::create_dir(temp.path().join("claude-sessions")).unwrap();
-    let mut handoff = HandoffService::open(paths, executables, launcher).unwrap();
+    let mut handoff = open_handoff_service(paths, executables, launcher).unwrap();
     let task = handoff
         .authorize_exited(&exited_session(source_path, cwd), 10_000)
         .unwrap();
@@ -4313,7 +4358,7 @@ fn crash_after_prompt_becomes_interrupted_without_accepting_partial_output_or_re
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-crash-source".into();
-    let mut handoff = HandoffService::open(paths.clone(), executables.clone(), launcher).unwrap();
+    let mut handoff = open_handoff_service(paths.clone(), executables.clone(), launcher).unwrap();
     let task = handoff.authorize_exited(&session, 10_000).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let running = loop {
@@ -4346,7 +4391,7 @@ fn crash_after_prompt_becomes_interrupted_without_accepting_partial_output_or_re
 
     let observer_launches = RecordingWorkerLauncher::default();
     let launches = observer_launches.launches.clone();
-    let observer = HandoffService::open(paths, executables, observer_launches).unwrap();
+    let observer = open_handoff_service(paths, executables, observer_launches).unwrap();
     observer
         .reconcile_tasks(running.state_changed_at_ms + 1)
         .unwrap();
@@ -4406,7 +4451,7 @@ fn explicit_retry_creates_a_fresh_task_and_preserves_cancelled_predecessor() {
     executable(&codex);
     let launcher = RecordingWorkerLauncher::default();
     let launches = launcher.launches.clone();
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -4465,7 +4510,7 @@ fn waiting_worker_observes_cancellation_before_current_run_control_or_prompt() {
     let executables = ProviderExecutables::new(claude.clone(), codex);
     let mut session = exited_session(source_path, cwd);
     session.state = SessionState::Busy;
-    let mut handoff = HandoffService::open_with_current_run_control(
+    let mut handoff = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -4523,7 +4568,7 @@ fn interrupted_task_retries_only_after_reconciliation_proves_process_absence() {
     let mut session = exited_session(source_path, cwd);
     session.provider = Provider::CodexCli;
     session.id = "codex-interrupted-retry".into();
-    let mut handoff = HandoffService::open(paths.clone(), executables.clone(), launcher).unwrap();
+    let mut handoff = open_handoff_service(paths.clone(), executables.clone(), launcher).unwrap();
     let predecessor = handoff.authorize_exited(&session, 10_000).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let state_changed_at_ms = loop {
@@ -4561,7 +4606,7 @@ fn interrupted_task_retries_only_after_reconciliation_proves_process_absence() {
         executables.clone(),
         temp.path().join("claude-sessions"),
     );
-    let mut handoff = HandoffService::open(paths, executables, retry_launcher).unwrap();
+    let mut handoff = open_handoff_service(paths, executables, retry_launcher).unwrap();
     let retry = handoff
         .retry_task(&predecessor.id, &session, false, 30_000)
         .unwrap();
@@ -4633,7 +4678,7 @@ fn different_source_sessions_can_coexist_in_the_persistent_task_timeline() {
     let mut second = exited_session(second_source, cwd);
     second.id = "second-session".into();
     second.provider = Provider::CodexCli;
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.path().join("tasks.db"),
             artifact_root: temp.path().join("artifacts"),
@@ -4672,7 +4717,7 @@ fn notification_failure_does_not_change_a_ready_task_or_its_result() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -4700,7 +4745,7 @@ fn notification_failure_does_not_change_a_ready_task_or_its_result() {
     drop(handoff);
 
     let restarted =
-        HandoffService::open(paths, executables, RecordingWorkerLauncher::default()).unwrap();
+        open_handoff_service(paths, executables, RecordingWorkerLauncher::default()).unwrap();
     assert_eq!(
         restarted
             .task(&task.id)
@@ -4727,7 +4772,7 @@ fn deliberate_acknowledgement_persists_without_changing_ready_state_result_or_or
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -4753,7 +4798,7 @@ fn deliberate_acknowledgement_persists_without_changing_ready_state_result_or_or
     drop(handoff);
 
     let restarted =
-        HandoffService::open(paths, executables, RecordingWorkerLauncher::default()).unwrap();
+        open_handoff_service(paths, executables, RecordingWorkerLauncher::default()).unwrap();
     assert_eq!(
         restarted
             .task(&task.id)
@@ -4778,7 +4823,7 @@ fn task_timeline_orders_only_by_state_transition_creation_and_stable_task_id() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -4835,7 +4880,7 @@ fn task_timeline_orders_only_by_state_transition_creation_and_stable_task_id() {
     drop(handoff);
 
     let restarted =
-        HandoffService::open(paths, executables, RecordingWorkerLauncher::default()).unwrap();
+        open_handoff_service(paths, executables, RecordingWorkerLauncher::default()).unwrap();
     assert_eq!(
         restarted
             .tasks()
@@ -4867,7 +4912,7 @@ fn deleting_a_ready_task_removes_only_its_record_and_owned_artifact() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -4915,7 +4960,7 @@ fn deleting_a_ready_task_treats_its_already_missing_artifact_as_idempotent() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -4954,7 +4999,7 @@ fn deletion_rejects_a_symlinked_artifact_root_without_touching_its_target() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5003,7 +5048,7 @@ fn deletion_rejects_a_symlinked_task_artifact_without_touching_its_target() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5058,7 +5103,7 @@ fn restart_resumes_a_persisted_deletion_after_its_artifact_path_is_repaired() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5082,7 +5127,7 @@ fn restart_resumes_a_persisted_deletion_after_its_artifact_path_is_repaired() {
     fs::set_permissions(&artifact_path, fs::Permissions::from_mode(0o600)).unwrap();
 
     let restarted =
-        HandoffService::open(paths, executables, RecordingWorkerLauncher::default()).unwrap();
+        open_handoff_service(paths, executables, RecordingWorkerLauncher::default()).unwrap();
     let remaining = restarted.reconcile_tasks(40_000).unwrap();
 
     assert!(remaining.iter().all(|retained| retained.id != task.id));
@@ -5110,7 +5155,7 @@ fn restart_completes_deletion_interrupted_immediately_after_intent_was_persisted
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5133,7 +5178,7 @@ fn restart_completes_deletion_interrupted_immediately_after_intent_was_persisted
         .unwrap();
 
     let restarted =
-        HandoffService::open(paths, executables, RecordingWorkerLauncher::default()).unwrap();
+        open_handoff_service(paths, executables, RecordingWorkerLauncher::default()).unwrap();
     restarted.reconcile_tasks(40_000).unwrap();
 
     assert_eq!(restarted.task(&task.id).unwrap(), None);
@@ -5156,7 +5201,7 @@ fn restart_completes_deletion_after_the_artifact_was_removed_but_the_row_remaine
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5186,7 +5231,7 @@ fn restart_completes_deletion_after_the_artifact_was_removed_but_the_row_remaine
     fs::remove_file(unexpected).unwrap();
 
     let restarted =
-        HandoffService::open(paths, executables, RecordingWorkerLauncher::default()).unwrap();
+        open_handoff_service(paths, executables, RecordingWorkerLauncher::default()).unwrap();
     restarted.reconcile_tasks(40_000).unwrap();
 
     assert_eq!(restarted.task(&task.id).unwrap(), None);
@@ -5208,7 +5253,7 @@ fn task_record_deletion_failure_blocks_retry_and_reconciliation_finishes_later()
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5262,7 +5307,7 @@ fn deletion_accepts_every_terminal_operation_task_state() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude.clone(), codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5349,7 +5394,7 @@ fn deletion_refuses_every_non_terminal_operation_task_state_without_recording_in
         session.id = format!("{name}-session");
         session
     };
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5368,7 +5413,7 @@ fn deletion_refuses_every_non_terminal_operation_task_state_without_recording_in
     };
     let mut open_session = source("waiting");
     open_session.state = SessionState::Busy;
-    let mut waiting_service = HandoffService::open_with_current_run_control(
+    let mut waiting_service = open_handoff_service_with_current_run_control(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5430,7 +5475,7 @@ fn deleting_a_predecessor_preserves_the_retained_retry_identity_and_reference() 
         task_store: temp.path().join("tasks.db"),
         artifact_root: temp.path().join("artifacts"),
     };
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths,
         ProviderExecutables::new(claude, codex),
         RecordingWorkerLauncher::default(),
@@ -5472,7 +5517,7 @@ fn retained_terminal_tasks_and_artifacts_never_expire_automatically() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5508,7 +5553,7 @@ fn deletion_rejects_a_tampered_cross_task_artifact_reference() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5571,7 +5616,7 @@ fn deletion_rejects_a_tampered_task_identity_that_escapes_the_artifact_root() {
     fs::set_permissions(&outside, fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(&outside_file, "unrelated user data\n").unwrap();
     fs::set_permissions(&outside_file, fs::Permissions::from_mode(0o600)).unwrap();
-    let handoff = HandoffService::open(
+    let handoff = open_handoff_service(
         paths.clone(),
         ProviderExecutables::new(temp.path().join("claude"), temp.path().join("codex")),
         RecordingWorkerLauncher::default(),
@@ -5621,7 +5666,7 @@ fn deletion_rejects_an_artifact_that_is_not_owner_only() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5660,7 +5705,7 @@ fn deletion_requires_owner_only_artifact_root_and_task_directory() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),
@@ -5681,12 +5726,13 @@ fn deletion_requires_owner_only_artifact_root_and_task_directory() {
     assert!(root_error.to_string().contains("Artifact root"));
     assert!(artifact_path.is_file());
     let deleting = handoff.task(&task.id).unwrap().unwrap();
-    assert!(
-        mudi::application::successor::render_successor_command(&deleting)
-            .unwrap_err()
-            .to_string()
-            .contains("being deleted")
-    );
+    assert!(mudi::application::successor::render_successor_command(
+        &deleting,
+        &RegistrySuccessorRuntime
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("being deleted"));
     assert!(handoff
         .acknowledge_task(&task.id, 30_500)
         .unwrap_err()
@@ -5725,7 +5771,7 @@ fn deletion_rejects_a_symlinked_task_artifact_directory() {
         artifact_root: temp.path().join("artifacts"),
     };
     let executables = ProviderExecutables::new(claude, codex);
-    let mut handoff = HandoffService::open(
+    let mut handoff = open_handoff_service(
         paths.clone(),
         executables.clone(),
         RecordingWorkerLauncher::default(),

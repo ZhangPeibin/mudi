@@ -4,6 +4,7 @@
 //! open Codex sessions by the process holding the rollout file open. All detection is
 //! read-only and defends against PID reuse by validating process start time.
 
+pub use crate::domain::ProcessIdentity;
 use crate::domain::SessionState;
 use chrono::{Local, NaiveDateTime, TimeZone};
 use serde_json::Value;
@@ -20,13 +21,6 @@ pub struct StateDetector {
     codex_held: HashMap<PathBuf, Option<ProcessIdentity>>,
     claude_complete: bool,
     codex_complete: bool,
-}
-
-/// Exact Provider CLI process evidence used to defend control actions from PID reuse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProcessIdentity {
-    pub pid: u32,
-    pub started_at_ms: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

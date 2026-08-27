@@ -1,6 +1,6 @@
 use mudi::adapters::config::Config;
+use mudi::adapters::refresh::open_refresh_service;
 use mudi::application::observation::read_model::RefreshHealth;
-use mudi::application::observation::refresh::RefreshService;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -39,7 +39,7 @@ fn failed_index_open_publishes_a_degraded_snapshot_instead_of_a_healthy_empty_on
         extra_dirs: vec![],
     };
 
-    let mut refresh = RefreshService::new(config);
+    let mut refresh = open_refresh_service(config);
     let snapshot = refresh.refresh();
 
     assert!(snapshot.ready);
@@ -77,7 +77,7 @@ fn project_resolver_failure_degrades_snapshot_without_hiding_the_session() {
         extra_dirs: vec![],
     };
 
-    let snapshot = RefreshService::new(config).refresh();
+    let snapshot = open_refresh_service(config).refresh();
 
     assert_eq!(snapshot.sessions.len(), 1);
     assert!(snapshot.sessions[0].project.is_none());
@@ -114,7 +114,7 @@ fn refresh_snapshot_omits_provider_conversation_content() {
         extra_dirs: vec![],
     };
 
-    let snapshot = RefreshService::new(config).refresh();
+    let snapshot = open_refresh_service(config).refresh();
 
     assert_eq!(snapshot.sessions.len(), 1);
     assert!(!format!("{snapshot:#?}").contains(private_content));

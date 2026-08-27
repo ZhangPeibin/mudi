@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mudi::adapters::config::Config;
-use mudi::adapters::macos::clipboard::Clipboard;
 use mudi::adapters::models::ModelCatalog;
+use mudi::adapters::observation::build_sessions;
 use mudi::adapters::persistence::index::{Fingerprint, Index};
 use mudi::adapters::providers::ParsedSession;
-use mudi::application::observation::collector::build_sessions;
+use mudi::application::clipboard::ClipboardPort;
 use mudi::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionState, SourceFormat,
     SourceMetadata, Usage,
@@ -22,7 +22,7 @@ struct RecordingClipboard {
     error: Option<&'static str>,
 }
 
-impl Clipboard for RecordingClipboard {
+impl ClipboardPort for RecordingClipboard {
     fn write_text(&mut self, value: &str) -> std::io::Result<()> {
         self.writes.push(value.to_string());
         match self.error {

@@ -1,24 +1,29 @@
+mod support;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mudi::adapters::config::Config;
-use mudi::adapters::macos::clipboard::Clipboard;
+use mudi::adapters::handoff::open_handoff_service;
+use mudi::adapters::managed_sessions::{
+    MacosManagedTerminalAccess, SystemManagedCurrentRunEvidence, SystemProcessEvidence,
+};
+use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::ProviderBindingEvidence;
 use mudi::adapters::providers::ProviderExecutables;
-use mudi::application::handoff::{HandoffPaths, HandoffService, WorkerLaunch, WorkerLauncher};
+use mudi::adapters::refresh::open_refresh_service;
+use mudi::application::clipboard::ClipboardPort;
+use mudi::application::handoff::{HandoffPaths, WorkerLaunch, WorkerLauncher};
 use mudi::application::managed_sessions::{
     run_attach_from_args_with_access, BindingOutcome, BindingReceipt, EvidenceBinder,
-    MacosManagedTerminalAccess, ManagedCurrentRunAccessService, ManagedCurrentRunEvidence,
-    ManagedCurrentRunRecord, ManagedCurrentRunTerminalAccess, ManagedCurrentRunVerifier,
-    ManagedLaunchBroker, ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration,
-    ManagedLaunchStatus, ManagedLaunchStore, ManagedLaunchTarget, ManagedSessionRecord,
-    ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment, ProcessEvidence,
-    ProviderNewCommand, ProviderProcessObservation, SystemManagedCurrentRunEvidence,
-    SystemProcessEvidence, VerifiedManagedCurrentRun,
+    ManagedCurrentRunAccessService, ManagedCurrentRunEvidence, ManagedCurrentRunRecord,
+    ManagedCurrentRunTerminalAccess, ManagedCurrentRunVerifier, ManagedLaunchBroker,
+    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus,
+    ManagedLaunchTarget, ManagedSessionRecord, ManagedSessionService, ManagedTerminalAccess,
+    PrivateTmuxEnvironment, ProcessEvidence, ProviderNewCommand, ProviderProcessObservation,
+    VerifiedManagedCurrentRun,
 };
 use mudi::application::observation::read_model::{ManagedCurrentRunSummary, RefreshSnapshot};
-use mudi::application::observation::refresh::RefreshService;
 use mudi::application::successor::TerminalLauncher;
-use mudi::application::ApplicationController;
 use mudi::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
     SourceFormat, SourceMetadata, Usage,
@@ -30,6 +35,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use support::{workflow_handlers, TestActionRouter};
 
 fn session(state: SessionState, provenance: SessionProvenance) -> Session {
     Session {
@@ -177,7 +183,6 @@ struct RecordingOpenEvidence {
 impl ManagedCurrentRunEvidence for RecordingOpenEvidence {
     fn revalidate(
         &self,
-        _config: &Config,
         run: &ManagedCurrentRunRecord,
         session: &ManagedSessionRecord,
         receipt: &BindingReceipt,
@@ -198,12 +203,9 @@ fn verifier_resolves_an_independent_opaque_reference_from_authoritative_managed_
     let mut store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
     bind_managed_run(&mut store, &temp, "launch-internal", "native-session");
     let checked = Arc::new(Mutex::new(Vec::new()));
-    let verifier = ManagedCurrentRunVerifier::new(
-        config,
-        Box::new(RecordingOpenEvidence {
-            checked: checked.clone(),
-        }),
-    );
+    let verifier = ManagedCurrentRunVerifier::new(Box::new(RecordingOpenEvidence {
+        checked: checked.clone(),
+    }));
 
     let verified = verifier.verified_runs(&store).unwrap();
 
@@ -230,7 +232,6 @@ struct RejectingEvidence;
 impl ManagedCurrentRunEvidence for RejectingEvidence {
     fn revalidate(
         &self,
-        _config: &Config,
         _run: &ManagedCurrentRunRecord,
         _session: &ManagedSessionRecord,
         _receipt: &BindingReceipt,
@@ -250,7 +251,7 @@ fn refresh_projects_only_revalidated_open_managed_current_runs_without_tmux_meta
         "launch-private-open",
         "native-session",
     );
-    let mut open_refresh = RefreshService::new(open_config).with_managed_current_run_evidence(
+    let mut open_refresh = open_refresh_service(open_config).with_managed_current_run_evidence(
         Box::new(RecordingOpenEvidence {
             checked: Arc::new(Mutex::new(Vec::new())),
         }),
@@ -274,7 +275,7 @@ fn refresh_projects_only_revalidated_open_managed_current_runs_without_tmux_meta
         "launch-private-exited",
         "native-session",
     );
-    let mut exited_refresh = RefreshService::new(exited_config)
+    let mut exited_refresh = open_refresh_service(exited_config)
         .with_managed_current_run_evidence(Box::new(RejectingEvidence));
 
     assert!(exited_refresh
@@ -339,7 +340,7 @@ struct RecordingClipboard {
 
 struct FailingClipboard;
 
-impl Clipboard for FailingClipboard {
+impl ClipboardPort for FailingClipboard {
     fn write_text(&mut self, _value: &str) -> std::io::Result<()> {
         Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -350,13 +351,13 @@ impl Clipboard for FailingClipboard {
 
 struct NeverClipboard;
 
-impl Clipboard for NeverClipboard {
+impl ClipboardPort for NeverClipboard {
     fn write_text(&mut self, _value: &str) -> std::io::Result<()> {
         panic!("an unverified Run must not reach the clipboard")
     }
 }
 
-impl Clipboard for RecordingClipboard {
+impl ClipboardPort for RecordingClipboard {
     fn write_text(&mut self, value: &str) -> std::io::Result<()> {
         self.values.lock().unwrap().push(value.to_string());
         Ok(())
@@ -376,12 +377,9 @@ fn application_revalidates_each_reentry_action_without_replaying_provider_launch
     let opened = Arc::new(Mutex::new(Vec::new()));
     let run_access = ManagedCurrentRunAccessService::new(
         ManagedLaunchStore::open(&store_path).unwrap(),
-        ManagedCurrentRunVerifier::new(
-            config.clone(),
-            Box::new(RecordingOpenEvidence {
-                checked: evidence_checks.clone(),
-            }),
-        ),
+        ManagedCurrentRunVerifier::new(Box::new(RecordingOpenEvidence {
+            checked: evidence_checks.clone(),
+        })),
         Box::new(RecordingRunTerminal {
             opened: opened.clone(),
         }),
@@ -396,7 +394,7 @@ fn application_revalidates_each_reentry_action_without_replaying_provider_launch
         Box::new(NeverManagedLaunch),
         Box::new(NeverRegistrationTerminal),
     );
-    let handoff = HandoffService::open(
+    let handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.0.join("tasks.db"),
             artifact_root: temp.0.join("artifacts"),
@@ -405,9 +403,13 @@ fn application_revalidates_each_reentry_action_without_replaying_provider_launch
         NeverWorker,
     )
     .unwrap();
-    let mut controller =
-        ApplicationController::new(handoff, NeverSuccessorTerminal, managed_sessions)
-            .with_managed_current_run_access(run_access);
+    let mut controller = workflow_handlers(
+        handoff,
+        NeverSuccessorTerminal,
+        managed_sessions,
+        temp.0.join("workflow-state.db"),
+    )
+    .with_managed_current_run_access(run_access);
     let copied = Arc::new(Mutex::new(Vec::new()));
     let mut clipboard = RecordingClipboard {
         values: copied.clone(),
@@ -467,7 +469,7 @@ fn application_failure_revalidates_before_terminal_or_clipboard_side_effects() {
     let opened = Arc::new(Mutex::new(Vec::new()));
     let run_access = ManagedCurrentRunAccessService::new(
         ManagedLaunchStore::open(&store_path).unwrap(),
-        ManagedCurrentRunVerifier::new(config, Box::new(RejectingEvidence)),
+        ManagedCurrentRunVerifier::new(Box::new(RejectingEvidence)),
         Box::new(RecordingRunTerminal {
             opened: opened.clone(),
         }),
@@ -482,7 +484,7 @@ fn application_failure_revalidates_before_terminal_or_clipboard_side_effects() {
         Box::new(NeverManagedLaunch),
         Box::new(NeverRegistrationTerminal),
     );
-    let handoff = HandoffService::open(
+    let handoff = open_handoff_service(
         HandoffPaths {
             task_store: temp.0.join("tasks.db"),
             artifact_root: temp.0.join("artifacts"),
@@ -491,9 +493,13 @@ fn application_failure_revalidates_before_terminal_or_clipboard_side_effects() {
         NeverWorker,
     )
     .unwrap();
-    let mut controller =
-        ApplicationController::new(handoff, NeverSuccessorTerminal, managed_sessions)
-            .with_managed_current_run_access(run_access);
+    let mut controller = workflow_handlers(
+        handoff,
+        NeverSuccessorTerminal,
+        managed_sessions,
+        temp.0.join("workflow-state.db"),
+    )
+    .with_managed_current_run_access(run_access);
     let snapshot = RefreshSnapshot::default();
     let mut ui = Ui::default();
     let (rescan_tx, mut rescan_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -561,12 +567,9 @@ fn attach_cli_accepts_exactly_one_opaque_reference_and_revalidates_before_foregr
     let attached = Arc::new(Mutex::new(Vec::new()));
     let mut access = ManagedCurrentRunAccessService::new(
         store,
-        ManagedCurrentRunVerifier::new(
-            config,
-            Box::new(RecordingOpenEvidence {
-                checked: Arc::new(Mutex::new(Vec::new())),
-            }),
-        ),
+        ManagedCurrentRunVerifier::new(Box::new(RecordingOpenEvidence {
+            checked: Arc::new(Mutex::new(Vec::new())),
+        })),
         Box::new(RecordingCliTerminal {
             attached: attached.clone(),
         }),
@@ -614,7 +617,7 @@ fn attach_cli_rejects_exited_and_non_managed_references_before_terminal_access()
     let attached = Arc::new(Mutex::new(Vec::new()));
     let mut access = ManagedCurrentRunAccessService::new(
         store,
-        ManagedCurrentRunVerifier::new(config, Box::new(RejectingEvidence)),
+        ManagedCurrentRunVerifier::new(Box::new(RejectingEvidence)),
         Box::new(RecordingCliTerminal {
             attached: attached.clone(),
         }),
@@ -680,12 +683,9 @@ fn terminal_adapter_only_attaches_the_existing_private_tmux_for_both_entry_point
     let config = temp.config();
     let mut store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
     bind_managed_run(&mut store, &temp, "launch-terminal", "native-session");
-    let verifier = ManagedCurrentRunVerifier::new(
-        config,
-        Box::new(RecordingOpenEvidence {
-            checked: Arc::new(Mutex::new(Vec::new())),
-        }),
-    );
+    let verifier = ManagedCurrentRunVerifier::new(Box::new(RecordingOpenEvidence {
+        checked: Arc::new(Mutex::new(Vec::new())),
+    }));
     let run = verifier.verified_runs(&store).unwrap().pop().unwrap();
     let tmux_args = temp.0.join("tmux-args");
     let tmux_environment = temp.0.join("tmux-environment");
@@ -859,7 +859,7 @@ fn system_revalidation_requires_the_exact_live_process_and_native_session_source
     ));
     let opaque_ref = store.managed_current_runs().unwrap()[0].opaque_ref.clone();
     let verifier =
-        ManagedCurrentRunVerifier::new(config, Box::new(SystemManagedCurrentRunEvidence));
+        ManagedCurrentRunVerifier::new(Box::new(SystemManagedCurrentRunEvidence::new(config)));
 
     verifier.verify_ref(&store, &opaque_ref).unwrap();
 

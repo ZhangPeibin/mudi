@@ -1,7 +1,7 @@
 //! Process-lifetime records of meaningful Session transitions.
 
-use crate::adapters::config::{CRIT_PCT, WARN_PCT};
 use crate::application::attention::SessionIdentity;
+use crate::application::{CRIT_PCT, WARN_PCT};
 use crate::domain::{Compaction, ContextState, ProjectIdentity, Provider, Session, SessionState};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

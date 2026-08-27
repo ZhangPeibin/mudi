@@ -1,16 +1,6 @@
 //! Handoff Artifact validation and owner-only publication.
 
 use anyhow::{anyhow, Result};
-use std::fs;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-
-static NEXT_ARTIFACT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 const REQUIRED_HEADINGS: [&str; 10] = [
     "# Handoff",
@@ -84,28 +74,6 @@ pub(crate) fn required_headings() -> [&'static str; 10] {
     REQUIRED_HEADINGS
 }
 
-pub(crate) fn publish(root: &Path, task_id: &str, contents: &[u8]) -> Result<PathBuf> {
-    create_private_dir(root)?;
-    let task_dir = root.join(task_id);
-    create_private_dir(&task_dir)?;
-    let final_path = task_dir.join("handoff.md");
-    let sequence = NEXT_ARTIFACT_TEMP.fetch_add(1, Ordering::Relaxed);
-    let temporary_path =
-        task_dir.join(format!(".handoff.md.tmp-{}-{sequence}", std::process::id()));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut temporary = options.open(&temporary_path)?;
-    temporary.write_all(contents)?;
-    temporary.sync_all()?;
-    fs::rename(&temporary_path, &final_path)?;
-    #[cfg(unix)]
-    fs::set_permissions(&final_path, fs::Permissions::from_mode(0o600))?;
-    fs::File::open(&task_dir)?.sync_all()?;
-    Ok(final_path)
-}
-
 fn contains_heading(lines: &[&str], needle: &str) -> bool {
     lines.iter().any(|line| {
         let trimmed = line.trim_start();
@@ -116,29 +84,4 @@ fn contains_heading(lines: &[&str], needle: &str) -> bool {
                 .to_ascii_lowercase()
                 .contains(needle)
     })
-}
-
-fn create_private_dir(path: &Path) -> std::io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "private directory is not a real directory: {}",
-                    path.display()
-                ),
-            ));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = fs::DirBuilder::new();
-            #[cfg(unix)]
-            builder.mode(0o700);
-            builder.create(path)?;
-        }
-        Err(error) => return Err(error),
-    }
-    #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    Ok(())
 }

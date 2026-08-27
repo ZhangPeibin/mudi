@@ -3,11 +3,6 @@
 //! Standard locations with env overrides and configurable extra directories.
 use std::path::PathBuf;
 
-/// Warning context threshold (percent of window).
-pub const WARN_PCT: f64 = 70.0;
-/// Critical context threshold (percent of window).
-pub const CRIT_PCT: f64 = 85.0;
-
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Root of Claude Code data (`~/.claude` by default).

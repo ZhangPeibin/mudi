@@ -166,7 +166,7 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         areas.project_rows,
         snap,
         &ui.project_tree,
-        &ui.labels,
+        ui.labels.as_ref(),
         theme,
     );
     selected_session::draw(f, areas.details, snap, ui);

@@ -7,7 +7,7 @@ use super::super::{
 use super::model::{ProjectTreeRow, SessionAgeBand};
 use super::State;
 use crate::application::attention::{AttentionRank, AttentionSnapshot};
-use crate::application::session_labels::SessionLabels;
+use crate::application::session_labels::SessionMetadataQuery;
 use crate::domain::{Project, Session, SessionState};
 use crate::presentation::app::{fmt_relative, Snapshot};
 use ratatui::layout::Rect;
@@ -23,7 +23,7 @@ pub(in crate::presentation::tui) fn draw(
     area: Rect,
     snap: &Snapshot,
     state: &State,
-    labels: &SessionLabels,
+    labels: &dyn SessionMetadataQuery,
     theme: Theme,
 ) {
     let now_ms = snapshot_now_ms(snap);

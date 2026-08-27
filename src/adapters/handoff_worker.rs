@@ -1,6 +1,32 @@
 //! Detached Handoff Worker lifecycle and provider execution.
 
-use super::*;
+use super::handoff::{
+    MacosCompletionNotifier, MacosCurrentRunControl, NoopCompletionNotifier,
+    ReconciliationOnlyLauncher, SystemTaskIdGenerator,
+};
+use crate::adapters::persistence::tasks::TaskStore;
+use crate::adapters::providers::ProviderExecutables;
+use crate::adapters::skills::{ManagedSkillCatalog, SkillInstaller};
+use crate::adapters::successor::RegistrySuccessorRuntime;
+use crate::application::handoff::{
+    CompletionNotice, CompletionNotifier, CurrentRunControl, CurrentRunObservation, HandoffPaths,
+    HandoffService,
+};
+use crate::application::tasks::{OperationTask, OperationTaskState};
+use crate::domain::ProcessIdentity;
+use anyhow::{anyhow, Result};
+use std::ffi::{OsStr, OsString};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+
+static NEXT_ARTIFACT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 pub struct HandoffWorker {
     paths: HandoffPaths,
@@ -14,7 +40,7 @@ impl HandoffWorker {
         Self {
             paths,
             executables,
-            current_run_control: Arc::new(NoopCurrentRunControl),
+            current_run_control: Arc::new(MacosCurrentRunControl::new(PathBuf::new())),
             skill_installer: None,
         }
     }
@@ -63,11 +89,14 @@ impl HandoffWorker {
             .ok_or_else(|| anyhow!("Operation Task {task_id} was not found"))?;
         if task.state == OperationTaskState::Running {
             drop(store);
-            let reconciler = HandoffService::open_with_current_run_control(
+            let reconciler = HandoffService::new(
                 self.paths.clone(),
                 self.executables.clone(),
                 ReconciliationOnlyLauncher,
                 self.current_run_control.clone(),
+                Arc::new(SystemTaskIdGenerator),
+                Arc::new(RegistrySuccessorRuntime),
+                TaskStore::open(&self.paths.task_store)?,
             )?;
             reconciler.reconcile_tasks(now_ms)?;
             return reconciler
@@ -306,18 +335,19 @@ fn complete_valid_candidate(
     now_ms: i64,
     notifier: &dyn CompletionNotifier,
 ) -> Result<OperationTask> {
-    let artifact_path = match crate::application::handoff::artifact::publish(
-        &paths.artifact_root,
-        &task.id,
-        candidate.as_bytes(),
-    ) {
+    let artifact_path = match publish_artifact(&paths.artifact_root, &task.id, candidate.as_bytes())
+    {
         Ok(path) => path,
         Err(_) => {
             store.mark_failed(&task.id, now_ms, "artifact_publish_failed")?;
             return completed_task(store, &task.id, notifier);
         }
     };
-    let plan = match crate::application::successor::build_launch_plan(task, artifact_path.clone()) {
+    let plan = match crate::application::successor::build_launch_plan(
+        task,
+        artifact_path.clone(),
+        &RegistrySuccessorRuntime,
+    ) {
         Ok(plan) => plan,
         Err(_) => {
             store.mark_failed(&task.id, now_ms, "successor_launch_plan_invalid")?;
@@ -326,6 +356,53 @@ fn complete_valid_candidate(
     };
     store.mark_ready(&task.id, now_ms, &artifact_path, &plan)?;
     completed_task(store, &task.id, notifier)
+}
+
+fn publish_artifact(root: &Path, task_id: &str, contents: &[u8]) -> Result<PathBuf> {
+    create_private_dir(root)?;
+    let task_dir = root.join(task_id);
+    create_private_dir(&task_dir)?;
+    let final_path = task_dir.join("handoff.md");
+    let sequence = NEXT_ARTIFACT_TEMP.fetch_add(1, Ordering::Relaxed);
+    let temporary_path =
+        task_dir.join(format!(".handoff.md.tmp-{}-{sequence}", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut temporary = options.open(&temporary_path)?;
+    temporary.write_all(contents)?;
+    temporary.sync_all()?;
+    fs::rename(&temporary_path, &final_path)?;
+    #[cfg(unix)]
+    fs::set_permissions(&final_path, fs::Permissions::from_mode(0o600))?;
+    fs::File::open(&task_dir)?.sync_all()?;
+    Ok(final_path)
+}
+
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "private directory is not a real directory: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder.create(path)?;
+        }
+        Err(error) => return Err(error),
+    }
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
 }
 
 fn finish_cancelled_provider(store: &TaskStore, task_id: &str, now_ms: i64) -> Result<bool> {
@@ -586,13 +663,4 @@ fn record_provider_exit_before_prompt(
     } else {
         ProviderRunError::Interrupted(candidate)
     })
-}
-
-pub(super) fn new_task_id() -> String {
-    let time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let sequence = NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed);
-    format!("{time:032x}-{:08x}-{sequence:016x}", std::process::id())
 }

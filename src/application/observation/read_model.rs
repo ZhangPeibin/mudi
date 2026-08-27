@@ -6,13 +6,21 @@ use crate::application::managed_sessions::{
     ManagedLaunchAction, ManagedLaunchRegistration, ManagedLaunchStatus,
     VerifiedExitedManagedSession, VerifiedManagedCurrentRun,
 };
-use crate::application::observation::collector::ScanStats;
 use crate::application::signals::RecentSignal;
 use crate::application::tasks::OperationTask;
 use crate::domain::Provider;
 use crate::domain::Session;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+
+/// Progress reported while (re)indexing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScanStats {
+    pub discovered: usize,
+    pub parsed: usize,
+    pub skipped: usize,
+    pub pruned: usize,
+}
 
 /// A component-scoped explanation of why the current projection is degraded.
 #[derive(Debug, Clone, PartialEq, Eq)]

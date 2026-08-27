@@ -4,7 +4,7 @@ use super::{
     detail, guide, layout, text, theme::Theme, NewSessionField, SessionEditorField, Ui,
     MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH,
 };
-use crate::application::session_labels::SessionLabels;
+use crate::application::session_labels::short_session_id;
 use crate::domain::{Provider, SessionState};
 use crate::presentation::app::Snapshot;
 use ratatui::layout::{Alignment, Position};
@@ -817,7 +817,7 @@ fn draw_session_editor(f: &mut Frame, ui: &Ui) {
     let area = layout::centered_rect_with_max_size(88, 78, 8, f.area());
     let content_width = usize::from(area.width).saturating_sub(2);
     let value_width = content_width.saturating_sub(PROPERTY_INDICATOR_WIDTH + PROPERTY_LABEL_WIDTH);
-    let short_id = SessionLabels::short_id(&editor.session.native_id);
+    let short_id = short_session_id(&editor.session.native_id);
     let editing = editor.editor.editing();
     let field_line = |label: &str, value: &str, field: SessionEditorField| {
         let focused = editor.editor.focused() == field.index();

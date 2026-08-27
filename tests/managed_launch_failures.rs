@@ -1,12 +1,13 @@
 use anyhow::Result;
+use mudi::adapters::managed_sessions::{TmuxLaunchBroker, TmuxManagedLaunchCleanup};
+use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::{ProviderBindingEvidence, ProviderExecutables};
 use mudi::application::managed_sessions::{
     BindingOutcome, EvidenceBinder, ManagedLaunchAction, ManagedLaunchBroker, ManagedLaunchCleanup,
-    ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchStore,
-    ManagedLaunchTarget, ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment,
-    ProcessEvidence, ProviderNewCommand, ProviderProcessObservation, TmuxLaunchBroker,
-    TmuxManagedLaunchCleanup,
+    ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchTarget,
+    ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment, ProcessEvidence,
+    ProviderNewCommand, ProviderProcessObservation,
 };
 use mudi::domain::{Provider, SourceFormat, SourceMetadata};
 use std::fs;

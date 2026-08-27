@@ -3,7 +3,7 @@
 use super::{
     provider_mark, region_border_style, region_title_style, retained_selection, text, AllRegion, Ui,
 };
-use crate::application::session_labels::SessionLabels;
+use crate::application::session_labels::SessionMetadataQuery;
 use crate::application::signals::{ContextAlertLevel, RecentSignal, RecentSignalKind};
 use crate::domain::{Provider, SessionState};
 use crate::presentation::app::{fmt_relative, fmt_tokens};
@@ -27,7 +27,7 @@ pub(super) fn draw_panel(
     let focused = ui.all_region == AllRegion::RecentSignals;
     let width = area.width.saturating_sub(2) as usize;
     let height = area.height.saturating_sub(2) as usize;
-    let titles = visible_titles(signals, &ui.labels);
+    let titles = visible_titles(signals, ui.labels.as_ref());
     // 每个 Signal 可能需要多行证据；达到面板高度后立即停止，不提供历史滚动。
     let lines = if signals.is_empty() {
         vec![Line::from(Span::styled(
@@ -95,7 +95,7 @@ pub(super) fn draw_panel(
 type VisibleTitles = HashMap<Provider, HashMap<String, String>>;
 
 /// 一次性解析 Signals 涉及的所有 Session 标题，并处理重复标题消歧。
-fn visible_titles(signals: &[RecentSignal], labels: &SessionLabels) -> VisibleTitles {
+fn visible_titles(signals: &[RecentSignal], labels: &dyn SessionMetadataQuery) -> VisibleTitles {
     let mut identities = Vec::<(Provider, String)>::new();
     let mut seen = HashSet::new();
     let mut add = |provider: Provider, native_id: &str| {

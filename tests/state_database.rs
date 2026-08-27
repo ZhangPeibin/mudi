@@ -1,7 +1,8 @@
+use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
+use mudi::adapters::persistence::session_metadata::SessionLabels;
 use mudi::adapters::persistence::state::StateDatabase;
-use mudi::application::managed_sessions::ManagedLaunchStore;
-use mudi::application::session_labels::{CurationDisposition, SessionLabels};
-use mudi::application::tasks::TaskStore;
+use mudi::adapters::persistence::tasks::TaskStore;
+use mudi::application::session_labels::CurationDisposition;
 use mudi::domain::{Provider, SessionIdentity};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

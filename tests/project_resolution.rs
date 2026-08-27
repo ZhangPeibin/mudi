@@ -8,12 +8,12 @@ use std::os::unix::fs::PermissionsExt;
 
 use mudi::adapters::config::Config;
 use mudi::adapters::models::ModelCatalog;
+use mudi::adapters::observation::{
+    build_sessions, build_sessions_with_resolver, ProjectResolverCache,
+};
 use mudi::adapters::persistence::index::{Fingerprint, Index};
 use mudi::adapters::project::{resolve, resolve_selected_directory};
 use mudi::adapters::providers::ParsedSession;
-use mudi::application::observation::collector::{
-    build_sessions, build_sessions_with_resolver, ProjectResolverCache,
-};
 use mudi::domain::{ContextState, ProjectIdentity, Provider, Usage};
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);

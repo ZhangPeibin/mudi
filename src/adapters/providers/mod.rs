@@ -6,7 +6,10 @@ pub mod codex;
 pub mod state;
 
 use crate::adapters::config::Config;
-use crate::domain::{Compaction, ContextState, Provider, SourceFormat, SourceMetadata, Usage};
+pub use crate::application::managed_sessions::ProviderBindingEvidence;
+use crate::application::ProviderExecutableResolver;
+pub use crate::application::ProviderExecutables;
+use crate::domain::{Compaction, ContextState, Provider, SourceFormat, Usage};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,23 +18,6 @@ use walkdir::WalkDir;
 /// Fixed, opt-in message used only to induce a Provider source record for Binding.
 pub const BINDING_INITIALIZER: &str =
     "Mudi initialization only. Do not inspect files, run commands, or make changes. Reply with exactly: READY.";
-
-/// Provider-normalized source and process evidence considered for a Binding Receipt.
-/// Provider-private field names and file layouts do not cross this boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderBindingEvidence {
-    pub provider: Provider,
-    pub source_session_id: String,
-    pub process_session_id: String,
-    pub source: SourceMetadata,
-    pub working_directory: PathBuf,
-    /// Exact tmux-pane process that Mudi launched. A provider wrapper may
-    /// start a distinct descendant which owns the source record.
-    pub launch_process: state::ProcessIdentity,
-    /// Exact provider process that owns the source record and becomes the
-    /// Managed Current Run identity.
-    pub provider_process: state::ProcessIdentity,
-}
 
 /// Source discovery, parsing, live observation, and Current Run usage for one Provider.
 pub trait ObservationPort: Sync {
@@ -215,18 +201,7 @@ pub fn registry() -> &'static ProviderRegistry {
     &REGISTRY
 }
 
-/// Provider-native executables used by authorized runtime workflows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderExecutables {
-    claude: PathBuf,
-    codex: PathBuf,
-}
-
 impl ProviderExecutables {
-    pub fn new(claude: PathBuf, codex: PathBuf) -> Self {
-        Self { claude, codex }
-    }
-
     pub fn discover() -> Self {
         let search = std::env::var_os("PATH")
             .as_deref()
@@ -238,34 +213,32 @@ impl ProviderExecutables {
             "MUDI_CLAUDE_EXECUTABLE",
             "SESSIONMESH_CLAUDE_EXECUTABLE",
         ]) {
-            discovered.claude = path;
+            discovered = Self::new(path, discovered.codex_path().to_path_buf());
         }
         if let Some(path) = crate::adapters::config::configured_path([
             "MUDI_CODEX_EXECUTABLE",
             "SESSIONMESH_CODEX_EXECUTABLE",
         ]) {
-            discovered.codex = path;
+            discovered = Self::new(discovered.claude_path().to_path_buf(), path);
         }
         discovered
     }
 
     pub fn discover_in(search_directories: &[PathBuf]) -> Self {
-        Self {
-            claude: find_executable(search_directories, "claude").unwrap_or_default(),
-            codex: find_executable(search_directories, "codex").unwrap_or_default(),
-        }
+        Self::new(
+            find_executable(search_directories, "claude").unwrap_or_default(),
+            find_executable(search_directories, "codex").unwrap_or_default(),
+        )
     }
+}
 
-    pub fn executable_for(&self, provider: Provider) -> Option<&Path> {
-        registry().runtime_control(provider).ok()?.executable(self)
-    }
-
-    pub(crate) fn claude_path(&self) -> &Path {
-        &self.claude
-    }
-
-    pub(crate) fn codex_path(&self) -> &Path {
-        &self.codex
+impl ProviderExecutableResolver for ProviderExecutables {
+    fn resolve_executable(&self, provider: Provider) -> Option<PathBuf> {
+        registry()
+            .runtime_control(provider)
+            .ok()?
+            .executable(self)
+            .map(Path::to_path_buf)
     }
 }
 
