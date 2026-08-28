@@ -209,16 +209,10 @@ impl ProviderExecutables {
             .map(Iterator::collect::<Vec<_>>)
             .unwrap_or_default();
         let mut discovered = Self::discover_in(&search);
-        if let Some(path) = crate::adapters::config::configured_path([
-            "MUDI_CLAUDE_EXECUTABLE",
-            "SESSIONMESH_CLAUDE_EXECUTABLE",
-        ]) {
+        if let Some(path) = crate::adapters::config::configured_path(["MUDI_CLAUDE_EXECUTABLE"]) {
             discovered = Self::new(path, discovered.codex_path().to_path_buf());
         }
-        if let Some(path) = crate::adapters::config::configured_path([
-            "MUDI_CODEX_EXECUTABLE",
-            "SESSIONMESH_CODEX_EXECUTABLE",
-        ]) {
+        if let Some(path) = crate::adapters::config::configured_path(["MUDI_CODEX_EXECUTABLE"]) {
             discovered = Self::new(discovered.claude_path().to_path_buf(), path);
         }
         discovered

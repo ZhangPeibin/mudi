@@ -228,34 +228,4 @@ mod tests {
         assert_ne!(config.managed_launch_store_path(), config.index_path());
         assert_eq!(config.managed_launch_store_path(), config.task_store_path());
     }
-
-    #[test]
-    fn mudi_environment_variables_take_priority_over_sessionmesh_and_tokenplay_values() {
-        let suffix = std::process::id();
-        let canonical = format!("MUDI_TEST_CANONICAL_{suffix}");
-        let legacy = format!("MUDI_TEST_SESSIONMESH_{suffix}");
-        let oldest = format!("MUDI_TEST_TOKENPLAY_{suffix}");
-        std::env::set_var(&oldest, "/tokenplay");
-
-        assert_eq!(
-            env_path([canonical.as_str(), legacy.as_str(), oldest.as_str()]),
-            Some(PathBuf::from("/tokenplay"))
-        );
-
-        std::env::set_var(&legacy, "/sessionmesh");
-        assert_eq!(
-            env_path([canonical.as_str(), legacy.as_str(), oldest.as_str()]),
-            Some(PathBuf::from("/sessionmesh"))
-        );
-
-        std::env::set_var(&canonical, "/mudi");
-        assert_eq!(
-            env_path([canonical.as_str(), legacy.as_str(), oldest.as_str()]),
-            Some(PathBuf::from("/mudi"))
-        );
-
-        std::env::remove_var(canonical);
-        std::env::remove_var(legacy);
-        std::env::remove_var(oldest);
-    }
 }

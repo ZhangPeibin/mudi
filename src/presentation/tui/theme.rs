@@ -30,7 +30,7 @@ pub(super) enum ThemeName {
     Gruvbox,
     Light,
     HighContrast,
-    #[serde(rename = "mudi", alias = "sessionmesh", alias = "tokenplay", other)]
+    #[serde(rename = "mudi", other)]
     #[default]
     Mudi,
 }

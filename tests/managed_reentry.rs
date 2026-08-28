@@ -52,10 +52,10 @@ fn session(state: SessionState, provenance: SessionProvenance) -> Session {
         provenance,
         source: SourceMetadata::default(),
         project: Some(Project {
-            identity: ProjectIdentity::new(PathBuf::from("/workspace/sessionmesh")),
-            label: "sessionmesh".into(),
+            identity: ProjectIdentity::new(PathBuf::from("/workspace/mudi")),
+            label: "mudi".into(),
         }),
-        cwd: Some("/workspace/sessionmesh".into()),
+        cwd: Some("/workspace/mudi".into()),
         latest_model: Some("claude-sonnet".into()),
         state,
         context: ContextState::default(),
@@ -223,7 +223,7 @@ fn verifier_resolves_an_independent_opaque_reference_from_authoritative_managed_
     assert!(run.opaque_ref.starts_with("run_"));
     assert_eq!(run.opaque_ref.len(), 36);
     assert!(!run.opaque_ref.contains("launch-internal"));
-    assert_ne!(run.opaque_ref, "sessionmesh-launch-internal");
+    assert_ne!(run.opaque_ref, "mudi-launch-internal");
     assert_eq!(run.provider, Provider::ClaudeCode);
     assert_eq!(run.native_session_id, "native-session");
     assert_eq!(
@@ -271,7 +271,7 @@ fn refresh_projects_only_revalidated_open_managed_current_runs_without_tmux_meta
 
     assert_eq!(open_snapshot.verified_managed_current_runs.len(), 1);
     let debug_projection = format!("{:?}", open_snapshot.verified_managed_current_runs);
-    assert!(!debug_projection.contains("sessionmesh-launch-private-open"));
+    assert!(!debug_projection.contains("mudi-launch-private-open"));
     assert!(!debug_projection.contains("launch-private-open"));
     assert!(!debug_projection.contains("managed"));
 
@@ -555,16 +555,11 @@ fn attach_cli_accepts_exactly_one_opaque_reference_and_revalidates_before_foregr
         }),
     );
 
-    assert!(run_attach_from_args_with_access(
-        ["sessionmesh", "attach", opaque_ref.as_str()],
-        &mut access,
-    )
-    .unwrap());
     assert!(
         run_attach_from_args_with_access(["mudi", "attach", opaque_ref.as_str()], &mut access,)
             .unwrap()
     );
-    assert_eq!(attached.lock().unwrap().len(), 2);
+    assert_eq!(*attached.lock().unwrap(), vec![opaque_ref.clone()]);
 
     assert!(!run_attach_from_args_with_access(["mudi", "--theme", "light"], &mut access).unwrap());
     assert!(run_attach_from_args_with_access(["mudi", "attach"], &mut access).is_err());
@@ -578,7 +573,7 @@ fn attach_cli_accepts_exactly_one_opaque_reference_and_revalidates_before_foregr
         &mut access,
     )
     .is_err());
-    assert_eq!(attached.lock().unwrap().len(), 2);
+    assert_eq!(attached.lock().unwrap().len(), 1);
 }
 
 #[test]
@@ -688,7 +683,7 @@ fn terminal_adapter_only_attaches_the_existing_private_tmux_for_both_entry_point
     let terminal_command = fs::read_to_string(osascript_args).unwrap();
     assert!(terminal_command.contains(&format!("'{}'", tmux.display())));
     assert!(terminal_command.contains("attach-session"));
-    assert!(terminal_command.contains("sessionmesh-launch-terminal"));
+    assert!(terminal_command.contains("mudi-launch-terminal"));
 
     let previous_tmux = std::env::var_os("TMUX");
     std::env::set_var("TMUX", "outer-client");
@@ -707,7 +702,7 @@ fn terminal_adapter_only_attaches_the_existing_private_tmux_for_both_entry_point
         foreground_args.lines().collect::<Vec<_>>(),
         [
             "-L",
-            "sessionmesh-launch-terminal",
+            "mudi-launch-terminal",
             "attach-session",
             "-t",
             "managed",
@@ -783,7 +778,7 @@ fn system_revalidation_requires_the_exact_live_process_and_native_session_source
         description: None,
         binding_initializer: false,
         control_channel: ManagedControlChannel {
-            namespace: "sessionmesh-launch-system".into(),
+            namespace: "mudi-launch-system".into(),
             run_target: "managed".into(),
         },
         created_at_ms: 40_000,
@@ -858,7 +853,7 @@ fn bind_managed_run(
         description: None,
         binding_initializer: false,
         control_channel: ManagedControlChannel {
-            namespace: format!("sessionmesh-{registration_id}"),
+            namespace: format!("mudi-{registration_id}"),
             run_target: "managed".into(),
         },
         created_at_ms: 40_000,
@@ -907,7 +902,7 @@ impl TempDir {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "sessionmesh-managed-reentry-{name}-{}-{nonce}",
+            "mudi-managed-reentry-{name}-{}-{nonce}",
             std::process::id()
         ));
         fs::create_dir_all(&path).unwrap();

@@ -109,30 +109,10 @@ Standard paths with environment overrides:
 | `MUDI_CODEX_EXECUTABLE` | discovered from `PATH` | Codex CLI used by Handoff Workers |
 | `MUDI_TMUX_EXECUTABLE` | discovered from `PATH` | tmux used for Managed Current Runs |
 
-### Rename compatibility
-
-Mudi reads each deprecated `SESSIONMESH_*` variable when its `MUDI_*` replacement is
-unset. The older `TOKENPLAY_*` directory variables remain a final fallback. When more
-than one form has different values, the newest form wins and Mudi prints a warning.
-
-Without `MUDI_DATA_DIR` or `SESSIONMESH_DATA_DIR`, storage selection is deterministic:
-
-- A clean install uses `~/Library/Application Support/mudi`.
-- A legacy-only install continues using `~/Library/Application Support/sessionmesh` in
-  place, preserving its index, authoritative stores, labels, Profile, model overrides,
-  Handoff Artifacts, Managed Sessions, and Binding evidence without rewriting embedded
-  absolute paths.
-- A new-only install uses the existing `mudi` directory.
-- If both default directories exist, Mudi stops before opening either store and requires
-  `MUDI_DATA_DIR` to identify the authoritative location. It never merges or overwrites
-  the two directories.
-
-Existing private tmux socket names are read from durable Binding evidence and remain
-attachable; new environments use `mudi-*`. The default Theme accepts saved `sessionmesh`
-and `tokenplay` names as aliases for `mudi`. New Handoffs install `mudi-handoff`; an
-owner-only, Mudi-managed `sessionmesh-handoff` installation remains a valid Worker
-fallback and is not deleted. See [the rename release notes](docs/releases/mudi-rename.md)
-for the compatibility period and removal policy.
+Mudi uses one application data directory at `MUDI_DATA_DIR` (or the platform default) with
+`index.db` for disposable Session observations and `state.db` for authoritative Mudi
+metadata. Handoff Artifacts remain owner-only files under `handoff-artifacts/`; Mudi does not
+copy, merge, or import data from another application identity.
 
 Local Model Catalog override: drop a `models.json` (same shape as `models/catalog.json`) in
 `MUDI_DATA_DIR`. Entries are scoped by exact Model Provider and model identifier. The

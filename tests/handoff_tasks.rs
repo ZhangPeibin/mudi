@@ -2052,63 +2052,6 @@ fn worker_records_a_bounded_failure_if_the_managed_skill_disappears_after_prefli
     assert!(!codex.with_extension("prompt").exists());
 }
 
-#[cfg(unix)]
-#[test]
-fn worker_uses_an_existing_legacy_managed_skill_during_the_transition() {
-    let temp = TempDir::new("legacy-managed-skill-worker");
-    let source_path = temp.path().join("rollout.jsonl");
-    let cwd = temp.path().join("project");
-    let claude = temp.path().join("claude");
-    let codex = temp.path().join("codex");
-    let codex_skills = temp.path().join("agents/skills");
-    let legacy_skill = codex_skills.join("sessionmesh-handoff/SKILL.md");
-    fs::write(&source_path, "{}\n").unwrap();
-    fs::create_dir(&cwd).unwrap();
-    fs::create_dir_all(legacy_skill.parent().unwrap()).unwrap();
-    fs::write(
-        &legacy_skill,
-        include_str!("../skills/sessionmesh-handoff/SKILL.md"),
-    )
-    .unwrap();
-    fs::set_permissions(
-        legacy_skill.parent().unwrap(),
-        fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
-    fs::set_permissions(&legacy_skill, fs::Permissions::from_mode(0o600)).unwrap();
-    executable(&claude);
-    provider_that_returns_and_records_full_input(&codex, valid_handoff());
-    let paths = HandoffPaths {
-        task_store: temp.path().join("tasks.db"),
-        artifact_root: temp.path().join("artifacts"),
-    };
-    let executables = ProviderExecutables::new(claude, codex.clone());
-    let mut session = exited_session(source_path, cwd);
-    session.provider = Provider::CodexCli;
-    session.id = "codex-legacy-skill-session".into();
-    let mut handoff = open_handoff_service(
-        paths.clone(),
-        executables.clone(),
-        RecordingWorkerLauncher::default(),
-    )
-    .unwrap();
-    let task = handoff.authorize_exited(&session, 10_000).unwrap();
-
-    let ready = HandoffWorker::new(paths, executables)
-        .with_managed_handoff_skills(ManagedHandoffSkills::new(
-            codex_skills,
-            temp.path().join("claude-home/skills"),
-        ))
-        .run(&task.id, 20_000)
-        .unwrap();
-
-    assert_eq!(ready.state, OperationTaskState::Ready);
-    assert_eq!(
-        fs::read_to_string(codex.with_extension("prompt")).unwrap(),
-        "$sessionmesh-handoff\n"
-    );
-}
-
 #[test]
 fn every_source_and_successor_provider_combination_builds_a_structured_launch_plan() {
     for (source_provider, successor_provider) in [

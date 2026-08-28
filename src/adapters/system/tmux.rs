@@ -115,7 +115,7 @@ impl ManagedLaunchBroker for TmuxLaunchBroker {
 }
 
 pub fn discover_tmux_executable() -> Option<PathBuf> {
-    configured_path(["MUDI_TMUX_EXECUTABLE", "SESSIONMESH_TMUX_EXECUTABLE"])
+    configured_path(["MUDI_TMUX_EXECUTABLE"])
         .filter(|path| validate_executable(path, "tmux").is_ok())
         .or_else(|| {
             std::env::var_os("PATH")

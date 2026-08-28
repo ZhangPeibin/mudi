@@ -108,15 +108,7 @@ fn every_theme_preserves_semantic_contrast() {
 }
 
 #[test]
-fn legacy_default_theme_names_load_as_mudi_while_new_profiles_save_mudi() {
-    assert_eq!(
-        serde_json::from_str::<ThemeName>(r#""sessionmesh""#).unwrap(),
-        ThemeName::Mudi
-    );
-    assert_eq!(
-        serde_json::from_str::<ThemeName>(r#""tokenplay""#).unwrap(),
-        ThemeName::Mudi
-    );
+fn default_theme_name_round_trips_as_mudi() {
     assert_eq!(
         serde_json::to_string(&ThemeName::Mudi).unwrap(),
         r#""mudi""#

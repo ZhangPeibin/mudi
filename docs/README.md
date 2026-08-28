@@ -30,8 +30,9 @@ not change an accepted version scope on their own.
   - staged architecture stabilization plan required before Checkpoint implementation.
 - [`agents/`](./agents/) - issue-tracker, domain-document, triage-label, and feature-doc
   conventions used by engineering skills.
-- [`releases/mudi-rename.md`](./releases/mudi-rename.md) - product rename, storage
-  selection, and legacy compatibility policy.
+- Product identity and storage ownership are defined by `README.md`, `CONTEXT.md`, and the
+  accepted architecture ADRs; Mudi does not maintain a legacy product-identity compatibility
+  layer.
 
 ## Research and History
 

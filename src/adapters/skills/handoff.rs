@@ -18,11 +18,6 @@ const MANAGED_MARKER: &str = "<!-- mudi-managed-skill: mudi-handoff -->";
 const VERSION_MARKER_PREFIX: &str = "<!-- mudi-managed-version: ";
 const CURRENT_VERSION: u32 = 1;
 const CANONICAL_SKILL: &str = include_str!("../../../skills/mudi-handoff/SKILL.md");
-const LEGACY_SKILL_NAME: &str = "sessionmesh-handoff";
-const LEGACY_MANAGED_MARKER: &str = "<!-- sessionmesh-managed-skill: sessionmesh-handoff -->";
-const LEGACY_VERSION_MARKER_PREFIX: &str = "<!-- sessionmesh-managed-version: ";
-const LEGACY_CURRENT_VERSION: u32 = 1;
-const LEGACY_CANONICAL_SKILL: &str = include_str!("../../../skills/sessionmesh-handoff/SKILL.md");
 
 /// Provider-standard roots that receive the same Mudi-managed Skill.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,9 +80,6 @@ impl ManagedHandoffSkills {
         if canonical_status.is_ok() {
             return Ok(skill_invocation(provider, SKILL_NAME));
         }
-        if verify_legacy_copy(skills_root).is_ok() {
-            return Ok(skill_invocation(provider, LEGACY_SKILL_NAME));
-        }
         Err(canonical_status.expect_err("canonical Skill status was checked above"))
     }
 
@@ -103,32 +95,15 @@ fn verify_copy(skills_root: &Path) -> std::result::Result<(), ManagedSkillStatus
         CANONICAL_SKILL,
         MANAGED_MARKER,
         VERSION_MARKER_PREFIX,
-        CURRENT_VERSION,
-        false,
     )
 }
 
-fn verify_legacy_copy(skills_root: &Path) -> std::result::Result<(), ManagedSkillStatus> {
-    verify_named_copy(
-        skills_root,
-        LEGACY_SKILL_NAME,
-        LEGACY_CANONICAL_SKILL,
-        LEGACY_MANAGED_MARKER,
-        LEGACY_VERSION_MARKER_PREFIX,
-        LEGACY_CURRENT_VERSION,
-        true,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
 fn verify_named_copy(
     skills_root: &Path,
     skill_name: &str,
     canonical_skill: &str,
     managed_marker: &str,
     version_marker_prefix: &str,
-    current_version: u32,
-    accept_current_managed_version: bool,
 ) -> std::result::Result<(), ManagedSkillStatus> {
     let skill_directory = skills_root.join(skill_name);
     let directory_metadata = fs::symlink_metadata(&skill_directory).map_err(|error| {
@@ -163,9 +138,7 @@ fn verify_named_copy(
     }
     let installed = fs::read_to_string(skill_path).map_err(|_| ManagedSkillStatus::Unreadable)?;
     let installed_version = managed_version(&installed, managed_marker, version_marker_prefix);
-    if installed == canonical_skill
-        || (accept_current_managed_version && installed_version == Some(current_version))
-    {
+    if installed == canonical_skill {
         Ok(())
     } else if installed_version.is_some() {
         Err(ManagedSkillStatus::Stale)
@@ -279,29 +252,6 @@ fn atomic_publish(skill_directory: &Path, skill_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDirectory(PathBuf);
-
-    impl TestDirectory {
-        fn new() -> Self {
-            let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "mudi-skill-compatibility-{}-{sequence}",
-                std::process::id()
-            ));
-            std::fs::create_dir_all(&path).unwrap();
-            Self(path)
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 
     #[test]
     fn canonical_skill_and_validator_share_the_exact_artifact_heading_contract() {
@@ -327,29 +277,6 @@ mod tests {
         assert_eq!(
             crate::application::handoff::artifact::required_headings(),
             expected
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn legacy_managed_skill_remains_invokable_during_the_transition() {
-        let temp = TestDirectory::new();
-        let codex_root = temp.0.join("agents/skills");
-        let legacy_directory = codex_root.join("sessionmesh-handoff");
-        let legacy_skill = legacy_directory.join("SKILL.md");
-        std::fs::create_dir_all(&legacy_directory).unwrap();
-        std::fs::write(
-            &legacy_skill,
-            include_str!("../../../skills/sessionmesh-handoff/SKILL.md"),
-        )
-        .unwrap();
-        std::fs::set_permissions(&legacy_directory, fs::Permissions::from_mode(0o700)).unwrap();
-        std::fs::set_permissions(&legacy_skill, fs::Permissions::from_mode(0o600)).unwrap();
-        let skills = ManagedHandoffSkills::new(codex_root, temp.0.join("claude/skills"));
-
-        assert_eq!(
-            skills.invocation_for(Provider::CodexCli).unwrap(),
-            "$sessionmesh-handoff"
         );
     }
 }
