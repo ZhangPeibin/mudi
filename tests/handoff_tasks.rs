@@ -366,6 +366,12 @@ fn provider_that_exits(path: &Path, code: i32) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+fn provider_that_consumes_prompt_then_exits(path: &Path, code: i32) {
+    fs::write(path, format!("#!/bin/sh\ncat > /dev/null\nexit {code}\n")).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
 fn provider_that_pauses_then_returns(path: &Path, candidate: &str) {
     let escaped = candidate.replace("'", "'\\''");
     fs::write(
@@ -3582,7 +3588,7 @@ fn provider_nonzero_exit_is_retained_as_execution_trace_metadata() {
     let codex = temp.path().join("codex");
     fs::write(&source_path, "{}\n").unwrap();
     fs::create_dir(&cwd).unwrap();
-    provider_that_exits(&claude, 23);
+    provider_that_consumes_prompt_then_exits(&claude, 23);
     executable(&codex);
     let paths = HandoffPaths {
         task_store: temp.path().join("tasks.db"),
