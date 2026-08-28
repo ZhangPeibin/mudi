@@ -70,6 +70,8 @@ fn initialize_schema(connection: &Connection) {
             "Ratatui": "use ratatui::Frame;\n",
             "filesystem": "use std::fs;\n",
             "network": "use std::net::TcpStream;\n",
+            "grouped filesystem and network": "use std::{fs, net::TcpStream};\n",
+            "grouped Tokio filesystem and network": "use tokio::{fs, net::TcpStream};\n",
         }
         for name, source in prohibited.items():
             with self.subTest(name=name):
@@ -137,18 +139,23 @@ fn labels() -> (&'static str, &'static str) {
     def test_authoritative_schema_has_exactly_one_declared_owner(self):
         self.assert_allowed()
 
-        self.write(
-            "src/adapters/persistence/tasks.rs",
-            """const TASK_SCHEMA: &str = "CREATE TABLE tasks (id TEXT);";
+        prohibited = {
+            "table and version": """const TASK_SCHEMA: &str = "CREATE TABLE tasks (id TEXT);";
 fn version(connection: &Connection) {
     connection.pragma_update(None, "user_version", 2);
 }
 """,
-        )
-        self.assert_violation(
-            "ARCH004 authoritative-schema-owner",
-            "src/adapters/persistence/tasks.rs:1",
-        )
+            "view": 'const VIEW: &str = "CREATE VIEW task_summary AS SELECT 1";\n',
+            "trigger": 'const TRIGGER: &str = "CREATE TRIGGER task_changed AFTER UPDATE ON tasks BEGIN SELECT 1; END";\n',
+            "virtual table": 'const SEARCH: &str = "CREATE VIRTUAL TABLE task_search USING fts5(title)";\n',
+        }
+        for name, source in prohibited.items():
+            with self.subTest(name=name):
+                self.write("src/adapters/persistence/tasks.rs", source)
+                self.assert_violation(
+                    "ARCH004 authoritative-schema-owner",
+                    "src/adapters/persistence/tasks.rs:1",
+                )
 
     def test_authoritative_schema_owner_must_contain_schema_and_version_contract(self):
         self.write(
@@ -208,6 +215,19 @@ const INDEX_RESET: &str = "ALTER TABLE sessions DROP COLUMN legacy";
                 self.assert_violation(
                     "ARCH006 observation-read-only", f"{path}:1"
                 )
+
+        checkpoint_project = "src/application/observation/project.rs"
+        self.write(
+            "src/application/observation/collect.rs",
+            "trait ManagedObservationQuery { fn registrations(&self); }\n",
+        )
+        self.write(
+            checkpoint_project,
+            "fn project(repo: &mut dyn CheckpointRepository) { repo.save_checkpoint(); }\n",
+        )
+        self.assert_violation(
+            "ARCH006 observation-read-only", f"{checkpoint_project}:1"
+        )
 
     def test_concrete_external_implementations_are_confined_to_adapters(self):
         self.write(

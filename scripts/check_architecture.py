@@ -41,7 +41,13 @@ DOMAIN_PATTERNS = (
         re.compile(r"\b(?:std|tokio)\s*::\s*process\b|\bCommand\s*::\s*new\b"),
         "process implementation",
     ),
-    (re.compile(r"\b(?:std|tokio)\s*::\s*(?:fs|net)\b"), "filesystem or network implementation"),
+    (
+        re.compile(
+            r"\b(?:std|tokio)\s*::\s*(?:(?:fs|net)\b|\{[^}]*\b(?:fs|net)\b)",
+            re.DOTALL,
+        ),
+        "filesystem or network implementation",
+    ),
     (re.compile(r"\b(?:reqwest|ureq|walkdir|dirs)\s*::"), "filesystem or network implementation"),
 )
 
@@ -84,7 +90,9 @@ PRESENTATION_PATTERNS = (
 STATE_SCHEMA_OWNER = Path("src/adapters/persistence/state/mod.rs")
 DISPOSABLE_INDEX = Path("src/adapters/persistence/index")
 SCHEMA_DEFINITION = re.compile(
-    r"\bCREATE\s+(?:(?:UNIQUE|TEMP)\s+)?(?:TABLE|INDEX)\b", re.IGNORECASE
+    r"\bCREATE\s+(?:(?:UNIQUE|TEMP|TEMPORARY)\s+)*"
+    r"(?:VIRTUAL\s+TABLE|TABLE|INDEX|VIEW|TRIGGER)\b",
+    re.IGNORECASE,
 )
 USER_VERSION = re.compile(r"\buser_version\b")
 OPPORTUNISTIC_MIGRATIONS = (
@@ -93,9 +101,7 @@ OPPORTUNISTIC_MIGRATIONS = (
 )
 AUTHORITATIVE_WRITE_PATTERNS = (
     (
-        re.compile(
-            r"\b(?:ManagedSessionRepository|SessionMetadataRepository|TaskRepository)\b"
-        ),
+        re.compile(r"\b[A-Z][A-Za-z0-9_]*Repository\b"),
         "authoritative write repository interface",
     ),
     (
