@@ -21,6 +21,21 @@
 > `application/handlers.rs` 与工作流服务校验和推进状态 → `adapters/` 执行持久化、
 > Provider、进程、tmux、Terminal.app、Clipboard 与通知操作
 
+## 架构门禁
+
+`python3 scripts/check_architecture.py` 是 CI 使用的仓库级架构检查入口。它对生产 Rust
+源码执行七组透明检查：Domain 和 Application 的向内依赖、Presentation 不拥有权威状态
+或系统实现、唯一 `StateDatabase` Schema Owner、Repository 无机会式 Schema 迁移、
+Collect/Project 无权威写入，以及具体 SQLite/进程/macOS 实现只位于 Adapter。失败会输出
+`ARCH001` 至 `ARCH007`、违规文件和行号；契约 fixture 由
+`python3 -m unittest scripts/test_check_architecture.py` 运行。
+
+扫描范围是 `src/**/*.rs`。仅排除路径段为 `tests`/`fixtures` 的源码和 `*_test.rs`，因为它们
+不参与生产 ownership；内联测试仍接受门禁检查。`src/adapters/persistence/index/` 只在权威
+Schema 与迁移规则中排除，因为 `index.db` 是可丢弃索引，不属于 `state.db` 的 Schema
+Owner。Presentation 中面向用户的 Terminal.app/tmux 文案不算具体实现；类型依赖、命令构造
+和系统 Adapter 定义仍会失败。
+
 ## 入口
 
 | 文件 | 职责 |

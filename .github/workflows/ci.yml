@@ -23,6 +23,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Check architecture
+        run: |
+          python3 -m unittest scripts/test_check_architecture.py
+          python3 scripts/check_architecture.py
+
       - name: Run Clippy
         run: cargo clippy --all-targets -- -D warnings
 
