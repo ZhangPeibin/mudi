@@ -304,22 +304,32 @@ fn details_render_shared_context_bar_and_degrade_to_percentage_when_narrow() {
 #[test]
 fn details_render_saved_metadata_and_truncate_description_without_changing_it() {
     let session = session();
-    let snapshot = Snapshot {
+    let mut snapshot = Snapshot {
         sessions: vec![session],
         ..Snapshot::default()
     };
     let description = "A deliberately long Unicode description for compact DETAILS 登录修复";
-    let mut ui = Ui::default();
-    let mut metadata = crate::application::session_labels::SessionMetadataView::default();
-    metadata.set_metadata(
-        crate::domain::SessionIdentity {
-            provider: Provider::ClaudeCode,
-            native_id: "selected".into(),
-        },
-        "Readable title",
-        description,
-    );
-    ui.labels = Box::new(metadata);
+    let ui = Ui::default();
+    let identity = crate::domain::SessionIdentity {
+        provider: Provider::ClaudeCode,
+        native_id: "selected".into(),
+    };
+    snapshot.session_metadata =
+        crate::application::observation::read_model::SessionMetadataSnapshot::from_summaries([
+            crate::application::observation::read_model::SessionMetadataSummary {
+                identity,
+                alias: Some("Readable title".into()),
+                title: "Readable title".into(),
+                description: Some(description.into()),
+                disposition: None,
+                available_actions: vec![
+                    crate::application::observation::read_model::SessionMetadataAction::Edit,
+                    crate::application::observation::read_model::SessionMetadataAction::Hide,
+                ],
+                normally_visible: true,
+                hidden_inventory: false,
+            },
+        ]);
 
     let rendered = detail_lines(&snapshot, &ui, 34)
         .iter()
@@ -331,7 +341,9 @@ fn details_render_saved_metadata_and_truncate_description_without_changing_it() 
     assert!(rendered.contains("Description"));
     assert!(!rendered.contains(description));
     assert_eq!(
-        ui.labels.description(Provider::ClaudeCode, "selected"),
+        snapshot
+            .session_metadata
+            .description(Provider::ClaudeCode, "selected"),
         Some(description)
     );
 }

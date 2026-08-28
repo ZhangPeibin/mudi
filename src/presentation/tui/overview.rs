@@ -40,8 +40,22 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(status_columns[1]);
 
-    signals::draw_panel(f, status_panels[0], &snap.recent_signals, now_ms, ui);
-    tasks::draw_panel(f, status_panels[1], &snap.tasks, now_ms, ui);
+    signals::draw_panel(
+        f,
+        status_panels[0],
+        &snap.recent_signals,
+        &snap.session_metadata,
+        now_ms,
+        ui,
+    );
+    tasks::draw_panel(
+        f,
+        status_panels[1],
+        &snap.tasks,
+        &snap.session_metadata,
+        now_ms,
+        ui,
+    );
     let workspace = ui.workspace_split.layout(workspace_area);
     session_browser::draw(f, workspace.left, snap, ui);
     editor::draw_workspace(f, workspace.right, snap, ui);

@@ -232,7 +232,8 @@ pub fn route_action<L: WorkerLauncher, T: TerminalLauncher>(
         UiAction::CopyManagedLaunchDiagnostics { registration_id } => {
             match handlers.managed_launch_diagnostics(&registration_id) {
                 Ok(diagnostics) => {
-                    ui.copy_to_clipboard(clipboard, "Managed Launch Diagnostics", &diagnostics)
+                    let text = format_managed_launch_diagnostics(&diagnostics);
+                    ui.copy_to_clipboard(clipboard, "Managed Launch Diagnostics", &text)
                 }
                 Err(error) => ui.show_notice(format!("Copy Diagnostics failed: {error}")),
             }
@@ -298,7 +299,7 @@ pub fn route_action<L: WorkerLauncher, T: TerminalLauncher>(
                 .hide_sessions(CurationRequest { sessions }, snapshot)
                 .map(|outcome| outcome.changed)
                 .map_err(|error| error.to_string());
-            ui.finish_hide_sessions(result, snapshot);
+            ui.finish_hide_sessions(result);
             request_rescan();
             false
         }
@@ -307,7 +308,7 @@ pub fn route_action<L: WorkerLauncher, T: TerminalLauncher>(
                 .restore_sessions(CurationRequest { sessions })
                 .map(|outcome| outcome.changed)
                 .map_err(|error| error.to_string());
-            ui.finish_restore_sessions(result, snapshot);
+            ui.finish_restore_sessions(result);
             request_rescan();
             false
         }
@@ -316,12 +317,45 @@ pub fn route_action<L: WorkerLauncher, T: TerminalLauncher>(
                 .permanently_exclude_sessions(CurationRequest { sessions })
                 .map(|outcome| outcome.changed)
                 .map_err(|error| error.to_string());
-            ui.finish_permanent_exclusion(result, snapshot);
+            ui.finish_permanent_exclusion(result);
             request_rescan();
             false
         }
         UiAction::Quit => true,
     }
+}
+
+fn format_managed_launch_diagnostics(
+    diagnostics: &crate::application::managed_session::ManagedLaunchDiagnostics,
+) -> String {
+    let mut lines = vec![
+        format!(
+            "Managed Launch Registration: {}",
+            diagnostics.registration_id
+        ),
+        "Status: Needs Review".to_string(),
+        format!("Provider: {}", diagnostics.provider.label()),
+        format!(
+            "Working directory: {}",
+            diagnostics.working_directory.display()
+        ),
+        format!(
+            "Launched pane process: pid {}, started {}",
+            diagnostics.launch_process.pid, diagnostics.launch_process.started_at_ms
+        ),
+        format!(
+            "Evidence: private tmux pane {}; Binding Receipt not issued",
+            diagnostics.channel_id
+        ),
+        format!(
+            "Binding error: {}",
+            diagnostics.binding_error.as_deref().unwrap_or("unknown")
+        ),
+    ];
+    if let Some(error) = diagnostics.terminal_error.as_deref() {
+        lines.push(format!("Terminal error: {error}"));
+    }
+    lines.join("\n")
 }
 
 fn handoff_status(prefix: &str, task: &OperationTask) -> String {

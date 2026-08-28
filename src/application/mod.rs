@@ -5,7 +5,7 @@ pub mod attention;
 pub mod clipboard;
 pub mod handlers;
 pub mod handoff;
-pub mod managed_sessions;
+pub mod managed_session;
 pub mod observation;
 pub mod provider_runtime;
 pub mod session_labels;

@@ -35,7 +35,7 @@ pub(super) fn draw_workspace(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui
                 &format!(
                     "{} / {}",
                     session.provider.label(),
-                    ui.labels.title(session.provider, &session.id)
+                    snap.session_metadata.title(session.provider, &session.id)
                 ),
             )
             .keep_end()

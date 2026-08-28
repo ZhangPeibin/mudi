@@ -4,7 +4,6 @@ use super::model::{
 use super::view::{draw, group_prefix, open_session_line, SessionTreePosition};
 use super::State;
 use crate::application::attention::{AttentionEngine, AttentionSnapshot};
-use crate::application::session_labels::SessionMetadataView;
 use crate::domain::{
     ContextState, Project, ProjectIdentity, Provider, Session, SessionProvenance, SessionState,
     SourceMetadata, Usage,
@@ -55,11 +54,10 @@ fn empty_tree_content_explains_that_no_open_sessions_exist() {
         ..Snapshot::default()
     };
     let state = State::default();
-    let labels = SessionMetadataView::default();
     let theme = ThemeName::Mudi.palette();
 
     terminal
-        .draw(|frame| draw(frame, frame.area(), &snapshot, &state, &labels, theme))
+        .draw(|frame| draw(frame, frame.area(), &snapshot, &state, theme))
         .unwrap();
     let rendered = terminal
         .backend()
@@ -462,10 +460,9 @@ fn project_with_only_recent_and_older_sessions_is_not_in_the_tree() {
     let backend = TestBackend::new(80, 14);
     let mut terminal = Terminal::new(backend).unwrap();
     let state = State::default();
-    let labels = SessionMetadataView::default();
     let theme = ThemeName::Mudi.palette();
     terminal
-        .draw(|frame| draw(frame, frame.area(), &snapshot, &state, &labels, theme))
+        .draw(|frame| draw(frame, frame.area(), &snapshot, &state, theme))
         .unwrap();
     let rendered = terminal
         .backend()

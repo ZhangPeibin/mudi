@@ -3,17 +3,20 @@ mod support;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mudi::adapters::handoff::open_handoff_service;
-use mudi::adapters::managed_sessions::{MacosManagedTerminalAccess, TmuxLaunchBroker};
-use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
+use mudi::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::ProviderExecutables;
 use mudi::adapters::providers::{registry, BINDING_INITIALIZER};
+use mudi::adapters::system::terminal_macos::MacosManagedTerminalAccess;
+use mudi::adapters::system::tmux::TmuxLaunchBroker;
 use mudi::application::clipboard::ClipboardPort;
+use mudi::application::handlers::ManagedWorkflowServices;
 use mudi::application::handoff::{HandoffPaths, WorkerLaunch, WorkerLauncher};
-use mudi::application::managed_sessions::{
-    ManagedLaunchBroker, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus,
-    ManagedLaunchTarget, ManagedNewRequest, ManagedSessionService, ManagedTerminalAccess,
-    PrivateTmuxEnvironment, ProviderNewCommand,
+use mudi::application::managed_session::{
+    ManagedControlChannel, ManagedLaunchBroker, ManagedLaunchEvidence,
+    ManagedLaunchRecoveryService, ManagedLaunchRegistration, ManagedLaunchStatus,
+    ManagedLaunchTarget, ManagedNewRequest, ManagedNewService, ManagedTerminalAccess,
+    ProviderLaunchCommand,
 };
 use mudi::application::successor::TerminalLauncher;
 use mudi::domain::{
@@ -28,6 +31,22 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use support::{workflow_handlers, TestActionRouter};
+
+fn managed_new_workflows(service: ManagedNewService) -> ManagedWorkflowServices {
+    ManagedWorkflowServices {
+        start_new: Some(service),
+        start_resume: None,
+        recovery: None,
+    }
+}
+
+fn managed_recovery_workflows(service: ManagedLaunchRecoveryService) -> ManagedWorkflowServices {
+    ManagedWorkflowServices {
+        start_new: None,
+        start_resume: None,
+        recovery: Some(service),
+    }
+}
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -64,8 +83,9 @@ impl ManagedLaunchBroker for AssertPersistedBeforeLaunch {
     fn launch(
         &mut self,
         registration: &ManagedLaunchRegistration,
+        command: &ProviderLaunchCommand,
     ) -> Result<ManagedLaunchEvidence> {
-        let persisted = ManagedLaunchStore::open(&self.store_path)?
+        let persisted = StateManagedSessionRepository::open(&self.store_path)?
             .get(&registration.id)?
             .expect("registration must exist before launch");
         assert_eq!(persisted.id, registration.id);
@@ -74,13 +94,13 @@ impl ManagedLaunchBroker for AssertPersistedBeforeLaunch {
         assert_eq!(persisted.session_alias, registration.session_alias);
         assert_eq!(persisted.description, registration.description);
         assert!(persisted.binding_initializer);
-        assert!(persisted.provider_command.executable.as_os_str().is_empty());
-        assert!(persisted.provider_command.arguments.is_empty());
+        assert!(command.executable.is_absolute());
+        assert!(!command.arguments.is_empty());
         assert!(persisted.launched_at_ms.is_none());
         assert!(persisted.launch_evidence.is_none());
         self.launched.lock().unwrap().push(registration.id.clone());
         Ok(ManagedLaunchEvidence {
-            tmux_pane_id: "%42".into(),
+            channel_id: "%42".into(),
             provider_process: ProcessIdentity {
                 pid: 42,
                 started_at_ms: 41_000,
@@ -96,7 +116,7 @@ struct AssertLaunchPersistedBeforeTerminal {
 
 impl ManagedTerminalAccess for AssertLaunchPersistedBeforeTerminal {
     fn open(&mut self, registration: &ManagedLaunchRegistration) -> Result<()> {
-        let persisted = ManagedLaunchStore::open(&self.store_path)?
+        let persisted = StateManagedSessionRepository::open(&self.store_path)?
             .get(&registration.id)?
             .expect("registration must exist before Terminal access");
         assert!(persisted.launched_at_ms.is_some());
@@ -117,8 +137,8 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
     let store_path = temp.path().join("managed-launches.db");
     let launched = Arc::new(Mutex::new(Vec::new()));
     let opened = Arc::new(Mutex::new(Vec::new()));
-    let mut service = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
+    let mut service = ManagedNewService::new(
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         ProviderExecutables::new(claude, codex.clone()),
         Box::new(AssertPersistedBeforeLaunch {
             store_path: store_path.clone(),
@@ -139,10 +159,14 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
         binding_initializer: false,
     };
 
-    let outcome = service.start_new(request, 42_000).unwrap();
+    let outcome = service.start(request, 42_000).unwrap();
 
     assert!(outcome.terminal_opened);
-    assert!(outcome.registration.tmux.socket_name.starts_with("mudi-"));
+    assert!(outcome
+        .registration
+        .control_channel
+        .namespace
+        .starts_with("mudi-"));
     assert_eq!(
         *launched.lock().unwrap(),
         vec![outcome.registration.id.clone()]
@@ -151,7 +175,7 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
         *opened.lock().unwrap(),
         vec![outcome.registration.id.clone()]
     );
-    let persisted = ManagedLaunchStore::open(&store_path)
+    let persisted = StateManagedSessionRepository::open(&store_path)
         .unwrap()
         .get(&outcome.registration.id)
         .unwrap()
@@ -164,14 +188,12 @@ fn selected_context_new_persists_binding_launch_before_opening_terminal() {
         persisted.description.as_deref(),
         Some("Trace the selected-context path")
     );
-    assert!(persisted.provider_command.executable.as_os_str().is_empty());
-    assert!(persisted.provider_command.arguments.is_empty());
     assert!(persisted.binding_initializer);
     assert!(persisted.launched_at_ms.is_some());
     assert_eq!(
         persisted.launch_evidence,
         Some(ManagedLaunchEvidence {
-            tmux_pane_id: "%42".into(),
+            channel_id: "%42".into(),
             provider_process: ProcessIdentity {
                 pid: 42,
                 started_at_ms: 41_000,
@@ -210,15 +232,15 @@ fn private_tmux_broker_runs_the_selected_native_command_in_the_target_working_di
     let opened = Arc::new(Mutex::new(Vec::new()));
     let title = "Initializer #S #{session_name}";
     let description = "Inspect #W startup";
-    let mut service = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
+    let mut service = ManagedNewService::new(
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         ProviderExecutables::new(claude.clone(), codex),
         Box::new(TmuxLaunchBroker::new(tmux)),
         Box::new(AssertLaunchPersistedBeforeTerminal { store_path, opened }),
     );
 
     let outcome = service
-        .start_new(
+        .start(
             ManagedNewRequest {
                 provider: Provider::ClaudeCode,
                 target: ManagedLaunchTarget {
@@ -243,7 +265,7 @@ fn private_tmux_broker_runs_the_selected_native_command_in_the_target_working_di
             "-f".to_string(),
             "/dev/null".to_string(),
             "-L".to_string(),
-            outcome.registration.tmux.socket_name,
+            outcome.registration.control_channel.namespace,
             "new-session".to_string(),
             "-d".to_string(),
             "-P".to_string(),
@@ -313,8 +335,8 @@ fn terminal_failure_preserves_the_single_running_binding_registration() {
     let codex = executable(temp.path(), "codex");
     let store_path = temp.path().join("managed-launches.db");
     let launched = Arc::new(Mutex::new(Vec::new()));
-    let mut service = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
+    let mut service = ManagedNewService::new(
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         ProviderExecutables::new(claude, codex),
         Box::new(AssertPersistedBeforeLaunch {
             store_path: store_path.clone(),
@@ -324,7 +346,7 @@ fn terminal_failure_preserves_the_single_running_binding_registration() {
     );
 
     let outcome = service
-        .start_new(
+        .start(
             ManagedNewRequest {
                 provider: Provider::CodexCli,
                 target: ManagedLaunchTarget { working_directory },
@@ -356,8 +378,8 @@ fn terminal_access_only_attaches_to_the_existing_private_tmux_environment() {
     let tmux = executable(temp.path(), "tmux");
     let store_path = temp.path().join("managed-launches.db");
     let launched = Arc::new(Mutex::new(Vec::new()));
-    let mut service = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
+    let mut service = ManagedNewService::new(
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         ProviderExecutables::new(claude, codex),
         Box::new(AssertPersistedBeforeLaunch {
             store_path,
@@ -366,7 +388,7 @@ fn terminal_access_only_attaches_to_the_existing_private_tmux_environment() {
         Box::new(FailTerminal),
     );
     let outcome = service
-        .start_new(
+        .start(
             ManagedNewRequest {
                 provider: Provider::CodexCli,
                 target: ManagedLaunchTarget { working_directory },
@@ -399,7 +421,7 @@ fn terminal_access_only_attaches_to_the_existing_private_tmux_environment() {
     assert!(arguments.contains(&format!(
         "'{}' -L '{}' attach-session -t 'managed'",
         tmux.display(),
-        outcome.registration.tmux.socket_name
+        outcome.registration.control_channel.namespace
     )));
     assert!(!arguments.contains("codex"));
     assert!(!arguments.contains(BINDING_INITIALIZER));
@@ -448,6 +470,7 @@ impl ManagedLaunchBroker for RecoveryLaunchBroker {
     fn launch(
         &mut self,
         _registration: &ManagedLaunchRegistration,
+        _command: &ProviderLaunchCommand,
     ) -> Result<ManagedLaunchEvidence> {
         panic!("Managed launch recovery must not replay the Provider launch")
     }
@@ -491,8 +514,8 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
     let store_path = temp.path().join("managed-launches.db");
     let launched = Arc::new(Mutex::new(Vec::new()));
     let opened = Arc::new(Mutex::new(Vec::new()));
-    let managed_sessions = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
+    let managed_sessions = ManagedNewService::new(
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         executables.clone(),
         Box::new(AssertPersistedBeforeLaunch {
             store_path: store_path.clone(),
@@ -515,7 +538,7 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
     let mut controller = workflow_handlers(
         handoff,
         NeverOpenSuccessor,
-        managed_sessions,
+        managed_new_workflows(managed_sessions),
         temp.path().join("workflow-state.db"),
     );
     let snapshot = Snapshot {
@@ -618,7 +641,7 @@ fn no_context_ui_flow_can_switch_the_picked_directory_before_managed_new() {
 
     let registration_id = launched.lock().unwrap().first().unwrap().clone();
     assert_eq!(*opened.lock().unwrap(), vec![registration_id.clone()]);
-    let registration = ManagedLaunchStore::open(&store_path)
+    let registration = StateManagedSessionRepository::open(&store_path)
         .unwrap()
         .get(&registration_id)
         .unwrap()
@@ -647,8 +670,8 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
     let store_path = temp.path().join("managed-launches.db");
     let launched = Arc::new(Mutex::new(Vec::new()));
     let opened = Arc::new(Mutex::new(Vec::new()));
-    let managed_sessions = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
+    let managed_sessions = ManagedNewService::new(
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         executables.clone(),
         Box::new(AssertPersistedBeforeLaunch {
             store_path: store_path.clone(),
@@ -671,7 +694,7 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
     let mut controller = workflow_handlers(
         handoff,
         NeverOpenSuccessor,
-        managed_sessions,
+        managed_new_workflows(managed_sessions),
         temp.path().join("workflow-state.db"),
     );
     let snapshot = Snapshot {
@@ -745,7 +768,7 @@ fn inherited_target_can_be_cancelled_rejected_and_replaced_before_managed_new() 
     assert!(rescan_rx.try_recv().is_ok());
     let registration_id = launched.lock().unwrap().first().unwrap().clone();
     assert_eq!(*opened.lock().unwrap(), vec![registration_id.clone()]);
-    let registration = ManagedLaunchStore::open(&store_path)
+    let registration = StateManagedSessionRepository::open(&store_path)
         .unwrap()
         .get(&registration_id)
         .unwrap()
@@ -768,8 +791,8 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
     let store_path = temp.path().join("managed-launches.db");
     let launched = Arc::new(Mutex::new(Vec::new()));
     let opened = Arc::new(Mutex::new(Vec::new()));
-    let managed_sessions = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
+    let managed_sessions = ManagedNewService::new(
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         executables.clone(),
         Box::new(AssertPersistedBeforeLaunch {
             store_path: store_path.clone(),
@@ -792,7 +815,7 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
     let mut controller = workflow_handlers(
         handoff,
         NeverOpenSuccessor,
-        managed_sessions,
+        managed_new_workflows(managed_sessions),
         temp.path().join("workflow-state.db"),
     );
     let snapshot = Snapshot {
@@ -833,7 +856,7 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
     assert!(rescan_rx.try_recv().is_ok());
     let registration_id = launched.lock().unwrap().first().unwrap().clone();
     assert_eq!(*opened.lock().unwrap(), vec![registration_id.clone()]);
-    let registration = ManagedLaunchStore::open(&store_path)
+    let registration = StateManagedSessionRepository::open(&store_path)
         .unwrap()
         .get(&registration_id)
         .unwrap()
@@ -842,11 +865,6 @@ fn selected_project_ui_flow_reaches_the_managed_session_application_service() {
     assert_eq!(registration.target.working_directory, project_root);
     assert_eq!(registration.session_alias, "Application launch");
     assert!(registration.binding_initializer);
-    assert!(registration
-        .provider_command
-        .executable
-        .as_os_str()
-        .is_empty());
     assert!(registration.terminal_opened_at_ms.is_some());
 }
 
@@ -855,7 +873,7 @@ fn application_routes_managed_launch_recovery_without_replaying_provider_launch(
     let temp = TempDir::new("managed-recovery-actions");
     let working_directory = temp.path().canonicalize().unwrap();
     let store_path = temp.path().join("managed-launches.db");
-    let store = ManagedLaunchStore::open(&store_path).unwrap();
+    let store = StateManagedSessionRepository::open(&store_path).unwrap();
     let binding = recovery_registration(
         "R-CANCEL",
         ManagedLaunchStatus::Binding,
@@ -889,9 +907,8 @@ fn application_routes_managed_launch_recovery_without_replaying_provider_launch(
     );
     let cancelled = Arc::new(Mutex::new(Vec::new()));
     let opened = Arc::new(Mutex::new(Vec::new()));
-    let managed_sessions = ManagedSessionService::new(
+    let managed_sessions = ManagedLaunchRecoveryService::new(
         store,
-        executables.clone(),
         Box::new(RecoveryLaunchBroker {
             cancelled: cancelled.clone(),
         }),
@@ -912,7 +929,7 @@ fn application_routes_managed_launch_recovery_without_replaying_provider_launch(
     let mut controller = workflow_handlers(
         handoff,
         NeverOpenSuccessor,
-        managed_sessions,
+        managed_recovery_workflows(managed_sessions),
         temp.path().join("workflow-state.db"),
     );
     let mut ui = Ui::default();
@@ -953,13 +970,12 @@ fn application_routes_managed_launch_recovery_without_replaying_provider_launch(
     assert_eq!(copied.len(), 1);
     assert!(copied[0].contains("Managed Launch Registration: R-DIAGNOSTICS"));
     assert!(!copied[0].contains("private initializer"));
-    let retained_retry = ManagedLaunchStore::open(&store_path)
+    let retained_retry = StateManagedSessionRepository::open(&store_path)
         .unwrap()
         .get("R-RETRY")
         .unwrap()
         .unwrap();
     assert_eq!(retained_retry.status, ManagedLaunchStatus::NeedsReview);
-    assert!(retained_retry.provider_command.arguments.is_empty());
     assert_eq!(retained_retry.launch_evidence, review_retry.launch_evidence);
 }
 
@@ -967,7 +983,8 @@ fn application_routes_managed_launch_recovery_without_replaying_provider_launch(
 fn failed_managed_terminal_recovery_shows_notice_and_still_rescans() {
     let temp = TempDir::new("managed-recovery-failure");
     let working_directory = temp.path().canonicalize().unwrap();
-    let store = ManagedLaunchStore::open(temp.path().join("managed-launches.db")).unwrap();
+    let store =
+        StateManagedSessionRepository::open(temp.path().join("managed-launches.db")).unwrap();
     let review = recovery_registration(
         "R-OPEN-FAIL",
         ManagedLaunchStatus::NeedsReview,
@@ -979,9 +996,8 @@ fn failed_managed_terminal_recovery_shows_notice_and_still_rescans() {
         executable(temp.path(), "claude-failure"),
         executable(temp.path(), "codex-failure"),
     );
-    let managed_sessions = ManagedSessionService::new(
+    let managed_sessions = ManagedLaunchRecoveryService::new(
         store,
-        executables.clone(),
         Box::new(RecoveryLaunchBroker {
             cancelled: Arc::new(Mutex::new(Vec::new())),
         }),
@@ -1002,7 +1018,7 @@ fn failed_managed_terminal_recovery_shows_notice_and_still_rescans() {
     let mut controller = workflow_handlers(
         handoff,
         NeverOpenSuccessor,
-        managed_sessions,
+        managed_recovery_workflows(managed_sessions),
         temp.path().join("workflow-state.db"),
     );
     let snapshot = Snapshot::default();
@@ -1079,18 +1095,14 @@ fn recovery_registration(
         session_alias: "Recover launch".into(),
         description: Some("private description".into()),
         binding_initializer: true,
-        provider_command: ProviderNewCommand {
-            executable: PathBuf::from("/usr/bin/true"),
-            arguments: vec!["private initializer".into()],
-        },
-        tmux: PrivateTmuxEnvironment {
-            socket_name: format!("mudi-{id}"),
-            session_name: "managed".into(),
+        control_channel: ManagedControlChannel {
+            namespace: format!("mudi-{id}"),
+            run_target: "managed".into(),
         },
         created_at_ms: 40_000,
         launched_at_ms: Some(41_000),
         launch_evidence: Some(ManagedLaunchEvidence {
-            tmux_pane_id: "%42".into(),
+            channel_id: "%42".into(),
             provider_process: ProcessIdentity {
                 pid: 42,
                 started_at_ms: 41_000,

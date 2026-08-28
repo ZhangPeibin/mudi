@@ -1,5 +1,5 @@
-use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::persistence::session_metadata::SessionLabels;
+use mudi::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use mudi::adapters::persistence::state::StateDatabase;
 use mudi::adapters::persistence::tasks::TaskStore;
 use mudi::application::session_labels::CurationDisposition;
@@ -383,7 +383,7 @@ fn managed_store_uses_the_versioned_state_database_schema() {
     let temp = TempDir::new("managed-repository-schema");
     let path = temp.path().join("state.db");
 
-    drop(ManagedLaunchStore::open(&path).unwrap());
+    drop(StateManagedSessionRepository::open(&path).unwrap());
 
     let connection = StateDatabase::open(&path).unwrap().connect().unwrap();
     assert_eq!(pragma_i64(&connection, "user_version"), 1);
@@ -526,7 +526,7 @@ fn initialized_state_database_passes_integrity_check() {
         .set_alias(Provider::CodexCli, "codex-session", "Integrity check")
         .unwrap();
     drop(TaskStore::open(&path).unwrap());
-    drop(ManagedLaunchStore::open(&path).unwrap());
+    drop(StateManagedSessionRepository::open(&path).unwrap());
 
     let connection = StateDatabase::open(&path).unwrap().connect().unwrap();
     assert_eq!(

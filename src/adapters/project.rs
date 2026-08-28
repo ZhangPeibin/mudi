@@ -1,7 +1,7 @@
 //! Resolve a Session's working directory into canonical Project identity.
 
 use crate::application::handlers::ManagedTargetResolver;
-use crate::application::managed_sessions::ManagedLaunchTarget;
+use crate::application::managed_session::ManagedLaunchTarget;
 use crate::domain::{Project, ProjectIdentity};
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};

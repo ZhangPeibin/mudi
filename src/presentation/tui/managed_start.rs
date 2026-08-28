@@ -1,7 +1,7 @@
 //! Metadata-only status and recovery controls for incomplete Managed launches.
 
 use super::Ui;
-use crate::application::managed_sessions::{ManagedLaunchAction, ManagedLaunchStatus};
+use crate::application::managed_session::{ManagedLaunchAction, ManagedLaunchStatus};
 use crate::application::observation::read_model::{ManagedLaunchSummary, ManagedTerminalState};
 use crate::presentation::app::Snapshot;
 use ratatui::layout::Rect;

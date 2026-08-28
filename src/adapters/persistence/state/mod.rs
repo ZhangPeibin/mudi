@@ -1,5 +1,8 @@
 //! Versioned storage for all Mudi-owned authoritative metadata.
 
+pub mod bindings;
+pub mod managed_sessions;
+
 use crate::adapters::persistence::index::Index;
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{Connection, TransactionBehavior};

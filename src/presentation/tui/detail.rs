@@ -4,13 +4,16 @@ use super::{
     context::{Presentation, Progress},
     current_attention,
     layout::centered_rect_with_max_width,
-    selected_style, snapshot_now_ms,
+    overlay, selected_style, snapshot_now_ms,
     theme::Theme,
-    Ui,
+    DetailView, GuideCategory, HandoffConfirmation, ManagedResumeConfirmation, StateCell,
+    TaskCancellationConfirmation, TaskDeletionConfirmation, TaskRetryConfirmation, Ui, UiAction,
 };
 use crate::application::attention::{AttentionCondition, AttentionSeverity};
-use crate::domain::{ModelUsage, Session, SessionState, Usage};
+use crate::application::tasks::OperationTask;
+use crate::domain::{ModelUsage, Session, SessionIdentity, SessionState, Usage};
 use crate::presentation::app::{fmt_cost, fmt_datetime, fmt_relative, fmt_tokens, Snapshot};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
@@ -18,6 +21,224 @@ use ratatui::Frame;
 
 const DETAIL_MODAL_MAX_WIDTH: u16 = 100;
 const DETAIL_LABEL_WIDTH: usize = 16;
+
+/// Convert one input event for the active Session or Task Detail workflow.
+pub(super) fn handle_key(
+    ui: &mut Ui,
+    key: KeyEvent,
+    observed_snapshot: &Snapshot,
+    normal_snapshot: &Snapshot,
+) -> std::io::Result<Option<UiAction>> {
+    if ui.overlay.detail().is_none() {
+        return Ok(None);
+    }
+    let action = match key.code {
+        KeyCode::Char('r')
+            if ui
+                .detail_task(normal_snapshot)
+                .is_some_and(OperationTask::offers_retry) =>
+        {
+            let task = ui.detail_task(normal_snapshot).expect("checked above");
+            let source_state = normal_snapshot
+                .sessions
+                .iter()
+                .find(|session| {
+                    session.provider == task.source_provider && session.id == task.source_session_id
+                })
+                .map_or(SessionState::Exited, |session| session.state);
+            ui.push_confirmation(overlay::ConfirmationState::TaskRetry(
+                TaskRetryConfirmation {
+                    predecessor_task_id: task.id.clone(),
+                    session: SessionIdentity {
+                        provider: task.source_provider,
+                        native_id: task.source_session_id.clone(),
+                    },
+                    source_state,
+                    successor_provider: task.source_provider,
+                    end_current_run: source_state.is_open(),
+                },
+            ));
+            UiAction::None
+        }
+        KeyCode::Char('r') if ui.detail_managed_resume(normal_snapshot).is_some() => {
+            let resume = ui
+                .detail_managed_resume(normal_snapshot)
+                .expect("checked above");
+            ui.push_confirmation(overlay::ConfirmationState::ManagedResume(
+                ManagedResumeConfirmation {
+                    provider: resume.provider,
+                    native_session_id: resume.native_session_id.clone(),
+                },
+            ));
+            UiAction::None
+        }
+        KeyCode::Char('r') => UiAction::Rescan,
+        KeyCode::Char('?') => {
+            ui.open_guide(GuideCategory::Sessions);
+            UiAction::None
+        }
+        KeyCode::Char('e')
+            if ui.selected_session(normal_snapshot).is_some_and(|session| {
+                normal_snapshot.session_metadata.allows_for(
+                    session,
+                    crate::application::observation::read_model::SessionMetadataAction::Edit,
+                )
+            }) =>
+        {
+            ui.open_session_editor(normal_snapshot);
+            UiAction::None
+        }
+        KeyCode::Char('h') if ui.detail_session(normal_snapshot).is_some() => {
+            let session = ui.detail_session(normal_snapshot).expect("checked above");
+            ui.push_confirmation(overlay::ConfirmationState::Handoff(HandoffConfirmation {
+                session: SessionIdentity {
+                    provider: session.provider,
+                    native_id: session.id.clone(),
+                },
+                source_state: session.state,
+                successor_provider: session.provider,
+                end_current_run: session.state.is_open(),
+            }));
+            UiAction::None
+        }
+        KeyCode::Char('o') if ui.detail_managed_current_run(normal_snapshot).is_some() => {
+            let run = ui
+                .detail_managed_current_run(normal_snapshot)
+                .expect("checked above");
+            UiAction::OpenManagedCurrentRunTerminal {
+                provider: run.provider,
+                native_session_id: run.native_session_id.clone(),
+                opaque_ref: run.opaque_ref.clone(),
+            }
+        }
+        KeyCode::Char('a') if ui.detail_managed_current_run(normal_snapshot).is_some() => {
+            let run = ui
+                .detail_managed_current_run(normal_snapshot)
+                .expect("checked above");
+            UiAction::CopyManagedCurrentRunAttachCommand {
+                provider: run.provider,
+                native_session_id: run.native_session_id.clone(),
+                opaque_ref: run.opaque_ref.clone(),
+            }
+        }
+        KeyCode::Char('x')
+            if ui
+                .detail_task(normal_snapshot)
+                .is_some_and(|task| !task.state.is_terminal()) =>
+        {
+            let task_id = ui
+                .detail_task(normal_snapshot)
+                .expect("checked above")
+                .id
+                .clone();
+            ui.push_confirmation(overlay::ConfirmationState::TaskCancellation(
+                TaskCancellationConfirmation { task_id },
+            ));
+            UiAction::None
+        }
+        KeyCode::Char('d')
+            if ui
+                .detail_task(normal_snapshot)
+                .is_some_and(OperationTask::offers_deletion) =>
+        {
+            let task_id = ui
+                .detail_task(normal_snapshot)
+                .expect("checked above")
+                .id
+                .clone();
+            ui.push_confirmation(overlay::ConfirmationState::TaskDeletion(
+                TaskDeletionConfirmation { task_id },
+            ));
+            UiAction::None
+        }
+        KeyCode::Char('c') if ui.detail_session(normal_snapshot).is_some() => {
+            selected_copy_request(observed_snapshot, ui).map_or(UiAction::None, |(field, value)| {
+                UiAction::Copy { field, value }
+            })
+        }
+        KeyCode::Char('c')
+            if ui.detail_task(normal_snapshot).is_some_and(|task| {
+                task.state == crate::application::tasks::OperationTaskState::Ready
+                    && !task.is_being_deleted()
+                    && task.successor_launch_plan.is_some()
+            }) =>
+        {
+            UiAction::CopySuccessorCommand {
+                task_id: ui
+                    .detail_task(normal_snapshot)
+                    .expect("checked above")
+                    .id
+                    .clone(),
+            }
+        }
+        KeyCode::Char('o')
+            if ui.detail_task(normal_snapshot).is_some_and(|task| {
+                task.state == crate::application::tasks::OperationTaskState::Ready
+                    && !task.is_being_deleted()
+                    && task.successor_launch_plan.is_some()
+            }) =>
+        {
+            UiAction::OpenSuccessorTerminal {
+                task_id: ui
+                    .detail_task(normal_snapshot)
+                    .expect("checked above")
+                    .id
+                    .clone(),
+            }
+        }
+        KeyCode::Enter if selected_opens_hidden_list(observed_snapshot, ui) => {
+            ui.open_hidden_inventory(observed_snapshot);
+            UiAction::None
+        }
+        KeyCode::Enter if ui.detail_task(normal_snapshot).is_some() => {
+            let successor = ui.detail_task(normal_snapshot).and_then(|task| {
+                let session_id = task.successor_session_id.as_ref()?;
+                normal_snapshot.sessions.iter().find(|session| {
+                    session.provider == task.successor_provider && &session.id == session_id
+                })
+            });
+            if let Some(successor) = successor {
+                ui.overlay = overlay::OverlayState::Detail(DetailView {
+                    session: SessionIdentity {
+                        provider: successor.provider,
+                        native_id: successor.id.clone(),
+                    },
+                    task_id: None,
+                    scroll: StateCell::new(0),
+                    selected_field: 0,
+                    origin_signal: None,
+                });
+            }
+            UiAction::None
+        }
+        KeyCode::Down | KeyCode::Char('j') if ui.detail_session(normal_snapshot).is_some() => {
+            move_selected_field(ui, observed_snapshot, true);
+            UiAction::None
+        }
+        KeyCode::Up | KeyCode::Char('k') if ui.detail_session(normal_snapshot).is_some() => {
+            move_selected_field(ui, observed_snapshot, false);
+            UiAction::None
+        }
+        KeyCode::Down | KeyCode::Char('j') if ui.detail_task(normal_snapshot).is_some() => {
+            if let Some(detail) = ui.overlay.detail() {
+                detail.scroll.set(detail.scroll.get().saturating_add(1));
+            }
+            UiAction::None
+        }
+        KeyCode::Up | KeyCode::Char('k') if ui.detail_task(normal_snapshot).is_some() => {
+            if let Some(detail) = ui.overlay.detail() {
+                detail.scroll.set(detail.scroll.get().saturating_sub(1));
+            }
+            UiAction::None
+        }
+        KeyCode::Esc => {
+            ui.close_detail(normal_snapshot);
+            UiAction::None
+        }
+        _ => UiAction::None,
+    };
+    Ok(Some(action))
+}
 
 enum DetailLine {
     Field {
@@ -250,7 +471,7 @@ fn detail_lines(
         SessionState::Exited => "Exited",
     };
     let mut lines = Vec::new();
-    let hidden_count = super::hidden_tree::counts(snap, ui.labels.as_ref()).1;
+    let hidden_count = super::hidden_tree::counts(snap).1;
     if hidden_count > 0 {
         lines.push(DetailLine::hidden_list(hidden_count));
         lines.push(DetailLine::Content(Line::from("")));
@@ -286,7 +507,7 @@ fn detail_lines(
     ));
     lines.push(DetailLine::field(
         "Title",
-        ui.labels.title(session.provider, &session.id),
+        snap.session_metadata.title(session.provider, &session.id),
         true,
     ));
     lines.push(DetailLine::field("Session ID", &session.id, true));
@@ -393,7 +614,7 @@ fn selectable_lines(snap: &Snapshot, ui: &Ui, session: &Session) -> Vec<DetailLi
 /// Return the selected complete value for the direct Detail copy command.
 pub(super) fn selected_copy_request(snap: &Snapshot, ui: &Ui) -> Option<(&'static str, String)> {
     let session = ui.detail_session(snap)?;
-    let selected = ui.detail.as_ref()?.selected_field;
+    let selected = ui.overlay.detail()?.selected_field;
     selectable_lines(snap, ui, session)
         .get(selected)
         .and_then(DetailLine::copy_value)
@@ -403,7 +624,7 @@ pub(super) fn selected_opens_hidden_list(snap: &Snapshot, ui: &Ui) -> bool {
     let Some(session) = ui.detail_session(snap) else {
         return false;
     };
-    let Some(selected) = ui.detail.as_ref().map(|detail| detail.selected_field) else {
+    let Some(selected) = ui.overlay.detail().map(|detail| detail.selected_field) else {
         return false;
     };
     selectable_lines(snap, ui, session)
@@ -417,7 +638,7 @@ pub(super) fn move_selected_field(ui: &mut Ui, snap: &Snapshot, forward: bool) {
         return;
     };
     let count = selectable_lines(snap, ui, session).len();
-    let Some(detail) = ui.detail.as_mut() else {
+    let Some(detail) = ui.overlay.detail_mut() else {
         return;
     };
     if count == 0 {
@@ -434,7 +655,7 @@ pub(super) fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     let Some(session) = ui.detail_session(snap) else {
         return;
     };
-    let Some(detail) = ui.detail.as_ref() else {
+    let Some(detail) = ui.overlay.detail() else {
         return;
     };
     let theme = ui.theme.palette();
@@ -475,7 +696,7 @@ pub(super) fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
     }
     scroll = scroll.min(max_scroll);
     detail.scroll.set(scroll);
-    let footer = if super::hidden_tree::counts(snap, ui.labels.as_ref()).1 > 0 {
+    let footer = if super::hidden_tree::counts(snap).1 > 0 {
         " Up/Down Select | Enter Open | c Copy | h Handoff | Esc Close "
     } else {
         " Up/Down Select | c Copy | h Handoff | Esc Close "

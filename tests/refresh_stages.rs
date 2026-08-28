@@ -1,13 +1,13 @@
-use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::persistence::session_metadata::SessionLabels;
+use mudi::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use mudi::application::alerts::{AlertEngine, NotificationPort};
-use mudi::application::managed_sessions::{
-    BindingProcessObservation, BindingReceipt, EvidenceBinder, ManagedCurrentRunEvidence,
+use mudi::application::managed_session::{
+    BindingProcessObservation, BindingReceipt, ManagedControlChannel, ManagedCurrentRunEvidence,
     ManagedCurrentRunRecord, ManagedCurrentRunVerifier, ManagedLaunchCleanup,
-    ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchTarget,
-    ManagedResumeEvidence, ManagedResumeEvidenceCandidate, ManagedResumeVerifier,
-    ManagedSessionRecord, PrivateTmuxEnvironment, ProcessEvidence, ProviderBindingEvidence,
-    ProviderNewCommand, ProviderProcessObservation,
+    ManagedLaunchEvidence, ManagedLaunchReconciler, ManagedLaunchRegistration, ManagedLaunchStatus,
+    ManagedLaunchTarget, ManagedResumeEvidence, ManagedResumeEvidenceCandidate,
+    ManagedResumeVerifier, ManagedSessionRecord, ProcessEvidence, ProviderBindingEvidence,
+    ProviderProcessObservation,
 };
 use mudi::application::observation::read_model::{
     InMemoryReadModelCache, ManagedCurrentRunSummary, ManagedLaunchSummary, ManagedResumeSummary,
@@ -76,6 +76,9 @@ fn project_uses_only_read_ports_and_preserves_stage_diagnostics() {
         task_query: Ok(Box::new(RecordingTaskQuery {
             reads: task_reads.clone(),
         })),
+        session_metadata: Ok(Box::new(
+            mudi::application::session_labels::SessionMetadataView::default(),
+        )),
     });
     let mut frame = empty_frame(50_000);
     frame.diagnostics.push(RefreshDiagnostic::for_stage(
@@ -122,7 +125,7 @@ fn reconciliation_cannot_create_authority_without_an_existing_registration() {
 
     assert!(report.diagnostics.is_empty());
     assert_eq!(task_reconciliations.load(Ordering::Relaxed), 1);
-    let store = ManagedLaunchStore::open(state_path).unwrap();
+    let store = StateManagedSessionRepository::open(state_path).unwrap();
     assert!(store.registrations().unwrap().is_empty());
     assert!(store.managed_sessions().unwrap().is_empty());
     assert!(store.managed_current_runs().unwrap().is_empty());
@@ -136,7 +139,7 @@ fn replaying_one_frame_is_idempotent_for_binding_title_metadata_and_tasks() {
     let source_path = temp.file("session.jsonl", "{}\n");
     let provider_process = process(42, 41_000);
     let launch = registration("authorized-launch", &working_directory, provider_process);
-    ManagedLaunchStore::open(&state_path)
+    StateManagedSessionRepository::open(&state_path)
         .unwrap()
         .insert(&launch)
         .unwrap();
@@ -167,7 +170,7 @@ fn replaying_one_frame_is_idempotent_for_binding_title_metadata_and_tasks() {
     assert!(reconciler.reconcile(&frame).diagnostics.is_empty());
 
     assert_eq!(task_reconciliations.load(Ordering::Relaxed), 2);
-    let store = ManagedLaunchStore::open(&state_path).unwrap();
+    let store = StateManagedSessionRepository::open(&state_path).unwrap();
     assert!(store.registrations().unwrap().is_empty());
     assert_eq!(store.managed_sessions().unwrap().len(), 1);
     assert_eq!(store.managed_current_runs().unwrap().len(), 1);
@@ -187,7 +190,7 @@ fn replaying_one_frame_is_idempotent_for_binding_title_metadata_and_tasks() {
 fn publication_atomically_replaces_the_completed_snapshot() {
     let temp = TempDir::new("publication");
     let state_path = temp.path().join("state.db");
-    ManagedLaunchStore::open(&state_path).unwrap();
+    StateManagedSessionRepository::open(&state_path).unwrap();
     let cache = Arc::new(InMemoryReadModelCache::default());
     cache.publish(RefreshSnapshot {
         revision: 1,
@@ -331,14 +334,14 @@ impl ManagedResumeEvidence for NeverResume {
         _run: &ManagedCurrentRunRecord,
         _session: &ManagedSessionRecord,
         _receipt: &BindingReceipt,
-    ) -> anyhow::Result<mudi::application::managed_sessions::ManagedCurrentRunLifecycle> {
+    ) -> anyhow::Result<mudi::application::managed_session::ManagedCurrentRunLifecycle> {
         panic!("the read-only fake query must not invoke a concrete verifier")
     }
 
     fn observe_many(
         &self,
         _candidates: &[ManagedResumeEvidenceCandidate],
-    ) -> Vec<anyhow::Result<mudi::application::managed_sessions::ManagedCurrentRunLifecycle>> {
+    ) -> Vec<anyhow::Result<mudi::application::managed_session::ManagedCurrentRunLifecycle>> {
         panic!("the read-only fake query must not invoke a concrete verifier")
     }
 }
@@ -379,8 +382,10 @@ fn reconciliation_service(
     task_reconciliations: Arc<AtomicUsize>,
 ) -> ReconciliationService {
     ReconciliationService::new(ReconciliationPorts {
-        managed_repository: Ok(Box::new(ManagedLaunchStore::open(state_path).unwrap())),
-        managed_binding_reconciler: EvidenceBinder::new(
+        managed_repository: Ok(Box::new(
+            StateManagedSessionRepository::open(state_path).unwrap(),
+        )),
+        managed_binding_reconciler: ManagedLaunchReconciler::new(
             Box::new(PanicProcessEvidence),
             Box::new(NoopCleanup),
         ),
@@ -415,18 +420,14 @@ fn registration(
         session_alias: "Managed work".into(),
         description: Some("Durable description".into()),
         binding_initializer: false,
-        provider_command: ProviderNewCommand {
-            executable: PathBuf::from("/usr/bin/true"),
-            arguments: Vec::new(),
-        },
-        tmux: PrivateTmuxEnvironment {
-            socket_name: format!("mudi-{id}"),
-            session_name: "managed".into(),
+        control_channel: ManagedControlChannel {
+            namespace: format!("mudi-{id}"),
+            run_target: "managed".into(),
         },
         created_at_ms: 40_000,
         launched_at_ms: Some(41_000),
         launch_evidence: Some(ManagedLaunchEvidence {
-            tmux_pane_id: "%42".into(),
+            channel_id: "%42".into(),
             provider_process,
         }),
         terminal_opened_at_ms: Some(42_000),

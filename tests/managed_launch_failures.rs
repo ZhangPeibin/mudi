@@ -1,13 +1,14 @@
 use anyhow::Result;
-use mudi::adapters::managed_sessions::{TmuxLaunchBroker, TmuxManagedLaunchCleanup};
-use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
+use mudi::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use mudi::adapters::providers::state::ProcessIdentity;
-use mudi::adapters::providers::{ProviderBindingEvidence, ProviderExecutables};
-use mudi::application::managed_sessions::{
-    BindingOutcome, EvidenceBinder, ManagedLaunchAction, ManagedLaunchBroker, ManagedLaunchCleanup,
-    ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchTarget,
-    ManagedSessionService, ManagedTerminalAccess, PrivateTmuxEnvironment, ProcessEvidence,
-    ProviderNewCommand, ProviderProcessObservation,
+use mudi::adapters::providers::ProviderBindingEvidence;
+use mudi::adapters::system::tmux::{TmuxLaunchBroker, TmuxManagedLaunchCleanup};
+use mudi::application::managed_session::{
+    BindingOutcome, ManagedControlChannel, ManagedLaunchAction, ManagedLaunchBroker,
+    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchReconciler,
+    ManagedLaunchRecoveryService, ManagedLaunchRegistration, ManagedLaunchStatus,
+    ManagedLaunchTarget, ManagedTerminalAccess, ProcessEvidence, ProviderLaunchCommand,
+    ProviderProcessObservation,
 };
 use mudi::domain::{Provider, SourceFormat, SourceMetadata};
 use std::fs;
@@ -23,6 +24,7 @@ impl ManagedLaunchBroker for RecordingLaunchBroker {
     fn launch(
         &mut self,
         _registration: &ManagedLaunchRegistration,
+        _command: &ProviderLaunchCommand,
     ) -> Result<ManagedLaunchEvidence> {
         panic!("Cancel Start must not launch another Provider")
     }
@@ -76,12 +78,11 @@ fn cancel_start_stops_only_a_binding_launch_and_removes_its_registration() {
     let temp = TempDir::new("cancel-binding");
     let store_path = temp.path().join("managed.db");
     let registration = registration("launch-cancel", temp.path());
-    let store = ManagedLaunchStore::open(&store_path).unwrap();
+    let store = StateManagedSessionRepository::open(&store_path).unwrap();
     store.insert(&registration).unwrap();
     let cancelled = Arc::new(Mutex::new(Vec::new()));
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedLaunchRecoveryService::new(
         store,
-        provider_executables(temp.path()),
         Box::new(RecordingLaunchBroker {
             cancelled: cancelled.clone(),
         }),
@@ -91,7 +92,7 @@ fn cancel_start_stops_only_a_binding_launch_and_removes_its_registration() {
     service.cancel_start(&registration.id).unwrap();
 
     assert_eq!(*cancelled.lock().unwrap(), vec![registration.id.clone()]);
-    let store = ManagedLaunchStore::open(&store_path).unwrap();
+    let store = StateManagedSessionRepository::open(&store_path).unwrap();
     assert!(store.get(&registration.id).unwrap().is_none());
     assert!(store.managed_sessions().unwrap().is_empty());
     assert!(store.managed_current_runs().unwrap().is_empty());
@@ -101,10 +102,10 @@ fn cancel_start_stops_only_a_binding_launch_and_removes_its_registration() {
 fn confirmed_absent_provider_fails_registration_and_cleans_empty_private_tmux() {
     let temp = TempDir::new("confirmed-absent");
     let registration = registration("launch-absent", temp.path());
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
     let cleaned = Arc::new(Mutex::new(Vec::new()));
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(ProviderProcessObservation::Absent)),
         Box::new(RecordingCleanup {
             cleaned: cleaned.clone(),
@@ -134,10 +135,10 @@ fn contradictory_live_evidence_needs_review_without_retry_or_managed_authority()
         .as_ref()
         .unwrap()
         .provider_process;
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
     let cleaned = Arc::new(Mutex::new(Vec::new()));
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(ProviderProcessObservation::Live(
             process,
         ))),
@@ -184,9 +185,8 @@ fn contradictory_live_evidence_needs_review_without_retry_or_managed_authority()
     assert!(store.managed_sessions().unwrap().is_empty());
     assert!(store.managed_current_runs().unwrap().is_empty());
     let cancelled = Arc::new(Mutex::new(Vec::new()));
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedLaunchRecoveryService::new(
         store,
-        provider_executables(temp.path()),
         Box::new(RecordingLaunchBroker {
             cancelled: cancelled.clone(),
         }),
@@ -252,7 +252,7 @@ fn registration_state_machine_exposes_only_explicitly_permitted_actions() {
 #[test]
 fn registration_listing_prioritizes_recoverable_states_then_orders_newest_first() {
     let temp = TempDir::new("registration-order");
-    let store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     let mut binding = registration("R-BINDING", temp.path());
     binding.created_at_ms = 30_000;
     let mut review = registration("R-REVIEW", temp.path());
@@ -283,14 +283,12 @@ fn retry_open_terminal_only_reuses_the_preserved_launch_scene() {
     registration.status = ManagedLaunchStatus::NeedsReview;
     registration.terminal_error = Some("Terminal.app launch failed".into());
     registration.binding_initializer = true;
-    registration.provider_command.arguments = vec!["initializer-must-not-repeat".into()];
     let original_evidence = registration.launch_evidence.clone();
-    let store = ManagedLaunchStore::open(&store_path).unwrap();
+    let store = StateManagedSessionRepository::open(&store_path).unwrap();
     store.insert(&registration).unwrap();
     let opened = Arc::new(Mutex::new(Vec::new()));
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedLaunchRecoveryService::new(
         store,
-        provider_executables(temp.path()),
         Box::new(RecordingLaunchBroker {
             cancelled: Arc::new(Mutex::new(Vec::new())),
         }),
@@ -310,10 +308,9 @@ fn retry_open_terminal_only_reuses_the_preserved_launch_scene() {
         ManagedLaunchStatus::NeedsReview
     );
     assert_eq!(outcome.registration.launch_evidence, original_evidence);
-    assert!(outcome.registration.provider_command.arguments.is_empty());
     assert_eq!(outcome.registration.terminal_opened_at_ms, Some(50_000));
     assert!(outcome.registration.terminal_error.is_none());
-    let store = ManagedLaunchStore::open(&store_path).unwrap();
+    let store = StateManagedSessionRepository::open(&store_path).unwrap();
     assert!(store.managed_sessions().unwrap().is_empty());
     assert!(store.managed_current_runs().unwrap().is_empty());
 }
@@ -324,12 +321,11 @@ fn needs_review_can_open_terminal_for_inspection_without_changing_status() {
     let mut registration = registration("launch-terminal-inspection", temp.path());
     registration.status = ManagedLaunchStatus::NeedsReview;
     registration.binding_error = Some("native Session evidence conflicts".into());
-    let store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
     let opened = Arc::new(Mutex::new(Vec::new()));
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedLaunchRecoveryService::new(
         store,
-        provider_executables(temp.path()),
         Box::new(RecordingLaunchBroker {
             cancelled: Arc::new(Mutex::new(Vec::new())),
         }),
@@ -360,42 +356,29 @@ fn needs_review_diagnostics_include_only_launch_metadata() {
     registration.status = ManagedLaunchStatus::NeedsReview;
     registration.session_alias = "private title".into();
     registration.description = Some("private description".into());
-    registration.provider_command.arguments = vec!["private initializer content".into()];
     registration.binding_error = Some("native Session evidence conflicts".into());
-    let store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
-    let service = ManagedSessionService::new(
+    let service = ManagedLaunchRecoveryService::new(
         store,
-        provider_executables(temp.path()),
         Box::new(RecordingLaunchBroker {
             cancelled: Arc::new(Mutex::new(Vec::new())),
         }),
         Box::new(NeverOpenTerminal),
     );
 
-    let diagnostics = service.copy_diagnostics(&registration.id).unwrap();
+    let diagnostics = service.diagnostics(&registration.id).unwrap();
 
-    for expected in [
-        "Managed Launch Registration: launch-diagnostics",
-        "Status: Needs Review",
-        "Provider: Codex CLI",
-        &format!("Working directory: {}", temp.path().display()),
-        "Launched pane process: pid 42, started 41000",
-        "Evidence: private tmux pane %42; Binding Receipt not issued",
-        "Binding error: native Session evidence conflicts",
-    ] {
-        assert!(
-            diagnostics.contains(expected),
-            "missing {expected:?} in:\n{diagnostics}"
-        );
-    }
-    for private in [
-        "private title",
-        "private description",
-        "private initializer content",
-    ] {
-        assert!(!diagnostics.contains(private), "leaked {private:?}");
-    }
+    assert_eq!(diagnostics.registration_id, "launch-diagnostics");
+    assert_eq!(diagnostics.provider, Provider::CodexCli);
+    assert_eq!(diagnostics.working_directory, temp.path());
+    assert_eq!(diagnostics.launch_process.pid, 42);
+    assert_eq!(diagnostics.launch_process.started_at_ms, 41_000);
+    assert_eq!(diagnostics.channel_id, "%42");
+    assert_eq!(
+        diagnostics.binding_error.as_deref(),
+        Some("native Session evidence conflicts")
+    );
 }
 
 #[test]
@@ -417,9 +400,9 @@ fn confirmed_absence_cleans_only_the_registered_private_tmux_environment() {
         fs::set_permissions(&tmux, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let registration = registration("launch-cleanup", temp.path());
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(ProviderProcessObservation::Absent)),
         Box::new(TmuxManagedLaunchCleanup::new(tmux)),
     );
@@ -442,7 +425,7 @@ fn confirmed_absence_cleans_only_the_registered_private_tmux_environment() {
             "-f",
             "/dev/null",
             "-L",
-            registration.tmux.socket_name.as_str(),
+            registration.control_channel.namespace.as_str(),
             "has-session",
             "-t",
             "managed",
@@ -457,9 +440,9 @@ fn nonempty_private_tmux_is_preserved_for_review() {
     let temp = TempDir::new("tmux-not-empty");
     let tmux = executable(temp.path(), "tmux");
     let registration = registration("launch-scene-preserved", temp.path());
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(ProviderProcessObservation::Absent)),
         Box::new(TmuxManagedLaunchCleanup::new(tmux)),
     );
@@ -498,11 +481,10 @@ fn cancel_start_terminates_the_registered_private_tmux_environment() {
         fs::set_permissions(&tmux, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let registration = registration("launch-cancel-tmux", temp.path());
-    let store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedLaunchRecoveryService::new(
         store,
-        provider_executables(temp.path()),
         Box::new(TmuxLaunchBroker::new(tmux)),
         Box::new(NeverOpenTerminal),
     );
@@ -520,7 +502,7 @@ fn cancel_start_terminates_the_registered_private_tmux_environment() {
             "-f",
             "/dev/null",
             "-L",
-            registration.tmux.socket_name.as_str(),
+            registration.control_channel.namespace.as_str(),
             "kill-server",
         ]
     );
@@ -537,9 +519,9 @@ fn already_absent_private_tmux_is_a_successful_empty_cleanup() {
         fs::set_permissions(&tmux, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let registration = registration("launch-already-clean", temp.path());
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(ProviderProcessObservation::Absent)),
         Box::new(TmuxManagedLaunchCleanup::new(tmux)),
     );
@@ -567,18 +549,14 @@ fn registration(id: &str, working_directory: &Path) -> ManagedLaunchRegistration
         session_alias: "Investigate launch".into(),
         description: None,
         binding_initializer: false,
-        provider_command: ProviderNewCommand {
-            executable: PathBuf::from("/usr/bin/true"),
-            arguments: Vec::new(),
-        },
-        tmux: PrivateTmuxEnvironment {
-            socket_name: format!("mudi-{id}"),
-            session_name: "managed".into(),
+        control_channel: ManagedControlChannel {
+            namespace: format!("mudi-{id}"),
+            run_target: "managed".into(),
         },
         created_at_ms: 40_000,
         launched_at_ms: Some(41_000),
         launch_evidence: Some(ManagedLaunchEvidence {
-            tmux_pane_id: "%42".into(),
+            channel_id: "%42".into(),
             provider_process: ProcessIdentity {
                 pid: 42,
                 started_at_ms: 41_000,
@@ -588,12 +566,6 @@ fn registration(id: &str, working_directory: &Path) -> ManagedLaunchRegistration
         terminal_error: None,
         binding_error: None,
     }
-}
-
-fn provider_executables(root: &Path) -> ProviderExecutables {
-    let claude = executable(root, "claude");
-    let codex = executable(root, "codex");
-    ProviderExecutables::new(claude, codex)
 }
 
 fn executable(root: &Path, name: &str) -> PathBuf {

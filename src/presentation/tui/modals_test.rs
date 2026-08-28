@@ -17,12 +17,12 @@ fn rendered(terminal: &Terminal<TestBackend>) -> String {
 fn cancellation_confirmation_identifies_the_selected_task() {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    let ui = Ui {
-        task_cancellation_confirmation: Some(super::super::TaskCancellationConfirmation {
+    let mut ui = Ui::default();
+    ui.push_confirmation(super::super::overlay::ConfirmationState::TaskCancellation(
+        super::super::TaskCancellationConfirmation {
             task_id: "task-to-cancel".into(),
-        }),
-        ..Ui::default()
-    };
+        },
+    ));
 
     terminal
         .draw(|frame| draw_overlays(frame, &Snapshot::default(), &ui))

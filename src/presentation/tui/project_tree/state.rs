@@ -2,7 +2,7 @@
 
 use super::model::{ProjectTreeKey, ProjectTreeRow};
 use super::ProjectOrder;
-use crate::application::managed_sessions::ManagedLaunchTarget;
+use crate::application::managed_session::ManagedLaunchTarget;
 use crate::domain::{ProjectIdentity, Session, SessionIdentity};
 use crate::presentation::app::Snapshot;
 use std::cell::RefCell;

@@ -21,7 +21,16 @@ fn render_buffer(width: u16, signals: &[RecentSignal]) -> Buffer {
     let mut terminal = Terminal::new(backend).unwrap();
     let ui = Ui::default();
     terminal
-        .draw(|frame| draw_panel(frame, frame.area(), signals, 3_000, &ui))
+        .draw(|frame| {
+            draw_panel(
+                frame,
+                frame.area(),
+                signals,
+                &Default::default(),
+                3_000,
+                &ui,
+            )
+        })
         .unwrap();
     terminal.backend().buffer().clone()
 }

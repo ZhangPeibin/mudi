@@ -1,4 +1,4 @@
-use crate::application::managed_sessions::{BindingProcessObservation, ProviderBindingEvidence};
+use crate::application::managed_session::{BindingProcessObservation, ProviderBindingEvidence};
 use crate::application::observation::read_model::{
     ManagedCurrentRunSummary, ManagedResumeSummary, RefreshDiagnostic, ScanStats,
 };

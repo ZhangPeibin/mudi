@@ -6,20 +6,21 @@ use crate::adapters::handoff::{
     ReconciliationOnlyLauncher,
 };
 use crate::adapters::macos::notification::MacosNotification;
-use crate::adapters::managed_sessions::{
-    discover_tmux_executable, SystemManagedCurrentRunEvidence, SystemManagedResumeProviderEvidence,
-    SystemProcessEvidence, TmuxManagedLaunchCleanup,
+use crate::adapters::managed_session::{
+    SystemManagedCurrentRunEvidence, SystemManagedResumeProviderEvidence,
 };
 use crate::adapters::observation::IndexedObservationSource;
-use crate::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use crate::adapters::persistence::session_metadata::SessionLabels;
+use crate::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use crate::adapters::persistence::tasks::TaskStore;
 use crate::adapters::providers::registry;
+use crate::adapters::system::process::SystemProcessEvidence;
+use crate::adapters::system::tmux::{discover_tmux_executable, TmuxManagedLaunchCleanup};
 use crate::application::alerts::AlertEngine;
 use crate::application::handoff::{HandoffPaths, ProviderExecutables};
-use crate::application::managed_sessions::{
-    EvidenceBinder, ManagedCurrentRunVerifier, ManagedLaunchRegistration, ManagedResumeVerifier,
-    ProviderBindingEvidence, SystemManagedResumeEvidence,
+use crate::application::managed_session::{
+    CombinedManagedResumeEvidence, ManagedCurrentRunVerifier, ManagedLaunchReconciler,
+    ManagedLaunchRegistration, ManagedResumeVerifier, ProviderBindingEvidence,
 };
 use crate::application::observation::read_model::{
     InMemoryReadModelCache, ManagedCurrentRunSummary, ManagedLaunchSummary, ManagedResumeSummary,
@@ -74,19 +75,22 @@ pub fn open_refresh_cycle_with_cache(
     config: Config,
     cache: Arc<dyn ReadModelCache>,
 ) -> RefreshCycle {
-    let collect_managed_query = ManagedLaunchStore::open(config.managed_launch_store_path())
-        .map(|store| Box::new(store) as Box<dyn ManagedObservationQuery>)
-        .map_err(|error| error.to_string());
+    let collect_managed_query =
+        StateManagedSessionRepository::open(config.managed_launch_store_path())
+            .map(|store| Box::new(store) as Box<dyn ManagedObservationQuery>)
+            .map_err(|error| error.to_string());
     let reconcile_managed_repository = open_managed_repository(&config);
-    let project_managed_query = ManagedLaunchStore::open(config.managed_launch_store_path())
-        .map(|store| Box::new(store) as Box<dyn ManagedProjectionQuery>)
-        .map_err(|error| error.to_string());
+    let project_managed_query =
+        StateManagedSessionRepository::open(config.managed_launch_store_path())
+            .map(|store| Box::new(store) as Box<dyn ManagedProjectionQuery>)
+            .map_err(|error| error.to_string());
     let task_query = TaskStore::open(&config.task_store_path())
         .map(|store| Box::new(store) as Box<dyn OperationTaskQuery>)
         .map_err(|error| error.to_string());
+    let session_metadata = Ok(Box::new(SessionLabels::load(config.label_store_path())) as Box<_>);
     let task_reconciler = open_task_reconciler(&config);
     let tmux_executable = discover_tmux_executable().unwrap_or_default();
-    let managed_binding_reconciler = EvidenceBinder::new(
+    let managed_binding_reconciler = ManagedLaunchReconciler::new(
         Box::new(SystemProcessEvidence),
         Box::new(TmuxManagedLaunchCleanup::new(tmux_executable)),
     );
@@ -101,7 +105,7 @@ pub fn open_refresh_cycle_with_cache(
             SystemManagedCurrentRunEvidence::new(config.clone()),
         )),
         managed_resume_verifier: ManagedResumeVerifier::new(Box::new(
-            SystemManagedResumeEvidence::new(
+            CombinedManagedResumeEvidence::new(
                 Box::new(SystemProcessEvidence),
                 Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
             ),
@@ -115,6 +119,7 @@ pub fn open_refresh_cycle_with_cache(
     let projector = ProjectionService::new(ProjectPorts {
         task_query,
         managed_query: project_managed_query,
+        session_metadata,
     });
     let publisher = PublicationService::new(
         cache,
@@ -136,17 +141,17 @@ pub fn open_refresh_cycle_with_cache(
 fn open_managed_repository(
     config: &Config,
 ) -> std::result::Result<
-    Box<dyn crate::application::managed_sessions::ManagedSessionRepository>,
+    Box<dyn crate::application::managed_session::ManagedSessionRepository>,
     String,
 > {
-    ManagedLaunchStore::open(config.managed_launch_store_path())
+    StateManagedSessionRepository::open(config.managed_launch_store_path())
         .map(|store| Box::new(store) as Box<_>)
         .map_err(|error| error.to_string())
 }
 
-impl ManagedObservationQuery for ManagedLaunchStore {
+impl ManagedObservationQuery for StateManagedSessionRepository {
     fn binding_registrations(&self) -> anyhow::Result<Vec<ManagedLaunchRegistration>> {
-        ManagedLaunchStore::binding_registrations(self)
+        StateManagedSessionRepository::binding_registrations(self)
     }
 
     fn verified_managed_current_runs(
@@ -168,13 +173,13 @@ impl ManagedObservationQuery for ManagedLaunchStore {
     }
 }
 
-impl ManagedProjectionQuery for ManagedLaunchStore {
+impl ManagedProjectionQuery for StateManagedSessionRepository {
     fn apply_provenance(&self, sessions: &mut [Session]) -> anyhow::Result<()> {
-        ManagedLaunchStore::apply_provenance(self, sessions)
+        StateManagedSessionRepository::apply_provenance(self, sessions)
     }
 
     fn managed_launches(&self) -> anyhow::Result<Vec<ManagedLaunchSummary>> {
-        ManagedLaunchStore::registrations(self).map(|registrations| {
+        StateManagedSessionRepository::registrations(self).map(|registrations| {
             registrations
                 .iter()
                 .map(ManagedLaunchSummary::from)

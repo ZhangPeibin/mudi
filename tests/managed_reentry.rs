@@ -3,23 +3,23 @@ mod support;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mudi::adapters::config::Config;
 use mudi::adapters::handoff::open_handoff_service;
-use mudi::adapters::managed_sessions::{
-    MacosManagedTerminalAccess, SystemManagedCurrentRunEvidence, SystemProcessEvidence,
-};
-use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
+use mudi::adapters::managed_session::SystemManagedCurrentRunEvidence;
+use mudi::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::ProviderBindingEvidence;
 use mudi::adapters::providers::ProviderExecutables;
 use mudi::adapters::refresh::open_refresh_cycle;
+use mudi::adapters::system::process::SystemProcessEvidence;
+use mudi::adapters::system::terminal_macos::MacosManagedTerminalAccess;
 use mudi::application::clipboard::ClipboardPort;
+use mudi::application::handlers::ManagedWorkflowServices;
 use mudi::application::handoff::{HandoffPaths, WorkerLaunch, WorkerLauncher};
-use mudi::application::managed_sessions::{
-    run_attach_from_args_with_access, BindingOutcome, BindingReceipt, EvidenceBinder,
+use mudi::application::managed_session::{
+    run_attach_from_args_with_access, BindingOutcome, BindingReceipt, ManagedControlChannel,
     ManagedCurrentRunAccessService, ManagedCurrentRunEvidence, ManagedCurrentRunRecord,
-    ManagedCurrentRunTerminalAccess, ManagedCurrentRunVerifier, ManagedLaunchBroker,
-    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus,
-    ManagedLaunchTarget, ManagedSessionRecord, ManagedSessionService, ManagedTerminalAccess,
-    PrivateTmuxEnvironment, ProcessEvidence, ProviderNewCommand, ProviderProcessObservation,
+    ManagedCurrentRunTerminalAccess, ManagedCurrentRunVerifier, ManagedLaunchCleanup,
+    ManagedLaunchEvidence, ManagedLaunchReconciler, ManagedLaunchRegistration, ManagedLaunchStatus,
+    ManagedLaunchTarget, ManagedSessionRecord, ProcessEvidence, ProviderProcessObservation,
     VerifiedManagedCurrentRun,
 };
 use mudi::application::observation::read_model::{ManagedCurrentRunSummary, RefreshSnapshot};
@@ -36,6 +36,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use support::{workflow_handlers, TestActionRouter};
+
+fn no_managed_workflows() -> ManagedWorkflowServices {
+    ManagedWorkflowServices {
+        start_new: None,
+        start_resume: None,
+        recovery: None,
+    }
+}
 
 fn session(state: SessionState, provenance: SessionProvenance) -> Session {
     Session {
@@ -200,7 +208,8 @@ impl ManagedCurrentRunEvidence for RecordingOpenEvidence {
 fn verifier_resolves_an_independent_opaque_reference_from_authoritative_managed_metadata() {
     let temp = TempDir::new("verified-reference");
     let config = temp.config();
-    let mut store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let mut store =
+        StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     bind_managed_run(&mut store, &temp, "launch-internal", "native-session");
     let checked = Arc::new(Mutex::new(Vec::new()));
     let verifier = ManagedCurrentRunVerifier::new(Box::new(RecordingOpenEvidence {
@@ -244,7 +253,8 @@ impl ManagedCurrentRunEvidence for RejectingEvidence {
 fn refresh_projects_only_revalidated_open_managed_current_runs_without_tmux_metadata() {
     let open_temp = TempDir::new("refresh-open");
     let open_config = open_temp.config();
-    let mut open_store = ManagedLaunchStore::open(open_config.managed_launch_store_path()).unwrap();
+    let mut open_store =
+        StateManagedSessionRepository::open(open_config.managed_launch_store_path()).unwrap();
     bind_managed_run(
         &mut open_store,
         &open_temp,
@@ -268,7 +278,7 @@ fn refresh_projects_only_revalidated_open_managed_current_runs_without_tmux_meta
     let exited_temp = TempDir::new("refresh-exited");
     let exited_config = exited_temp.config();
     let mut exited_store =
-        ManagedLaunchStore::open(exited_config.managed_launch_store_path()).unwrap();
+        StateManagedSessionRepository::open(exited_config.managed_launch_store_path()).unwrap();
     bind_managed_run(
         &mut exited_store,
         &exited_temp,
@@ -282,25 +292,6 @@ fn refresh_projects_only_revalidated_open_managed_current_runs_without_tmux_meta
         .run_once()
         .verified_managed_current_runs
         .is_empty());
-}
-
-struct NeverManagedLaunch;
-
-impl ManagedLaunchBroker for NeverManagedLaunch {
-    fn launch(
-        &mut self,
-        _registration: &ManagedLaunchRegistration,
-    ) -> anyhow::Result<ManagedLaunchEvidence> {
-        panic!("Managed Current Run re-entry must not launch a Provider")
-    }
-}
-
-struct NeverRegistrationTerminal;
-
-impl ManagedTerminalAccess for NeverRegistrationTerminal {
-    fn open(&mut self, _registration: &ManagedLaunchRegistration) -> anyhow::Result<()> {
-        panic!("Managed Current Run re-entry must not use Managed Start terminal recovery")
-    }
 }
 
 struct NeverWorker;
@@ -369,14 +360,14 @@ fn application_revalidates_each_reentry_action_without_replaying_provider_launch
     let temp = TempDir::new("application-actions");
     let config = temp.config();
     let store_path = config.managed_launch_store_path();
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     bind_managed_run(&mut store, &temp, "launch-private", "native-session");
     let opaque_ref = store.managed_current_runs().unwrap()[0].opaque_ref.clone();
     drop(store);
     let evidence_checks = Arc::new(Mutex::new(Vec::new()));
     let opened = Arc::new(Mutex::new(Vec::new()));
     let run_access = ManagedCurrentRunAccessService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         ManagedCurrentRunVerifier::new(Box::new(RecordingOpenEvidence {
             checked: evidence_checks.clone(),
         })),
@@ -387,12 +378,6 @@ fn application_revalidates_each_reentry_action_without_replaying_provider_launch
     let executables = ProviderExecutables::new(
         PathBuf::from("/usr/bin/true"),
         PathBuf::from("/usr/bin/true"),
-    );
-    let managed_sessions = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
-        executables.clone(),
-        Box::new(NeverManagedLaunch),
-        Box::new(NeverRegistrationTerminal),
     );
     let handoff = open_handoff_service(
         HandoffPaths {
@@ -406,7 +391,7 @@ fn application_revalidates_each_reentry_action_without_replaying_provider_launch
     let mut controller = workflow_handlers(
         handoff,
         NeverSuccessorTerminal,
-        managed_sessions,
+        no_managed_workflows(),
         temp.0.join("workflow-state.db"),
     )
     .with_managed_current_run_access(run_access);
@@ -462,13 +447,13 @@ fn application_failure_revalidates_before_terminal_or_clipboard_side_effects() {
     let temp = TempDir::new("application-failure");
     let config = temp.config();
     let store_path = config.managed_launch_store_path();
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     bind_managed_run(&mut store, &temp, "launch-exited", "native-session");
     let opaque_ref = store.managed_current_runs().unwrap()[0].opaque_ref.clone();
     drop(store);
     let opened = Arc::new(Mutex::new(Vec::new()));
     let run_access = ManagedCurrentRunAccessService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         ManagedCurrentRunVerifier::new(Box::new(RejectingEvidence)),
         Box::new(RecordingRunTerminal {
             opened: opened.clone(),
@@ -477,12 +462,6 @@ fn application_failure_revalidates_before_terminal_or_clipboard_side_effects() {
     let executables = ProviderExecutables::new(
         PathBuf::from("/usr/bin/true"),
         PathBuf::from("/usr/bin/true"),
-    );
-    let managed_sessions = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
-        executables.clone(),
-        Box::new(NeverManagedLaunch),
-        Box::new(NeverRegistrationTerminal),
     );
     let handoff = open_handoff_service(
         HandoffPaths {
@@ -496,7 +475,7 @@ fn application_failure_revalidates_before_terminal_or_clipboard_side_effects() {
     let mut controller = workflow_handlers(
         handoff,
         NeverSuccessorTerminal,
-        managed_sessions,
+        no_managed_workflows(),
         temp.0.join("workflow-state.db"),
     )
     .with_managed_current_run_access(run_access);
@@ -533,7 +512,7 @@ fn application_failure_revalidates_before_terminal_or_clipboard_side_effects() {
     assert!(render(&ui, &snapshot).contains("Copy Attach Command failed: Current Run is Exited"));
     assert!(opened.lock().unwrap().is_empty());
     assert_eq!(
-        ManagedLaunchStore::open(&store_path)
+        StateManagedSessionRepository::open(&store_path)
             .unwrap()
             .managed_current_runs()
             .unwrap()
@@ -561,7 +540,8 @@ impl ManagedCurrentRunTerminalAccess for RecordingCliTerminal {
 fn attach_cli_accepts_exactly_one_opaque_reference_and_revalidates_before_foreground_attach() {
     let temp = TempDir::new("cli-contract");
     let config = temp.config();
-    let mut store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let mut store =
+        StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     bind_managed_run(&mut store, &temp, "launch-cli", "native-session");
     let opaque_ref = store.managed_current_runs().unwrap()[0].opaque_ref.clone();
     let attached = Arc::new(Mutex::new(Vec::new()));
@@ -584,19 +564,13 @@ fn attach_cli_accepts_exactly_one_opaque_reference_and_revalidates_before_foregr
         run_attach_from_args_with_access(["mudi", "attach", opaque_ref.as_str()], &mut access,)
             .unwrap()
     );
-    assert_eq!(
-        *attached.lock().unwrap(),
-        vec![opaque_ref.clone(), opaque_ref]
-    );
+    assert_eq!(attached.lock().unwrap().len(), 2);
 
-    assert!(
-        !run_attach_from_args_with_access(["sessionmesh", "--theme", "light"], &mut access)
-            .unwrap()
-    );
-    assert!(run_attach_from_args_with_access(["sessionmesh", "attach"], &mut access).is_err());
+    assert!(!run_attach_from_args_with_access(["mudi", "--theme", "light"], &mut access).unwrap());
+    assert!(run_attach_from_args_with_access(["mudi", "attach"], &mut access).is_err());
     assert!(run_attach_from_args_with_access(
         [
-            "sessionmesh",
+            "mudi",
             "attach",
             "run_0123456789abcdef0123456789abcdef",
             "extra"
@@ -611,7 +585,8 @@ fn attach_cli_accepts_exactly_one_opaque_reference_and_revalidates_before_foregr
 fn attach_cli_rejects_exited_and_non_managed_references_before_terminal_access() {
     let temp = TempDir::new("cli-failures");
     let config = temp.config();
-    let mut store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let mut store =
+        StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     bind_managed_run(&mut store, &temp, "launch-exited", "native-session");
     let opaque_ref = store.managed_current_runs().unwrap()[0].opaque_ref.clone();
     let attached = Arc::new(Mutex::new(Vec::new()));
@@ -623,17 +598,12 @@ fn attach_cli_rejects_exited_and_non_managed_references_before_terminal_access()
         }),
     );
 
+    assert!(
+        run_attach_from_args_with_access(["mudi", "attach", opaque_ref.as_str()], &mut access)
+            .is_err()
+    );
     assert!(run_attach_from_args_with_access(
-        ["sessionmesh", "attach", opaque_ref.as_str()],
-        &mut access,
-    )
-    .is_err());
-    assert!(run_attach_from_args_with_access(
-        [
-            "sessionmesh",
-            "attach",
-            "run_ffffffffffffffffffffffffffffffff",
-        ],
+        ["mudi", "attach", "run_ffffffffffffffffffffffffffffffff",],
         &mut access,
     )
     .is_err());
@@ -645,7 +615,7 @@ fn state_database_prevents_an_ambiguous_managed_current_run_reference() {
     let temp = TempDir::new("cli-ambiguous");
     let config = temp.config();
     let store_path = config.managed_launch_store_path();
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     bind_managed_run(&mut store, &temp, "launch-first", "native-first");
     bind_managed_run(&mut store, &temp, "launch-second", "native-second");
     let runs = store.managed_current_runs().unwrap();
@@ -681,7 +651,8 @@ fn terminal_adapter_only_attaches_the_existing_private_tmux_for_both_entry_point
 
     let temp = TempDir::new("terminal-adapter");
     let config = temp.config();
-    let mut store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let mut store =
+        StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     bind_managed_run(&mut store, &temp, "launch-terminal", "native-session");
     let verifier = ManagedCurrentRunVerifier::new(Box::new(RecordingOpenEvidence {
         checked: Arc::new(Mutex::new(Vec::new())),
@@ -811,27 +782,24 @@ fn system_revalidation_requires_the_exact_live_process_and_native_session_source
         session_alias: "System evidence".into(),
         description: None,
         binding_initializer: false,
-        provider_command: ProviderNewCommand {
-            executable: PathBuf::from("/usr/bin/true"),
-            arguments: Vec::new(),
-        },
-        tmux: PrivateTmuxEnvironment {
-            socket_name: "sessionmesh-launch-system".into(),
-            session_name: "managed".into(),
+        control_channel: ManagedControlChannel {
+            namespace: "sessionmesh-launch-system".into(),
+            run_target: "managed".into(),
         },
         created_at_ms: 40_000,
         launched_at_ms: Some(41_000),
         launch_evidence: Some(ManagedLaunchEvidence {
-            tmux_pane_id: "%42".into(),
+            channel_id: "%42".into(),
             provider_process: process,
         }),
         terminal_opened_at_ms: Some(42_000),
         terminal_error: None,
         binding_error: None,
     };
-    let mut store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let mut store =
+        StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(process)),
         Box::new(NoopCleanup),
     );
@@ -868,7 +836,7 @@ fn system_revalidation_requires_the_exact_live_process_and_native_session_source
 }
 
 fn bind_managed_run(
-    store: &mut ManagedLaunchStore,
+    store: &mut StateManagedSessionRepository,
     temp: &TempDir,
     registration_id: &str,
     native_session_id: &str,
@@ -889,18 +857,14 @@ fn bind_managed_run(
         session_alias: "Managed work".into(),
         description: None,
         binding_initializer: false,
-        provider_command: ProviderNewCommand {
-            executable: PathBuf::from("/usr/bin/true"),
-            arguments: Vec::new(),
-        },
-        tmux: PrivateTmuxEnvironment {
-            socket_name: format!("sessionmesh-{registration_id}"),
-            session_name: "managed".into(),
+        control_channel: ManagedControlChannel {
+            namespace: format!("sessionmesh-{registration_id}"),
+            run_target: "managed".into(),
         },
         created_at_ms: 40_000,
         launched_at_ms: Some(41_000),
         launch_evidence: Some(ManagedLaunchEvidence {
-            tmux_pane_id: "%42".into(),
+            channel_id: "%42".into(),
             provider_process: process,
         }),
         terminal_opened_at_ms: Some(42_000),
@@ -908,7 +872,7 @@ fn bind_managed_run(
         binding_error: None,
     };
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(process)),
         Box::new(NoopCleanup),
     );

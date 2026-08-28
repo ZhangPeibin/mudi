@@ -5,16 +5,61 @@ use super::{
     Ui,
 };
 use crate::application::{CRIT_PCT, WARN_PCT};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarState, Wrap};
 use ratatui::Frame;
 
+/// Convert one input event for the active Guide workflow.
+pub(super) fn handle_key(ui: &mut Ui, key: KeyEvent) -> std::io::Result<bool> {
+    if ui.overlay.guide().is_none() {
+        return Ok(false);
+    }
+    if key.code == KeyCode::Esc {
+        ui.profile.help_seen = true;
+        ui.save_profile()?;
+        ui.close_guide();
+        return Ok(true);
+    }
+    let guide = ui.overlay.guide_mut().expect("Guide overlay checked above");
+    match key.code {
+        KeyCode::Down | KeyCode::Char('j') if guide.pane == GuidePane::Categories => {
+            guide.category = guide.category.next();
+            guide.reset_scroll();
+        }
+        KeyCode::Up | KeyCode::Char('k') if guide.pane == GuidePane::Categories => {
+            guide.category = guide.category.previous();
+            guide.reset_scroll();
+        }
+        KeyCode::Down | KeyCode::Char('j') if guide.pane == GuidePane::Content => {
+            let max_scroll = guide.max_scroll.get();
+            guide.scroll = guide
+                .scroll
+                .min(max_scroll)
+                .saturating_add(1)
+                .min(max_scroll);
+        }
+        KeyCode::Up | KeyCode::Char('k') if guide.pane == GuidePane::Content => {
+            guide.scroll = guide.scroll.min(guide.max_scroll.get()).saturating_sub(1);
+        }
+        KeyCode::Tab | KeyCode::Right if guide.pane == GuidePane::Categories => {
+            guide.pane = GuidePane::Content;
+        }
+        KeyCode::BackTab | KeyCode::Left if guide.pane == GuidePane::Content => {
+            guide.pane = GuidePane::Categories;
+        }
+        _ => {}
+    }
+    Ok(true)
+}
+
 pub(super) fn draw(f: &mut Frame, ui: &Ui) {
+    let guide = ui.overlay.guide().expect("Guide overlay checked by caller");
     let theme = ui.theme.palette();
     let area = centered_rect(80, 76, f.area());
-    let focus_hint = match ui.guide_pane {
+    let focus_hint = match guide.pane {
         GuidePane::Categories => " j/k Categories | Tab/Right Content | Esc Close ",
         GuidePane::Content => " j/k Scroll | Shift+Tab/Left Categories | Esc Close ",
     };
@@ -32,7 +77,7 @@ pub(super) fn draw(f: &mut Frame, ui: &Ui) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(24), Constraint::Percentage(76)])
         .split(inner);
-    let content = guide_content(ui.guide_category, theme, ui.active_theme_name());
+    let content = guide_content(guide.category, theme, ui.active_theme_name());
     let wrap = Wrap { trim: false };
     // 先判断是否需要滚动条，再用扣除滚动条后的宽度重新测量真实行数。
     let initial_total_lines = Paragraph::new(content.clone())
@@ -47,8 +92,8 @@ pub(super) fn draw(f: &mut Frame, ui: &Ui) {
         .wrap(wrap)
         .line_count(content_area.width);
     let max_scroll = total_lines.saturating_sub(content_area.height as usize);
-    ui.guide_max_scroll.set(max_scroll);
-    let scroll = ui.guide_scroll.min(max_scroll);
+    guide.max_scroll.set(max_scroll);
+    let scroll = guide.scroll.min(max_scroll);
     let mut block = base_block.title_bottom(
         Line::from(Span::styled(focus_hint, Style::default().fg(theme.muted))).left_aligned(),
     );
@@ -64,7 +109,7 @@ pub(super) fn draw(f: &mut Frame, ui: &Ui) {
     let categories = GuideCategory::ALL
         .into_iter()
         .map(|category| {
-            let selected = category == ui.guide_category;
+            let selected = category == guide.category;
             Line::from(Span::styled(
                 format!("{} {}", if selected { '>' } else { ' ' }, category.label()),
                 if selected {
@@ -84,13 +129,11 @@ pub(super) fn draw(f: &mut Frame, ui: &Ui) {
             .block(
                 Block::default()
                     .borders(Borders::RIGHT)
-                    .border_style(
-                        Style::default().fg(if ui.guide_pane == GuidePane::Categories {
-                            theme.accent
-                        } else {
-                            theme.border
-                        }),
-                    ),
+                    .border_style(Style::default().fg(if guide.pane == GuidePane::Categories {
+                        theme.accent
+                    } else {
+                        theme.border
+                    })),
             )
             .wrap(Wrap { trim: false }),
         panes[0],

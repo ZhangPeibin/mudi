@@ -3,9 +3,10 @@
 use crate::application::handoff::{
     CompletionNotice, CompletionNotifier, HandoffService, WorkerLauncher,
 };
-use crate::application::managed_sessions::{
-    ManagedCurrentRunAccessService, ManagedNewOutcome, ManagedNewRequest, ManagedResumeOutcome,
-    ManagedResumeRequest, ManagedSessionService, ManagedTerminalOutcome,
+use crate::application::managed_session::{
+    ManagedCurrentRunAccessService, ManagedLaunchDiagnostics, ManagedLaunchRecoveryService,
+    ManagedNewOutcome, ManagedNewRequest, ManagedNewService, ManagedResumeOutcome,
+    ManagedResumeRequest, ManagedResumeService, ManagedTerminalOutcome,
 };
 use crate::application::observation::read_model::RefreshSnapshot;
 use crate::application::observation::Clock;
@@ -18,7 +19,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::application::managed_sessions::ManagedLaunchTarget;
+use crate::application::managed_session::ManagedLaunchTarget;
 
 pub trait ManagedTargetResolver: Send + Sync {
     fn resolve(&self, directory: &Path) -> anyhow::Result<ManagedLaunchTarget>;
@@ -111,6 +112,12 @@ pub struct WorkflowPorts {
     pub successor_runtime: Arc<dyn SuccessorRuntime>,
     pub target_resolver: Box<dyn ManagedTargetResolver>,
     pub session_metadata: Box<dyn SessionMetadataRepository>,
+}
+
+pub struct ManagedWorkflowServices {
+    pub start_new: Option<ManagedNewService>,
+    pub start_resume: Option<ManagedResumeService>,
+    pub recovery: Option<ManagedLaunchRecoveryService>,
 }
 
 struct WorkflowRuntimePorts {
@@ -307,7 +314,9 @@ impl SessionMetadataHandler {
 pub struct WorkflowHandlers<L, T> {
     handoff: HandoffHandler<L>,
     terminal_launcher: T,
-    managed_sessions: ManagedSessionService,
+    managed_new: Option<ManagedNewService>,
+    managed_resume: Option<ManagedResumeService>,
+    managed_recovery: Option<ManagedLaunchRecoveryService>,
     managed_current_runs: Option<ManagedCurrentRunAccessService>,
     session_metadata: SessionMetadataHandler,
     ports: WorkflowRuntimePorts,
@@ -317,7 +326,7 @@ impl<L: WorkerLauncher, T: TerminalLauncher> WorkflowHandlers<L, T> {
     pub fn new(
         handoff: HandoffService<L>,
         terminal_launcher: T,
-        managed_sessions: ManagedSessionService,
+        managed: ManagedWorkflowServices,
         ports: WorkflowPorts,
     ) -> Self {
         let WorkflowPorts {
@@ -336,7 +345,9 @@ impl<L: WorkerLauncher, T: TerminalLauncher> WorkflowHandlers<L, T> {
                 successor_runtime,
             ),
             terminal_launcher,
-            managed_sessions,
+            managed_new: managed.start_new,
+            managed_resume: managed.start_resume,
+            managed_recovery: managed.recovery,
             managed_current_runs: None,
             session_metadata: SessionMetadataHandler::new(session_metadata),
             ports: WorkflowRuntimePorts {
@@ -410,8 +421,10 @@ impl<L: WorkerLauncher, T: TerminalLauncher> WorkflowHandlers<L, T> {
         &mut self,
         request: ManagedNewRequest,
     ) -> Result<ManagedNewOutcome, WorkflowError> {
-        self.managed_sessions
-            .start_new(request, self.ports.clock.now_ms())
+        self.managed_new
+            .as_mut()
+            .ok_or(WorkflowError::InvalidState("Managed New is unavailable"))?
+            .start(request, self.ports.clock.now_ms())
             .map_err(Into::into)
     }
 
@@ -419,13 +432,19 @@ impl<L: WorkerLauncher, T: TerminalLauncher> WorkflowHandlers<L, T> {
         &mut self,
         request: ManagedResumeRequest,
     ) -> Result<ManagedResumeOutcome, WorkflowError> {
-        self.managed_sessions
-            .start_resume(request, self.ports.clock.now_ms())
+        self.managed_resume
+            .as_mut()
+            .ok_or(WorkflowError::InvalidState("Managed Resume is unavailable"))?
+            .start(request, self.ports.clock.now_ms())
             .map_err(Into::into)
     }
 
     pub fn cancel_managed_start(&mut self, registration_id: &str) -> Result<(), WorkflowError> {
-        self.managed_sessions
+        self.managed_recovery
+            .as_mut()
+            .ok_or(WorkflowError::InvalidState(
+                "Managed launch recovery is unavailable",
+            ))?
             .cancel_start(registration_id)
             .map_err(Into::into)
     }
@@ -434,7 +453,11 @@ impl<L: WorkerLauncher, T: TerminalLauncher> WorkflowHandlers<L, T> {
         &mut self,
         registration_id: &str,
     ) -> Result<ManagedTerminalOutcome, WorkflowError> {
-        self.managed_sessions
+        self.managed_recovery
+            .as_mut()
+            .ok_or(WorkflowError::InvalidState(
+                "Managed launch recovery is unavailable",
+            ))?
             .open_terminal(registration_id, self.ports.clock.now_ms())
             .map_err(Into::into)
     }
@@ -443,7 +466,11 @@ impl<L: WorkerLauncher, T: TerminalLauncher> WorkflowHandlers<L, T> {
         &mut self,
         registration_id: &str,
     ) -> Result<ManagedTerminalOutcome, WorkflowError> {
-        self.managed_sessions
+        self.managed_recovery
+            .as_mut()
+            .ok_or(WorkflowError::InvalidState(
+                "Managed launch recovery is unavailable",
+            ))?
             .retry_open_terminal(registration_id, self.ports.clock.now_ms())
             .map_err(Into::into)
     }
@@ -451,9 +478,13 @@ impl<L: WorkerLauncher, T: TerminalLauncher> WorkflowHandlers<L, T> {
     pub fn managed_launch_diagnostics(
         &self,
         registration_id: &str,
-    ) -> Result<String, WorkflowError> {
-        self.managed_sessions
-            .copy_diagnostics(registration_id)
+    ) -> Result<ManagedLaunchDiagnostics, WorkflowError> {
+        self.managed_recovery
+            .as_ref()
+            .ok_or(WorkflowError::InvalidState(
+                "Managed launch recovery is unavailable",
+            ))?
+            .diagnostics(registration_id)
             .map_err(Into::into)
     }
 
@@ -758,6 +789,37 @@ mod tests {
 
         assert_eq!(outcome, CurationOutcome { changed: 1 });
         assert_eq!(state.lock().unwrap().hidden, vec![target]);
+    }
+
+    #[test]
+    fn curation_handler_persists_only_the_confirmed_bulk_snapshot() {
+        let state = Arc::new(Mutex::new(FakeMetadataState::default()));
+        let mut handler = metadata_handler(state.clone(), false);
+        let first = session("first-exited", SessionState::Exited);
+        let second = session("second-exited", SessionState::Exited);
+        let unconfirmed = session("later-exited", SessionState::Exited);
+        let first_identity = SessionIdentity::from(&first);
+        let second_identity = SessionIdentity::from(&second);
+        let snapshot = RefreshSnapshot {
+            sessions: vec![first, second, unconfirmed],
+            ready: true,
+            ..RefreshSnapshot::default()
+        };
+
+        let outcome = handler
+            .hide(
+                CurationRequest {
+                    sessions: vec![first_identity.clone(), second_identity.clone()],
+                },
+                &snapshot,
+            )
+            .unwrap();
+
+        assert_eq!(outcome, CurationOutcome { changed: 2 });
+        assert_eq!(
+            state.lock().unwrap().hidden,
+            vec![first_identity, second_identity]
+        );
     }
 
     #[test]

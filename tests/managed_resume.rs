@@ -4,22 +4,22 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mudi::adapters::config::Config;
 use mudi::adapters::handoff::open_handoff_service;
-use mudi::adapters::managed_sessions::{
-    SystemManagedResumeProviderEvidence, SystemProcessEvidence,
-};
-use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
+use mudi::adapters::managed_session::SystemManagedResumeProviderEvidence;
+use mudi::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::{registry, ProviderBindingEvidence, ProviderExecutables};
 use mudi::adapters::refresh::open_refresh_cycle;
+use mudi::adapters::system::process::SystemProcessEvidence;
 use mudi::application::clipboard::ClipboardPort;
+use mudi::application::handlers::ManagedWorkflowServices;
 use mudi::application::handoff::{HandoffPaths, WorkerLaunch, WorkerLauncher};
-use mudi::application::managed_sessions::{
-    BindingOutcome, EvidenceBinder, ManagedCurrentRunLifecycle, ManagedLaunchBroker,
-    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchTarget,
+use mudi::application::managed_session::{
+    BindingOutcome, CombinedManagedResumeEvidence, ManagedCurrentRunLifecycle, ManagedLaunchBroker,
+    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchReconciler,
+    ManagedLaunchRecoveryService, ManagedLaunchRegistration, ManagedLaunchTarget,
     ManagedResumeEvidence, ManagedResumeEvidenceCandidate, ManagedResumeProviderEvidence,
-    ManagedResumeRequest, ManagedResumeVerifier, ManagedSessionRecord, ManagedSessionService,
-    ManagedTerminalAccess, ProcessEvidence, ProviderProcessObservation,
-    SystemManagedResumeEvidence,
+    ManagedResumeRequest, ManagedResumeService, ManagedResumeVerifier, ManagedSessionRecord,
+    ManagedTerminalAccess, ProcessEvidence, ProviderLaunchCommand, ProviderProcessObservation,
 };
 use mudi::application::observation::read_model::{ManagedResumeSummary, RefreshSnapshot};
 use mudi::application::successor::TerminalLauncher;
@@ -36,6 +36,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use support::{workflow_handlers, TestActionRouter};
+
+fn managed_resume_workflows(service: ManagedResumeService) -> ManagedWorkflowServices {
+    ManagedWorkflowServices {
+        start_new: None,
+        start_resume: Some(service),
+        recovery: None,
+    }
+}
 
 #[test]
 fn provider_adapters_build_exact_interactive_resume_commands() {
@@ -70,7 +78,7 @@ fn verified_exited_session_launches_an_exact_resume_from_a_durable_registration(
         pid: 42,
         started_at_ms: 41_000,
     };
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     let prior_run_id = bind_initial_managed_session(
         &mut store,
         &temp,
@@ -82,7 +90,7 @@ fn verified_exited_session_launches_an_exact_resume_from_a_durable_registration(
     let opened = Arc::new(Mutex::new(Vec::new()));
     let verified = Arc::new(Mutex::new(Vec::new()));
     let codex = temp.executable("codex");
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedResumeService::new(
         store,
         ProviderExecutables::new(temp.executable("claude"), codex.clone()),
         Box::new(RecordingLaunchBroker {
@@ -99,7 +107,7 @@ fn verified_exited_session_launches_an_exact_resume_from_a_durable_registration(
     })));
 
     let outcome = service
-        .start_resume(
+        .start(
             ManagedResumeRequest {
                 provider: Provider::CodexCli,
                 native_session_id: "native-session-49".into(),
@@ -134,7 +142,7 @@ fn verified_exited_session_launches_an_exact_resume_from_a_durable_registration(
         *opened.lock().unwrap(),
         vec![outcome.registration.id.clone()]
     );
-    let reopened = ManagedLaunchStore::open(&store_path).unwrap();
+    let reopened = StateManagedSessionRepository::open(&store_path).unwrap();
     let target = reopened
         .managed_resume_target(&outcome.registration.id)
         .unwrap()
@@ -143,8 +151,7 @@ fn verified_exited_session_launches_an_exact_resume_from_a_durable_registration(
     assert_eq!(target.native_session_id, "native-session-49");
     assert_eq!(target.prior_run_id, prior_run_id);
     let persisted = reopened.get(&outcome.registration.id).unwrap().unwrap();
-    assert!(persisted.provider_command.executable.as_os_str().is_empty());
-    assert!(persisted.provider_command.arguments.is_empty());
+    assert_eq!(persisted.provider, Provider::CodexCli);
     assert_eq!(reopened.managed_current_runs().unwrap().len(), 1);
 }
 
@@ -157,7 +164,7 @@ fn resume_binding_rejects_self_consistent_evidence_for_a_different_native_sessio
         pid: 42,
         started_at_ms: 41_000,
     };
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     bind_initial_managed_session(
         &mut store,
         &temp,
@@ -165,7 +172,7 @@ fn resume_binding_rejects_self_consistent_evidence_for_a_different_native_sessio
         "intended-native-session",
         prior_process,
     );
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedResumeService::new(
         store,
         ProviderExecutables::new(temp.executable("claude"), temp.executable("codex")),
         Box::new(RecordingLaunchBroker {
@@ -181,7 +188,7 @@ fn resume_binding_rejects_self_consistent_evidence_for_a_different_native_sessio
         verified: Arc::new(Mutex::new(Vec::new())),
     })));
     let outcome = service
-        .start_resume(
+        .start(
             ManagedResumeRequest {
                 provider: Provider::ClaudeCode,
                 native_session_id: "intended-native-session".into(),
@@ -197,8 +204,8 @@ fn resume_binding_rejects_self_consistent_evidence_for_a_different_native_sessio
         .unwrap()
         .provider_process;
     let source = temp.file("wrong-source.jsonl", "{}\n");
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
-    let binder = EvidenceBinder::new(
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(resumed_process)),
         Box::new(NoopCleanup),
     );
@@ -243,7 +250,7 @@ fn successful_resume_atomically_establishes_a_distinct_run_and_new_receipt() {
         pid: 42,
         started_at_ms: 41_000,
     };
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     let prior_run_id = bind_initial_managed_session(
         &mut store,
         &temp,
@@ -256,7 +263,7 @@ fn successful_resume_atomically_establishes_a_distinct_run_and_new_receipt() {
         .unwrap()
         .unwrap()
         .binding_receipt_id;
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedResumeService::new(
         store,
         ProviderExecutables::new(temp.executable("claude"), temp.executable("codex")),
         Box::new(RecordingLaunchBroker {
@@ -272,7 +279,7 @@ fn successful_resume_atomically_establishes_a_distinct_run_and_new_receipt() {
         verified: Arc::new(Mutex::new(Vec::new())),
     })));
     let outcome = service
-        .start_resume(
+        .start(
             ManagedResumeRequest {
                 provider: Provider::CodexCli,
                 native_session_id: "native-session-49".into(),
@@ -288,8 +295,8 @@ fn successful_resume_atomically_establishes_a_distinct_run_and_new_receipt() {
         .unwrap()
         .provider_process;
     let resumed_source = temp.file("resumed-source.jsonl", "{}\n");
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
-    let binder = EvidenceBinder::new(
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(resumed_process)),
         Box::new(NoopCleanup),
     );
@@ -360,7 +367,7 @@ fn claude_resume_lifecycle_uses_exact_identity_and_establishes_a_distinct_run() 
         pid: 42,
         started_at_ms: 41_000,
     };
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     let prior_run_id = bind_initial_managed_session(
         &mut store,
         &temp,
@@ -370,7 +377,7 @@ fn claude_resume_lifecycle_uses_exact_identity_and_establishes_a_distinct_run() 
     );
     let launched = Arc::new(Mutex::new(Vec::new()));
     let claude = temp.executable("claude");
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedResumeService::new(
         store,
         ProviderExecutables::new(claude.clone(), temp.executable("codex")),
         Box::new(RecordingLaunchBroker {
@@ -386,7 +393,7 @@ fn claude_resume_lifecycle_uses_exact_identity_and_establishes_a_distinct_run() 
         verified: Arc::new(Mutex::new(Vec::new())),
     })));
     let outcome = service
-        .start_resume(
+        .start(
             ManagedResumeRequest {
                 provider: Provider::ClaudeCode,
                 native_session_id: "claude-native-session-49".into(),
@@ -414,8 +421,8 @@ fn claude_resume_lifecycle_uses_exact_identity_and_establishes_a_distinct_run() 
         .unwrap()
         .provider_process;
     let resumed_source = temp.file("claude-resumed-source.jsonl", "{}\n");
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
-    let binder = EvidenceBinder::new(
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(resumed_process)),
         Box::new(NoopCleanup),
     );
@@ -458,7 +465,7 @@ fn pending_resume_is_unique_and_cancel_clears_it_for_a_later_authorization() {
     let temp = TempDir::new("resume-cancel");
     let config = temp.config();
     let store_path = config.managed_launch_store_path();
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     bind_initial_managed_session(
         &mut store,
         &temp,
@@ -469,7 +476,7 @@ fn pending_resume_is_unique_and_cancel_clears_it_for_a_later_authorization() {
             started_at_ms: 41_000,
         },
     );
-    let mut service = ManagedSessionService::new(
+    let mut service = ManagedResumeService::new(
         store,
         ProviderExecutables::new(temp.executable("claude"), temp.executable("codex")),
         Box::new(RecordingLaunchBroker {
@@ -485,7 +492,7 @@ fn pending_resume_is_unique_and_cancel_clears_it_for_a_later_authorization() {
         verified: Arc::new(Mutex::new(Vec::new())),
     })));
     let first = service
-        .start_resume(
+        .start(
             ManagedResumeRequest {
                 provider: Provider::ClaudeCode,
                 native_session_id: "native-session-49".into(),
@@ -494,15 +501,15 @@ fn pending_resume_is_unique_and_cancel_clears_it_for_a_later_authorization() {
         )
         .unwrap();
 
-    let first_target = ManagedLaunchStore::open(&store_path)
+    let first_target = StateManagedSessionRepository::open(&store_path)
         .unwrap()
         .managed_resume_target(&first.registration.id)
         .unwrap()
         .unwrap();
-    let mut direct_store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut direct_store = StateManagedSessionRepository::open(&store_path).unwrap();
     let mut direct_duplicate = first.registration.clone();
     direct_duplicate.id = "launch-direct-duplicate".into();
-    direct_duplicate.tmux.socket_name = "mudi-direct-duplicate".into();
+    direct_duplicate.control_channel.namespace = "mudi-direct-duplicate".into();
     assert!(direct_store
         .insert_resume(&direct_duplicate, &first_target)
         .unwrap_err()
@@ -511,7 +518,7 @@ fn pending_resume_is_unique_and_cancel_clears_it_for_a_later_authorization() {
     assert!(direct_store.get(&direct_duplicate.id).unwrap().is_none());
     drop(direct_store);
 
-    let duplicate = service.start_resume(
+    let duplicate = service.start(
         ManagedResumeRequest {
             provider: Provider::ClaudeCode,
             native_session_id: "native-session-49".into(),
@@ -523,8 +530,16 @@ fn pending_resume_is_unique_and_cancel_clears_it_for_a_later_authorization() {
         .to_string()
         .contains("already in progress"));
 
-    service.cancel_start(&first.registration.id).unwrap();
-    let reopened = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut recovery = ManagedLaunchRecoveryService::new(
+        StateManagedSessionRepository::open(&store_path).unwrap(),
+        Box::new(RecordingLaunchBroker {
+            store_path: store_path.clone(),
+            launched: Arc::new(Mutex::new(Vec::new())),
+        }),
+        Box::new(NeverTerminal),
+    );
+    recovery.cancel_start(&first.registration.id).unwrap();
+    let reopened = StateManagedSessionRepository::open(&store_path).unwrap();
     assert!(reopened.get(&first.registration.id).unwrap().is_none());
     assert!(reopened
         .managed_resume_target(&first.registration.id)
@@ -533,7 +548,7 @@ fn pending_resume_is_unique_and_cancel_clears_it_for_a_later_authorization() {
     drop(reopened);
 
     let second = service
-        .start_resume(
+        .start(
             ManagedResumeRequest {
                 provider: Provider::ClaudeCode,
                 native_session_id: "native-session-49".into(),
@@ -554,7 +569,7 @@ fn open_or_unknown_prior_run_never_reaches_the_resume_launch_broker() {
             let temp = TempDir::new("blocked-resume");
             let config = temp.config();
             let store_path = config.managed_launch_store_path();
-            let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+            let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
             bind_initial_managed_session(
                 &mut store,
                 &temp,
@@ -567,7 +582,7 @@ fn open_or_unknown_prior_run_never_reaches_the_resume_launch_broker() {
             );
             let launched = Arc::new(Mutex::new(Vec::new()));
             let opened = Arc::new(Mutex::new(Vec::new()));
-            let mut service = ManagedSessionService::new(
+            let mut service = ManagedResumeService::new(
                 store,
                 ProviderExecutables::new(temp.executable("claude"), temp.executable("codex")),
                 Box::new(RecordingLaunchBroker {
@@ -584,7 +599,7 @@ fn open_or_unknown_prior_run_never_reaches_the_resume_launch_broker() {
             })));
 
             assert!(service
-                .start_resume(
+                .start(
                     ManagedResumeRequest {
                         provider,
                         native_session_id: "native-session-49".into(),
@@ -594,7 +609,7 @@ fn open_or_unknown_prior_run_never_reaches_the_resume_launch_broker() {
                 .is_err());
             assert!(launched.lock().unwrap().is_empty());
             assert!(opened.lock().unwrap().is_empty());
-            let reopened = ManagedLaunchStore::open(&store_path).unwrap();
+            let reopened = StateManagedSessionRepository::open(&store_path).unwrap();
             assert!(reopened.registrations().unwrap().is_empty());
             assert_eq!(reopened.managed_current_runs().unwrap().len(), 1);
         }
@@ -610,7 +625,7 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
         pid: 42,
         started_at_ms: 41_000,
     };
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     bind_initial_managed_session(
         &mut store,
         &temp,
@@ -623,7 +638,7 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
         .unwrap()
         .unwrap()
         .binding_receipt_id;
-    let mut launch_failure = ManagedSessionService::new(
+    let mut launch_failure = ManagedResumeService::new(
         store,
         ProviderExecutables::new(temp.executable("claude"), temp.executable("codex")),
         Box::new(FailingLaunchBroker),
@@ -634,7 +649,7 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
         verified: Arc::new(Mutex::new(Vec::new())),
     })));
     assert!(launch_failure
-        .start_resume(
+        .start(
             ManagedResumeRequest {
                 provider: Provider::CodexCli,
                 native_session_id: "native-session-49".into(),
@@ -645,7 +660,7 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
         .to_string()
         .contains("Resume launch failed"));
     drop(launch_failure);
-    let failed_store = ManagedLaunchStore::open(&store_path).unwrap();
+    let failed_store = StateManagedSessionRepository::open(&store_path).unwrap();
     let failed_registration = failed_store.registrations().unwrap().pop().unwrap();
     assert!(failed_registration.launch_evidence.is_none());
     assert!(failed_store
@@ -663,9 +678,8 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
     );
     drop(failed_store);
 
-    let mut cleanup = ManagedSessionService::new(
-        ManagedLaunchStore::open(&store_path).unwrap(),
-        ProviderExecutables::new(PathBuf::new(), PathBuf::new()),
+    let mut cleanup = ManagedLaunchRecoveryService::new(
+        StateManagedSessionRepository::open(&store_path).unwrap(),
         Box::new(RecordingLaunchBroker {
             store_path: store_path.clone(),
             launched: Arc::new(Mutex::new(Vec::new())),
@@ -675,8 +689,8 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
     cleanup.cancel_start(&failed_registration.id).unwrap();
     drop(cleanup);
 
-    let store = ManagedLaunchStore::open(&store_path).unwrap();
-    let mut terminal_failure = ManagedSessionService::new(
+    let store = StateManagedSessionRepository::open(&store_path).unwrap();
+    let mut terminal_failure = ManagedResumeService::new(
         store,
         ProviderExecutables::new(temp.executable("claude-2"), temp.executable("codex-2")),
         Box::new(RecordingLaunchBroker {
@@ -690,7 +704,7 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
         verified: Arc::new(Mutex::new(Vec::new())),
     })));
     let outcome = terminal_failure
-        .start_resume(
+        .start(
             ManagedResumeRequest {
                 provider: Provider::CodexCli,
                 native_session_id: "native-session-49".into(),
@@ -704,8 +718,8 @@ fn resume_launch_and_terminal_or_evidence_failures_never_change_authority() {
         Some("Terminal.app launch failed")
     );
     drop(terminal_failure);
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
-    let binder = EvidenceBinder::new(
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedObservation(ProviderProcessObservation::Unknown)),
         Box::new(NoopCleanup),
     );
@@ -757,7 +771,7 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
         pid: u32::MAX,
         started_at_ms: 41_000,
     };
-    let receipt = mudi::application::managed_sessions::BindingReceipt {
+    let receipt = mudi::application::managed_session::BindingReceipt {
         id: "receipt-prior".into(),
         registration_id: "launch-prior".into(),
         provider: Provider::ClaudeCode,
@@ -777,20 +791,20 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
         description: None,
         binding_receipt_id: receipt.id.clone(),
     };
-    let run = mudi::application::managed_sessions::ManagedCurrentRunRecord {
+    let run = mudi::application::managed_session::ManagedCurrentRunRecord {
         id: "run-prior".into(),
         opaque_ref: "run_0123456789abcdef0123456789abcdef".into(),
         provider: Provider::ClaudeCode,
         native_session_id: "native-session-49".into(),
         provider_process: prior_process,
-        tmux: mudi::application::managed_sessions::PrivateTmuxEnvironment {
-            socket_name: "mudi-prior".into(),
-            session_name: "managed".into(),
+        control_channel: mudi::application::managed_session::ManagedControlChannel {
+            namespace: "mudi-prior".into(),
+            run_target: "managed".into(),
         },
         binding_receipt_id: receipt.id.clone(),
     };
 
-    let exited = SystemManagedResumeEvidence::new(
+    let exited = CombinedManagedResumeEvidence::new(
         Box::new(FixedObservation(ProviderProcessObservation::Absent)),
         Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
     )
@@ -804,7 +818,7 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
     };
     fs::create_dir_all(&broken_config.claude_dir).unwrap();
     fs::write(broken_config.claude_sessions_dir(), "not a directory").unwrap();
-    let failed_probe = SystemManagedResumeEvidence::new(
+    let failed_probe = CombinedManagedResumeEvidence::new(
         Box::new(FixedObservation(ProviderProcessObservation::Absent)),
         Box::new(SystemManagedResumeProviderEvidence::new(
             broken_config.clone(),
@@ -814,14 +828,14 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
     .unwrap();
     assert_eq!(failed_probe, ManagedCurrentRunLifecycle::Unknown);
 
-    let unknown = SystemManagedResumeEvidence::new(
+    let unknown = CombinedManagedResumeEvidence::new(
         Box::new(FixedObservation(ProviderProcessObservation::Unknown)),
         Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
     )
     .observe(&run, &session, &receipt)
     .unwrap();
     assert_eq!(unknown, ManagedCurrentRunLifecycle::Unknown);
-    let reused = SystemManagedResumeEvidence::new(
+    let reused = CombinedManagedResumeEvidence::new(
         Box::new(FixedObservation(ProviderProcessObservation::Live(
             ProcessIdentity {
                 pid: prior_process.pid,
@@ -855,7 +869,7 @@ fn system_resume_evidence_requires_process_absence_and_no_external_open_run() {
         .to_string(),
     )
     .unwrap();
-    let externally_open = SystemManagedResumeEvidence::new(
+    let externally_open = CombinedManagedResumeEvidence::new(
         Box::new(FixedObservation(ProviderProcessObservation::Absent)),
         Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
     )
@@ -979,7 +993,8 @@ fn refresh_projects_resume_eligibility_only_for_verified_exited_evidence() {
     ] {
         let temp = TempDir::new("resume-refresh-transition");
         let config = temp.config();
-        let mut store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+        let mut store =
+            StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
         bind_initial_managed_session(
             &mut store,
             &temp,
@@ -1017,7 +1032,8 @@ fn refresh_projects_resume_eligibility_only_for_verified_exited_evidence() {
 fn bulk_resume_projection_samples_process_and_provider_evidence_once() {
     let temp = TempDir::new("resume-bulk-projection");
     let config = temp.config();
-    let mut store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let mut store =
+        StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     for (index, native_session_id) in ["native-session-a", "native-session-b", "native-session-c"]
         .into_iter()
         .enumerate()
@@ -1038,7 +1054,7 @@ fn bulk_resume_projection_samples_process_and_provider_evidence_once() {
     let provider_single = Arc::new(AtomicUsize::new(0));
     let provider_bulk = Arc::new(AtomicUsize::new(0));
     let verifier =
-        ManagedResumeVerifier::new(Box::new(SystemManagedResumeEvidence::with_evidence(
+        ManagedResumeVerifier::new(Box::new(CombinedManagedResumeEvidence::with_evidence(
             Box::new(CountingProcessEvidence {
                 single: process_single.clone(),
                 bulk: process_bulk.clone(),
@@ -1070,13 +1086,13 @@ fn bulk_resume_projection_samples_process_and_provider_evidence_once() {
 fn empty_resume_projection_samples_no_system_evidence() {
     let temp = TempDir::new("resume-empty-projection");
     let config = temp.config();
-    let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let store = StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     let process_single = Arc::new(AtomicUsize::new(0));
     let process_bulk = Arc::new(AtomicUsize::new(0));
     let provider_single = Arc::new(AtomicUsize::new(0));
     let provider_bulk = Arc::new(AtomicUsize::new(0));
     let verifier =
-        ManagedResumeVerifier::new(Box::new(SystemManagedResumeEvidence::with_evidence(
+        ManagedResumeVerifier::new(Box::new(CombinedManagedResumeEvidence::with_evidence(
             Box::new(CountingProcessEvidence {
                 single: process_single.clone(),
                 bulk: process_bulk.clone(),
@@ -1102,7 +1118,7 @@ fn application_routes_authorized_resume_and_requests_a_fresh_projection() {
     let temp = TempDir::new("resume-application");
     let config = temp.config();
     let store_path = config.managed_launch_store_path();
-    let mut store = ManagedLaunchStore::open(&store_path).unwrap();
+    let mut store = StateManagedSessionRepository::open(&store_path).unwrap();
     bind_initial_managed_session(
         &mut store,
         &temp,
@@ -1116,7 +1132,7 @@ fn application_routes_authorized_resume_and_requests_a_fresh_projection() {
     let launched = Arc::new(Mutex::new(Vec::new()));
     let opened = Arc::new(Mutex::new(Vec::new()));
     let executables = ProviderExecutables::new(temp.executable("claude"), temp.executable("codex"));
-    let managed_sessions = ManagedSessionService::new(
+    let managed_sessions = ManagedResumeService::new(
         store,
         executables.clone(),
         Box::new(RecordingLaunchBroker {
@@ -1143,7 +1159,7 @@ fn application_routes_authorized_resume_and_requests_a_fresh_projection() {
     let mut controller = workflow_handlers(
         handoff,
         NeverSuccessorTerminal,
-        managed_sessions,
+        managed_resume_workflows(managed_sessions),
         temp.0.join("workflow-state.db"),
     );
     let snapshot = RefreshSnapshot {
@@ -1303,9 +1319,9 @@ struct CountingProviderEvidence {
 impl ManagedResumeProviderEvidence for CountingProviderEvidence {
     fn observe(
         &self,
-        _run: &mudi::application::managed_sessions::ManagedCurrentRunRecord,
+        _run: &mudi::application::managed_session::ManagedCurrentRunRecord,
         _session: &ManagedSessionRecord,
-        _receipt: &mudi::application::managed_sessions::BindingReceipt,
+        _receipt: &mudi::application::managed_session::BindingReceipt,
     ) -> Result<ManagedCurrentRunLifecycle> {
         self.single.fetch_add(1, Ordering::SeqCst);
         Ok(ManagedCurrentRunLifecycle::Exited)
@@ -1326,9 +1342,9 @@ impl ManagedResumeProviderEvidence for CountingProviderEvidence {
 impl ManagedResumeEvidence for FixedResumeEvidence {
     fn observe(
         &self,
-        run: &mudi::application::managed_sessions::ManagedCurrentRunRecord,
+        run: &mudi::application::managed_session::ManagedCurrentRunRecord,
         session: &ManagedSessionRecord,
-        _receipt: &mudi::application::managed_sessions::BindingReceipt,
+        _receipt: &mudi::application::managed_session::BindingReceipt,
     ) -> Result<ManagedCurrentRunLifecycle> {
         self.verified.lock().unwrap().push((
             session.provider,
@@ -1352,6 +1368,7 @@ impl ManagedLaunchBroker for FailingLaunchBroker {
     fn launch(
         &mut self,
         _registration: &ManagedLaunchRegistration,
+        _command: &ProviderLaunchCommand,
     ) -> Result<ManagedLaunchEvidence> {
         anyhow::bail!("provider executable rejected Resume launch")
     }
@@ -1377,18 +1394,19 @@ impl ManagedLaunchBroker for RecordingLaunchBroker {
     fn launch(
         &mut self,
         registration: &ManagedLaunchRegistration,
+        command: &ProviderLaunchCommand,
     ) -> Result<ManagedLaunchEvidence> {
-        let target = ManagedLaunchStore::open(&self.store_path)?
+        let target = StateManagedSessionRepository::open(&self.store_path)?
             .managed_resume_target(&registration.id)?
             .expect("Resume identity must be durable before Provider launch");
         self.launched.lock().unwrap().push((
             registration.provider,
             target.native_session_id,
-            registration.provider_command.executable.clone(),
-            registration.provider_command.arguments.clone(),
+            command.executable.clone(),
+            command.arguments.clone(),
         ));
         Ok(ManagedLaunchEvidence {
-            tmux_pane_id: "%84".into(),
+            channel_id: "%84".into(),
             provider_process: ProcessIdentity {
                 pid: 84,
                 started_at_ms: 59_000,
@@ -1430,7 +1448,7 @@ impl ManagedLaunchCleanup for NoopCleanup {
 }
 
 fn bind_initial_managed_session(
-    store: &mut ManagedLaunchStore,
+    store: &mut StateManagedSessionRepository,
     temp: &TempDir,
     provider: Provider,
     native_session_id: &str,
@@ -1440,7 +1458,7 @@ fn bind_initial_managed_session(
     let source = temp.file("source.jsonl", "{}\n");
     let registration = ManagedLaunchRegistration {
         id: format!("launch-initial-{native_session_id}"),
-        status: mudi::application::managed_sessions::ManagedLaunchStatus::Binding,
+        status: mudi::application::managed_session::ManagedLaunchStatus::Binding,
         provider,
         target: ManagedLaunchTarget {
             working_directory: working_directory.clone(),
@@ -1448,18 +1466,14 @@ fn bind_initial_managed_session(
         session_alias: "Resume target".into(),
         description: Some("Keep local metadata".into()),
         binding_initializer: false,
-        provider_command: mudi::application::managed_sessions::ProviderNewCommand {
-            executable: PathBuf::new(),
-            arguments: Vec::new(),
-        },
-        tmux: mudi::application::managed_sessions::PrivateTmuxEnvironment {
-            socket_name: format!("mudi-launch-initial-{native_session_id}"),
-            session_name: "managed".into(),
+        control_channel: mudi::application::managed_session::ManagedControlChannel {
+            namespace: format!("mudi-launch-initial-{native_session_id}"),
+            run_target: "managed".into(),
         },
         created_at_ms: 40_000,
         launched_at_ms: Some(41_000),
         launch_evidence: Some(ManagedLaunchEvidence {
-            tmux_pane_id: "%42".into(),
+            channel_id: "%42".into(),
             provider_process: process,
         }),
         terminal_opened_at_ms: Some(42_000),
@@ -1467,7 +1481,7 @@ fn bind_initial_managed_session(
         binding_error: None,
     };
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(process)),
         Box::new(NoopCleanup),
     );

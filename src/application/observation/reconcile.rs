@@ -1,8 +1,8 @@
 use super::ObservationFrame;
 use crate::application::handoff::{HandoffService, WorkerLauncher};
-use crate::application::managed_sessions::{
-    BindingOutcome, EvidenceBinder, LaunchIdentityAssociationOutcome, ManagedLaunchRegistration,
-    ManagedSessionRepository, ObservedBindingAttempt,
+use crate::application::managed_session::{
+    BindingOutcome, LaunchIdentityAssociationOutcome, ManagedLaunchReconciler,
+    ManagedLaunchRegistration, ManagedSessionRepository, ObservedBindingAttempt,
 };
 use crate::application::observation::read_model::{RefreshDiagnostic, RefreshStage};
 use crate::domain::SessionIdentity;
@@ -21,7 +21,7 @@ impl<L: WorkerLauncher + Send> OperationTaskReconciler for HandoffService<L> {
 
 pub struct ReconciliationPorts {
     pub managed_repository: std::result::Result<Box<dyn ManagedSessionRepository>, String>,
-    pub managed_binding_reconciler: EvidenceBinder,
+    pub managed_binding_reconciler: ManagedLaunchReconciler,
     pub task_reconciler: std::result::Result<Box<dyn OperationTaskReconciler>, String>,
 }
 
@@ -34,7 +34,7 @@ pub struct ReconciliationReport {
 pub struct ReconciliationService {
     managed_repository: std::result::Result<Box<dyn ManagedSessionRepository>, String>,
     restart_binding_registrations: HashSet<String>,
-    managed_binding_reconciler: EvidenceBinder,
+    managed_binding_reconciler: ManagedLaunchReconciler,
     task_reconciler: std::result::Result<Box<dyn OperationTaskReconciler>, String>,
 }
 
@@ -79,7 +79,7 @@ impl ReconciliationService {
                         .contains(&observation.registration_id);
                     let outcome = self
                         .managed_binding_reconciler
-                        .bind_observed_with_identity_association(
+                        .reconcile_observed_with_identity_association(
                             store.as_mut(),
                             ObservedBindingAttempt {
                                 registration_id: &observation.registration_id,
@@ -132,7 +132,7 @@ impl ReconciliationService {
         report
     }
 
-    pub fn with_managed_binding_reconciler(mut self, reconciler: EvidenceBinder) -> Self {
+    pub fn with_managed_binding_reconciler(mut self, reconciler: ManagedLaunchReconciler) -> Self {
         self.managed_binding_reconciler = reconciler;
         self
     }

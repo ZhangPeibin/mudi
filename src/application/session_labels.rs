@@ -138,13 +138,21 @@ pub fn resolve_titles<R: SessionMetadataQuery + ?Sized>(
     metadata: &R,
     sessions: &[(Provider, &str)],
 ) -> Vec<String> {
+    resolve_titles_with_alias(sessions, |provider, native_id| {
+        metadata.alias(provider, native_id)
+    })
+}
+
+pub(crate) fn resolve_titles_with_alias<'a>(
+    sessions: &[(Provider, &'a str)],
+    mut alias: impl FnMut(Provider, &'a str) -> Option<&'a str>,
+) -> Vec<String> {
     let short_ids = unique_short_session_ids(sessions);
     let titles = sessions
         .iter()
         .zip(&short_ids)
         .map(|((provider, native_id), short_id)| {
-            metadata
-                .alias(*provider, native_id)
+            alias(*provider, native_id)
                 .map(str::to_string)
                 .unwrap_or_else(|| short_id.clone())
         })
@@ -159,7 +167,7 @@ pub fn resolve_titles<R: SessionMetadataQuery + ?Sized>(
         .zip(short_ids)
         .map(|(((provider, native_id), title), short_id)| {
             if counts.get(title.as_str()).copied().unwrap_or(0) > 1
-                && metadata.alias(*provider, native_id).is_some()
+                && alias(*provider, native_id).is_some()
             {
                 format!("{title} · {short_id}")
             } else {

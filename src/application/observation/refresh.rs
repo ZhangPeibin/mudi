@@ -43,7 +43,7 @@ impl RefreshCycle {
 
     pub fn with_managed_current_run_evidence(
         mut self,
-        evidence: Box<dyn crate::application::managed_sessions::ManagedCurrentRunEvidence>,
+        evidence: Box<dyn crate::application::managed_session::ManagedCurrentRunEvidence>,
     ) -> Self {
         self.collector = self.collector.with_managed_current_run_evidence(evidence);
         self
@@ -51,7 +51,7 @@ impl RefreshCycle {
 
     pub fn with_managed_resume_evidence(
         mut self,
-        evidence: Box<dyn crate::application::managed_sessions::ManagedResumeEvidence>,
+        evidence: Box<dyn crate::application::managed_session::ManagedResumeEvidence>,
     ) -> Self {
         self.collector = self.collector.with_managed_resume_evidence(evidence);
         self
@@ -59,7 +59,7 @@ impl RefreshCycle {
 
     pub fn with_managed_binding_reconciler(
         mut self,
-        reconciler: crate::application::managed_sessions::EvidenceBinder,
+        reconciler: crate::application::managed_session::ManagedLaunchReconciler,
     ) -> Self {
         self.collector = self
             .collector

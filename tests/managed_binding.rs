@@ -1,15 +1,15 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mudi::adapters::config::Config;
-use mudi::adapters::managed_sessions::SystemProcessEvidence;
-use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::persistence::session_metadata::SessionLabels;
+use mudi::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use mudi::adapters::providers::state::ProcessIdentity;
 use mudi::adapters::providers::{registry, ProviderBindingEvidence};
 use mudi::adapters::refresh::open_refresh_cycle;
-use mudi::application::managed_sessions::{
-    BindingOutcome, EvidenceBinder, LaunchIdentityAssociationOutcome, ManagedLaunchAction,
-    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedLaunchStatus,
-    ManagedLaunchTarget, PrivateTmuxEnvironment, ProcessEvidence, ProviderNewCommand,
+use mudi::adapters::system::process::SystemProcessEvidence;
+use mudi::application::managed_session::{
+    BindingOutcome, LaunchIdentityAssociationOutcome, ManagedControlChannel, ManagedLaunchAction,
+    ManagedLaunchCleanup, ManagedLaunchEvidence, ManagedLaunchReconciler,
+    ManagedLaunchRegistration, ManagedLaunchStatus, ManagedLaunchTarget, ProcessEvidence,
     ProviderProcessObservation,
 };
 use mudi::application::observation::read_model::{ManagedLaunchSummary, ManagedTerminalState};
@@ -70,9 +70,9 @@ fn binding_receipt_atomically_establishes_the_managed_session_and_current_run() 
         &working_directory,
         process,
     );
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(Some(process))),
         Box::new(NoopCleanup),
     );
@@ -134,9 +134,9 @@ fn provider_descendant_of_the_launched_pane_can_issue_a_binding_receipt() {
         &working_directory,
         pane_process,
     );
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(MappedProcessEvidence(HashMap::from([
             (pane_process.pid, pane_process),
             (provider_process.pid, provider_process),
@@ -191,7 +191,7 @@ fn matching_cwd_binds_when_project_snapshot_changed_after_launch() {
         &working_directory,
         launch_process,
     );
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
     let git_init = std::process::Command::new("git")
         .args(["init", "--quiet"])
@@ -204,7 +204,7 @@ fn matching_cwd_binds_when_project_snapshot_changed_after_launch() {
         .unwrap()
         .identity;
     assert_ne!(project_before_launch, project_after_launch);
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(Some(launch_process))),
         Box::new(NoopCleanup),
     );
@@ -251,9 +251,9 @@ fn provider_evidence_from_a_different_launch_root_cannot_issue_a_binding_receipt
         &working_directory,
         pane_process,
     );
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
     store.insert(&registration).unwrap();
-    let binder = EvidenceBinder::new(
+    let binder = ManagedLaunchReconciler::new(
         Box::new(MappedProcessEvidence(HashMap::from([
             (pane_process.pid, pane_process),
             (unrelated_launch_process.pid, unrelated_launch_process),
@@ -312,14 +312,15 @@ fn missing_or_disagreeing_evidence_cannot_create_management() {
             &working_directory,
             launch_process,
         );
-        let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
+        let mut store =
+            StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
         store.insert(&registration).unwrap();
         let current_process = match case {
             InvalidEvidence::StalePid => None,
             InvalidEvidence::ReusedPid => Some(process(42, 49_000)),
             _ => Some(launch_process),
         };
-        let binder = EvidenceBinder::new(
+        let binder = ManagedLaunchReconciler::new(
             Box::new(FixedProcessEvidence(current_process)),
             Box::new(NoopCleanup),
         );
@@ -426,8 +427,8 @@ fn conflicting_managed_identity_rolls_back_and_needs_review() {
     let working_directory = temp.directory("working_directory");
     let source_path = temp.file("source.jsonl", "{}\n");
     let process = process(42, 41_000);
-    let mut store = ManagedLaunchStore::open(temp.path().join("managed.db")).unwrap();
-    let binder = EvidenceBinder::new(
+    let mut store = StateManagedSessionRepository::open(temp.path().join("managed.db")).unwrap();
+    let binder = ManagedLaunchReconciler::new(
         Box::new(FixedProcessEvidence(Some(process))),
         Box::new(NoopCleanup),
     );
@@ -673,11 +674,10 @@ fn refresh_publishes_metadata_only_managed_launch_recovery_state() {
     registration.session_alias = "Recover payment tests".into();
     registration.description = Some("private launch description".into());
     registration.binding_initializer = true;
-    registration.provider_command.arguments = vec!["private initializer content".into()];
     registration.terminal_opened_at_ms = None;
     registration.terminal_error = Some("Terminal.app denied automation".into());
     registration.binding_error = Some("native Session evidence conflicts".into());
-    ManagedLaunchStore::open(config.managed_launch_store_path())
+    StateManagedSessionRepository::open(config.managed_launch_store_path())
         .unwrap()
         .insert(&registration)
         .unwrap();
@@ -1293,7 +1293,7 @@ fn assert_title_survives_binding(provider: Provider) {
 
     let registration_id = format!("launch-{}-title-before-project", provider.as_str());
     let launch = registration(&registration_id, provider, &working_directory, process);
-    ManagedLaunchStore::open(config.managed_launch_store_path())
+    StateManagedSessionRepository::open(config.managed_launch_store_path())
         .unwrap()
         .insert(&launch)
         .unwrap();
@@ -1302,7 +1302,7 @@ fn assert_title_survives_binding(provider: Provider) {
     let mut refresh = open_refresh_cycle(config.clone());
     let snapshot = refresh.run_once();
 
-    let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let store = StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     assert!(store.get(&registration_id).unwrap().is_none());
     assert!(store.binding_receipt(&registration_id).unwrap().is_some());
     assert_eq!(store.managed_sessions().unwrap().len(), 1);
@@ -1417,7 +1417,7 @@ fn conflicting_launch_registration_cannot_replace_an_associated_title() {
         data_dir: temp.path().join("data"),
         extra_dirs: Vec::new(),
     };
-    let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let store = StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     let mut first = registration(
         "launch-a",
         Provider::ClaudeCode,
@@ -1439,7 +1439,7 @@ fn conflicting_launch_registration_cannot_replace_an_associated_title() {
     let mut refresh = open_refresh_cycle(config.clone());
     refresh.run_once();
 
-    let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let store = StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     assert!(store.get(&first.id).unwrap().is_none());
     assert_eq!(
         store.get(&conflicting.id).unwrap().unwrap().status,
@@ -1467,7 +1467,7 @@ fn insert_binding_registration(
     working_directory: &Path,
     process: ProcessIdentity,
 ) {
-    let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let store = StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     store
         .insert(&registration(
             registration_id,
@@ -1506,7 +1506,7 @@ fn assert_managed_refresh(
         session.cwd.as_deref().map(Path::new),
         Some(working_directory)
     );
-    let store = ManagedLaunchStore::open(config.managed_launch_store_path()).unwrap();
+    let store = StateManagedSessionRepository::open(config.managed_launch_store_path()).unwrap();
     assert!(store.get(registration_id).unwrap().is_none());
     assert!(store.binding_receipt(registration_id).unwrap().is_some());
     let labels = SessionLabels::load(config.label_store_path());
@@ -1545,11 +1545,7 @@ fn assert_managed_refresh(
 
 fn load_ui_before_binding(config: &Config) -> Ui {
     fs::write(config.profile_path(), r#"{"help_seen":true}"#).unwrap();
-    Ui::load_with_session_metadata(
-        config.profile_path(),
-        Box::new(SessionLabels::load(config.label_store_path())),
-    )
-    .unwrap()
+    Ui::load(config.profile_path()).unwrap()
 }
 
 fn render_ui(ui: &Ui, snapshot: &Snapshot) -> String {
@@ -1608,18 +1604,14 @@ fn registration(
         session_alias: "Managed work".into(),
         description: Some("Bound only after exact evidence".into()),
         binding_initializer: false,
-        provider_command: ProviderNewCommand {
-            executable: PathBuf::from("/usr/bin/true"),
-            arguments: Vec::new(),
-        },
-        tmux: PrivateTmuxEnvironment {
-            socket_name: format!("mudi-{id}"),
-            session_name: "managed".into(),
+        control_channel: ManagedControlChannel {
+            namespace: format!("mudi-{id}"),
+            run_target: "managed".into(),
         },
         created_at_ms: 40_000,
         launched_at_ms: Some(41_000),
         launch_evidence: Some(ManagedLaunchEvidence {
-            tmux_pane_id: "%42".into(),
+            channel_id: "%42".into(),
             provider_process,
         }),
         terminal_opened_at_ms: Some(42_000),

@@ -5,6 +5,7 @@
 use super::{
     provider_mark, region_border_style, region_title_style, retained_selection, text, AllRegion, Ui,
 };
+use crate::application::observation::read_model::SessionMetadataSnapshot;
 use crate::application::tasks::OperationTask;
 use crate::presentation::app::{fmt_datetime, fmt_relative, Snapshot};
 use ratatui::layout::Rect;
@@ -15,7 +16,14 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 /// 在首页状态带中绘制紧凑、可聚焦并可滚动的 Operation Task 列表。
-pub(super) fn draw_panel(f: &mut Frame, area: Rect, tasks: &[OperationTask], now_ms: i64, ui: &Ui) {
+pub(super) fn draw_panel(
+    f: &mut Frame,
+    area: Rect,
+    tasks: &[OperationTask],
+    metadata: &SessionMetadataSnapshot,
+    now_ms: i64,
+    ui: &Ui,
+) {
     let theme = ui.theme.palette();
     let focused = ui.all_region == AllRegion::Tasks;
     let visible_rows = area.height.saturating_sub(2) as usize;
@@ -28,7 +36,7 @@ pub(super) fn draw_panel(f: &mut Frame, area: Rect, tasks: &[OperationTask], now
         .iter()
         .map(|task| (task.source_provider, task.source_session_id.as_str()))
         .collect::<Vec<_>>();
-    let task_titles = ui.labels.titles_for(&task_identities);
+    let task_titles = metadata.titles_for(&task_identities);
     let lines = tasks
         .iter()
         .enumerate()
@@ -322,8 +330,8 @@ pub(super) fn draw_detail(
         .line_count(area.width.saturating_sub(2));
     let max_scroll = total_lines.saturating_sub(inner_height);
     let scroll = ui
-        .detail
-        .as_ref()
+        .overlay
+        .detail()
         .map_or(0, |detail| detail.scroll.get().min(max_scroll));
     f.render_widget(
         Paragraph::new(lines)

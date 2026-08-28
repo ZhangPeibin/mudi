@@ -53,6 +53,9 @@ Owner。Presentation 中面向用户的 Terminal.app/tmux 文案不算具体实�
 | `src/domain/usage.rs` | Current Context、Processed Usage、模型用量汇总与 Compaction 元数据 |
 | `src/domain/project.rs` | 基于规范目录路径的 Project 稳定身份与展示元数据 |
 | `src/domain/session.rs` | Session 生命周期、来源、稳定身份与归一化 Session 聚合 |
+| `src/domain/managed_session.rs` | Provider-neutral Managed Launch Registration、Managed Session、私有控制通道与恢复动作状态 |
+| `src/domain/managed_current_run.rs` | Managed Current Run 的精确进程身份、Native Session 关系与生命周期 |
+| `src/domain/binding.rs` | Provider-normalized Binding Evidence 与建立管理关系的 Binding Receipt |
 | `src/adapters/project.rs` | 把 Session 工作目录解析为规范的 Project 身份；Git 使用 top-level，非 Git 使用工作目录 |
 | `src/application/session_labels.rs` | Session Metadata/Curation 的 Query 与 Repository port、验证规则和只读内存 View；不包含 SQLite |
 | `src/adapters/models.rs` | 按 Model-Provider 划分的模型目录：价格、批量价格与上下文窗口，仅用于估算与描述性元数据 |
@@ -76,10 +79,10 @@ Owner。Presentation 中面向用户的 Terminal.app/tmux 文案不算具体实�
 | `src/application/observation/frame.rs` | 不可变 `ObservationFrame`：一次周期内的规范化 Session、Binding 与进程证据、Managed Current Run/Resume eligibility 和 Collect 诊断；不含 Provider 对话内容 |
 | `src/application/observation/collect.rs` | Collect 服务与只读 port：组合可丢弃 Index、Provider 源、权威候选记录和一次批量进程证据采样，不写权威状态 |
 | `src/application/observation/reconcile.rs` | Reconciliation 服务：仅根据 Frame 推进已有 Managed Launch/Binding 与 Operation Task 权威记录；无授权记录时不能建立控制关系 |
-| `src/application/observation/project.rs` | Project 服务与只读 Query port：组合 Frame、Managed provenance、Registration 与 Task，计算 Attention 和 Recent Signals，不写权威状态 |
+| `src/application/observation/project.rs` | Project 服务与只读 Query port：组合 Frame、Managed provenance、Registration、Task 与 Session Metadata/Curation，计算 Attention 和 Recent Signals，不写权威状态 |
 | `src/application/observation/publish.rs` | Publish 服务：完整 Snapshot 构造成功后才原子替换 `ReadModelCache`，并在发布边界更新 Alert 通知状态 |
 | `src/application/observation/refresh.rs` | TUI-owned `RefreshCycle`：只负责 Collect -> Reconcile -> Project -> Publish 调用顺序和周期级生命周期 |
-| `src/application/observation/read_model.rs` | 四阶段诊断、Refresh health、UI 消费的结构化 Metadata-only Snapshot 与原子内存 Cache |
+| `src/application/observation/read_model.rs` | 四阶段诊断、Refresh health、resolved Session Metadata/Curation 与 action eligibility、UI 消费的结构化 Metadata-only Snapshot 和原子内存 Cache |
 | `src/adapters/refresh.rs` | 四阶段生产组合：为各阶段分别打开只读/读写 Repository 端口，并接入 Index、Provider/进程证据、Task recovery、通知和系统时钟 Adapter |
 | `src/application/alerts.rs` | 告警政策与通知 port：上下文阈值跨越（Warning 70% / Critical 85%）时请求通知，每个阈值只通知一次，低于阈值后重置 |
 | `src/application/attention.rs` | 从会话快照推导并排序当前 Attention Conditions |
@@ -90,10 +93,17 @@ Owner。Presentation 中面向用户的 Terminal.app/tmux 文案不算具体实�
 | 文件 | 职责 |
 | --- | --- |
 | `src/application/mod.rs` | Application 模块入口：声明工作流、政策、port 与读模型模块 |
-| `src/application/handlers.rs` | TUI 发起命令的 typed Handler：接收稳定身份和 typed request，返回 typed outcome/error；不包含界面文案或系统实现 |
+| `src/application/handlers.rs` | TUI 发起命令的 typed Handler：接收稳定身份和 typed request，执行 Session Metadata/Curation 等工作流并返回 typed outcome/error；不包含界面文案或系统实现 |
 | `src/application/clipboard.rs` | Clipboard 写入能力 port；何时复制及结果文案由 Presentation 决定 |
 | `src/application/provider_runtime.rs` | Provider 可执行文件解析 port 与 Provider-neutral executable 集合 |
-| `src/application/managed_sessions.rs` | Managed New/Resume、Binding 与 Current Run 的领域记录、应用政策和外部能力 port |
+| `src/application/managed_session/mod.rs` | Managed Session 应用边界入口；重导各工作流、共享 port 与 domain 合约 |
+| `src/application/managed_session/start_new.rs` | Managed New：校验、显式授权后的 Registration、Provider 启动与 typed outcome |
+| `src/application/managed_session/binding.rs` | Binding：一致身份关联、Resume 身份约束、Binding Receipt 签发与原子管理关系建立 |
+| `src/application/managed_session/current_run_access.rs` | Managed Current Run Access：opaque reference、权威关系和 live evidence 复验后才允许 Terminal 访问 |
+| `src/application/managed_session/start_resume.rs` | Managed Resume：精确 Native Session 身份、Exited 证据、Registration 与 typed outcome |
+| `src/application/managed_session/reconciliation.rs` | Managed Recovery：重启对账、Needs Review/Failed 推进、清理策略与显式恢复动作 |
+| `src/application/managed_session/ports.rs` | Provider 启动命令、私有控制通道启动和 Terminal 访问 port；命令内容不进入领域记录或持久化 |
+| `src/application/managed_session/repository.rs` | Managed Session 权威状态的 application-owned Repository port |
 | `src/application/successor.rs` | Successor Launch Plan 的校验、命令渲染与 runtime/Terminal port |
 | `src/application/tasks.rs` | 用户已授权 Operation Task 合约与 Repository port |
 | `src/application/handoff/mod.rs` | Assisted Handoff 的显式授权与执行入口 |
@@ -109,11 +119,16 @@ Owner。Presentation 中面向用户的 Terminal.app/tmux 文案不算具体实�
 | 文件 | 职责 |
 | --- | --- |
 | `src/adapters/persistence/tasks.rs` | Operation Task Repository 的 SQLite 实现 |
-| `src/adapters/persistence/managed_sessions.rs` | Managed Session、Binding 与 Current Run Repository 的 SQLite 实现 |
+| `src/adapters/persistence/state/managed_sessions.rs` | Managed Registration、Session、Current Run 与 Resume Repository 的 `state.db` SQLite 实现 |
+| `src/adapters/persistence/state/bindings.rs` | Binding Receipt、Managed Session 与 Current Run 关系的原子 SQLite 发布事务 |
 | `src/adapters/persistence/session_metadata.rs` | Session Metadata/Curation Query 与 Repository 的 SQLite 实现 |
 | `src/adapters/handoff.rs` | Handoff 服务生产组合、任务 ID、Worker 启动、Current Run 控制与完成通知 Adapter |
 | `src/adapters/handoff_worker.rs` | 分离式 Handoff Worker 生命周期、私有 Artifact 发布与 Provider 进程执行 |
-| `src/adapters/managed_sessions.rs` | Managed Session 的 Provider、进程证据、tmux 与 Terminal.app Adapter |
+| `src/adapters/managed_session/provider_runtime.rs` | Provider Registry 与可执行文件到 Managed New/Resume 启动命令的 Adapter；命令只在启动边界传递 |
+| `src/adapters/managed_session/evidence.rs` | Provider 源与 Current Run/Resume 生命周期证据 Adapter |
+| `src/adapters/system/process.rs` | 批量/单个 PID 启动身份检查，防止 PID reuse 误判 |
+| `src/adapters/system/tmux.rs` | 私有 tmux 地址构造、启动、清理、参数直传与 tmux executable discovery |
+| `src/adapters/system/terminal_macos.rs` | Terminal.app AppleScript 与前台 tmux attach Adapter；shell quoting 封装在此边界 |
 | `src/adapters/successor.rs` | Successor Provider runtime、进程启动与 Terminal.app Adapter |
 | `src/adapters/macos/clipboard.rs` | 基于 `/usr/bin/pbcopy` 的 Clipboard port 实现 |
 | `src/adapters/macos/notification.rs` | 基于 AppleScript 的 best-effort macOS 通知实现 |
@@ -128,13 +143,14 @@ Owner。Presentation 中面向用户的 Terminal.app/tmux 文案不算具体实�
 | 文件 | 职责 |
 | --- | --- |
 | `src/presentation/app.rs` | UI 面向的共享快照别名与小型格式化辅助 |
-| `src/presentation/tui/mod.rs` | TUI 顶层：`Ui` 临时交互状态、事件处理、页签与弹窗调度，以及声明式 `UiAction` |
+| `src/presentation/tui/mod.rs` | TUI shell：页面焦点/选择、布局、唯一 `OverlayState`、短期 notice、UI preference、输入优先级路由与声明式 `UiAction` |
+| `src/presentation/tui/overlay.rs` | 单一 Overlay 状态机：New、Directory Browser、Session Edit 与 confirmations 的输入转换、显式 underlay、目标重校验及 typed action 构造 |
 | `src/presentation/tui/router.rs` | 将 `UiAction` 路由到 typed Application Handler，并拥有界面文案、Clipboard 写入和重新投影请求 |
 | `src/presentation/tui/chrome.rs` | 全局页头、页脚和上下文状态提示 |
 | `src/presentation/tui/overview.rs` | 总览页布局组合 |
 | `src/presentation/tui/session_browser.rs` | All 页左栏组合：导航与选中会话事实 |
 | `src/presentation/tui/editor.rs` | All 页的会话工作区编辑器 |
-| `src/presentation/tui/detail.rs` | 可选择的 Session Detail 弹窗及其面向证据的内容模型 |
+| `src/presentation/tui/detail.rs` | Session/Task Detail 的输入 owner：导航、复制、控制确认转换、关闭/来源恢复，以及 Session Detail 的证据内容与渲染 |
 | `src/presentation/tui/project_tree/mod.rs` | Project Tree 组件入口 |
 | `src/presentation/tui/project_tree/model.rs` | Project Tree 稳定身份、行模型、分组与排序 |
 | `src/presentation/tui/project_tree/state.rs` | Project Tree 交互状态与导航 |
@@ -152,10 +168,10 @@ Owner。Presentation 中面向用户的 Terminal.app/tmux 文案不算具体实�
 | `src/presentation/tui/field.rs` | 相邻 Session 面板共用的紧凑键/值行 |
 | `src/presentation/tui/provider_mark.rs` | 终端安全的 Provider 标记（Claude / Codex 轮廓） |
 | `src/presentation/tui/provenance_mark.rs` | Project Tree 上外部观察 Session 的紧凑后缀标记 |
-| `src/presentation/tui/hidden_tree.rs` | 当前可见 Hidden Sessions 的专用管理视图 |
+| `src/presentation/tui/hidden_tree.rs` | Hidden Inventory 的输入 owner、稳定身份导航、restore/delete request 转换与专用管理视图 |
 | `src/presentation/tui/managed_start.rs` | 未完成 Managed 启动的仅元数据状态与恢复控件 |
-| `src/presentation/tui/modals.rs` | 全局模态覆盖层、编辑器与终端尺寸保护 |
-| `src/presentation/tui/guide.rs` | Guide 弹窗、主题内容与滚动测量 |
+| `src/presentation/tui/modals.rs` | 按 `OverlayState` 的同一层级结构绘制 underlay、确认框、编辑器与终端尺寸保护 |
+| `src/presentation/tui/guide.rs` | Guide 的输入 owner、关闭/来源恢复、主题内容、渲染与滚动测量 |
 | `src/presentation/tui/layout.rs` | 多个 UI 功能共用的几何布局辅助函数 |
 | `src/presentation/tui/path_display.rs` | 本地文件系统路径的共享展示辅助 |
 | `src/presentation/tui/text.rs` | 文本宽度与截断工具：终端显示宽度不等于字符数，统一处理对齐与缩写 |

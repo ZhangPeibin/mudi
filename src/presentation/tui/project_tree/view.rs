@@ -7,7 +7,6 @@ use super::super::{
 use super::model::{ProjectTreeRow, SessionAgeBand};
 use super::State;
 use crate::application::attention::{AttentionRank, AttentionSnapshot};
-use crate::application::session_labels::SessionMetadataQuery;
 use crate::domain::{Project, Session, SessionState};
 use crate::presentation::app::{fmt_relative, Snapshot};
 use ratatui::layout::Rect;
@@ -23,7 +22,6 @@ pub(in crate::presentation::tui) fn draw(
     area: Rect,
     snap: &Snapshot,
     state: &State,
-    labels: &dyn SessionMetadataQuery,
     theme: Theme,
 ) {
     let now_ms = snapshot_now_ms(snap);
@@ -40,7 +38,10 @@ pub(in crate::presentation::tui) fn draw(
         .iter()
         .map(|session| (session.provider, session.id.as_str()))
         .collect::<Vec<_>>();
-    let mut titles = labels.titles_for(&visible_identities).into_iter();
+    let mut titles = snap
+        .session_metadata
+        .titles_for(&visible_identities)
+        .into_iter();
     let (_, open_session_count) = super::counts(snap);
     let content_width = area.width as usize;
     let mut lines = Vec::new();

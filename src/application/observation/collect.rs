@@ -1,5 +1,5 @@
 use super::frame::{ManagedBindingObservation, ObservationFrame};
-use crate::application::managed_sessions::{
+use crate::application::managed_session::{
     BindingProcessObservation, ManagedCurrentRunVerifier, ManagedLaunchRegistration,
     ManagedResumeVerifier, ProcessEvidence, ProviderBindingEvidence, ProviderProcessObservation,
 };
@@ -173,7 +173,7 @@ impl CollectService {
 
     pub fn with_managed_current_run_evidence(
         mut self,
-        evidence: Box<dyn crate::application::managed_sessions::ManagedCurrentRunEvidence>,
+        evidence: Box<dyn crate::application::managed_session::ManagedCurrentRunEvidence>,
     ) -> Self {
         self.managed_current_run_verifier = ManagedCurrentRunVerifier::new(evidence);
         self
@@ -181,7 +181,7 @@ impl CollectService {
 
     pub fn with_managed_resume_evidence(
         mut self,
-        evidence: Box<dyn crate::application::managed_sessions::ManagedResumeEvidence>,
+        evidence: Box<dyn crate::application::managed_session::ManagedResumeEvidence>,
     ) -> Self {
         self.managed_resume_verifier = ManagedResumeVerifier::new(evidence);
         self

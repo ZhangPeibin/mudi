@@ -5,9 +5,10 @@ sessions in one terminal — current context pressure, live Busy/Idle/exited sta
 meaningful recent transitions, Current Run and Transcript Lifetime Usage with API-rate
 dollar estimates, compaction history, and explicitly authorized Assisted Handoff.
 
-> The Session index and Task Store contain metadata only. Mudi never stores Prompt,
-> raw Provider output, Transcript, tool, or source-file content in either database. A validated
-> Handoff Artifact is stored separately only after explicit user authorization.
+> The disposable Session index and authoritative state database contain metadata only. Mudi
+> never stores Prompt, raw Provider output, Transcript, tool, or source-file content in either
+> database. A validated Handoff Artifact is stored separately only after explicit user
+> authorization.
 
 ## Highlights
 
@@ -102,7 +103,7 @@ Standard paths with environment overrides:
 |---|---|---|
 | `MUDI_CLAUDE_DIR` | `~/.claude` | Claude data root |
 | `MUDI_CODEX_DIR` | `~/.codex` | Codex data root |
-| `MUDI_DATA_DIR` | `~/Library/Application Support/mudi` | index, Task Store, Handoff Artifacts, Profile, and model override files |
+| `MUDI_DATA_DIR` | `~/Library/Application Support/mudi` | disposable index, authoritative state database, Handoff Artifacts, Profile, and model override files |
 | `MUDI_EXTRA_DIRS` | — | colon-separated extra log dirs |
 | `MUDI_CLAUDE_EXECUTABLE` | discovered from `PATH` | Claude CLI used by Handoff Workers |
 | `MUDI_CODEX_EXECUTABLE` | discovered from `PATH` | Codex CLI used by Handoff Workers |
@@ -140,10 +141,11 @@ mainstream source records come from the structured table at `llmcalcs.com/pricin
 (source data last updated 2026-06-11). The catalog records direct and batch API prices plus
 Context Window; batch prices are metadata and are not used for interactive Session estimates.
 
-The disposable Session index is `index.db`. The authoritative Operation Task Store is the
-separate owner-only `tasks.db`; validated Handoff Artifacts are published under the owner-only
-`handoff-artifacts/` directory. Local Profile preferences are stored separately in
-`profile.json`; deleting that file restores first-use Guide and the default `mudi`
+The disposable Session index is `index.db`. The authoritative Operation Task, Managed Session,
+Binding, Session Metadata, and Curation records share the owner-only `state.db`; validated
+Handoff Artifacts are published under the owner-only `handoff-artifacts/` directory. Local
+Profile preferences are stored separately in `profile.json`; deleting that file restores
+first-use Guide and the default `mudi`
 Theme. `--theme <name>` overrides the saved Theme for one process without changing the
 Profile; unknown names fall back to `mudi`. Runtime Theme switching is deferred to a
 future Settings feature.

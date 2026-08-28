@@ -90,7 +90,12 @@ pub(super) fn draw_header(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
 pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     let theme = ui.theme.palette();
     let compact = area.width < 100;
-    let can_edit_session = ui.labels.is_editable() && ui.selected_session(snap).is_some();
+    let can_edit_session = ui.selected_session(snap).is_some_and(|session| {
+        snap.session_metadata.allows_for(
+            session,
+            crate::application::observation::read_model::SessionMetadataAction::Edit,
+        )
+    });
     let can_handoff = ui.detail_session(snap).is_some();
     let now = Instant::now();
     let status_notice = ui
@@ -98,22 +103,38 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         .as_ref()
         .filter(|(_, until)| now < *until)
         .map(|(message, _)| message.clone());
-    let label_error = ui.labels.error().map(str::to_string);
+    let label_error = snap.session_metadata.error.clone();
     let task_detail = ui.detail_task(snap);
+    let is_detail = ui.overlay.detail().is_some();
     // 左侧快捷键按最具体的模态上下文优先，避免展示当前不可执行的命令。
-    let left = if ui.inventory_delete_confirmation.is_some() {
+    let left = if matches!(
+        ui.overlay.confirmation(),
+        Some(super::overlay::ConfirmationState::InventoryDelete(_))
+    ) {
         "Enter Delete | Esc Keep Hidden"
-    } else if ui.hide_confirmation.is_some() {
+    } else if matches!(
+        ui.overlay.confirmation(),
+        Some(super::overlay::ConfirmationState::Hide(_))
+    ) {
         "Enter Hide | Esc Keep Visible"
-    } else if ui.hidden_tree_open {
+    } else if matches!(ui.overlay, super::overlay::OverlayState::HiddenInventory(_)) {
         "j/k Move | Enter Expand/Collapse | u Restore | d Delete | Esc Back"
-    } else if ui.new_session.is_some() {
+    } else if matches!(ui.overlay, super::overlay::OverlayState::New(_)) {
         ""
-    } else if ui.task_retry_confirmation.is_some() {
+    } else if matches!(
+        ui.overlay.confirmation(),
+        Some(super::overlay::ConfirmationState::TaskRetry(_))
+    ) {
         "Left/Right Provider | Enter Authorize Retry | Esc Cancel"
-    } else if ui.task_cancellation_confirmation.is_some() {
+    } else if matches!(
+        ui.overlay.confirmation(),
+        Some(super::overlay::ConfirmationState::TaskCancellation(_))
+    ) {
         "Enter Confirm Cancel | Esc Keep Task"
-    } else if ui.handoff_confirmation.is_some() {
+    } else if matches!(
+        ui.overlay.confirmation(),
+        Some(super::overlay::ConfirmationState::Handoff(_))
+    ) {
         "Left/Right Provider | Enter Authorize | Esc Cancel"
     } else if task_detail.is_some_and(OperationTask::is_being_deleted) {
         "Esc Back | j/k Scroll | ? Guide | q Quit"
@@ -129,17 +150,17 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         "d Delete | Esc | j/k | ? | q Quit"
     } else if compact && status_notice.is_some() {
         ""
-    } else if ui.detail.is_some() && compact && can_edit_session && can_handoff {
+    } else if is_detail && compact && can_edit_session && can_handoff {
         "Esc | j/k Fields | c Copy | e Edit | h Handoff | ? | q Quit"
-    } else if ui.detail.is_some() && compact && can_edit_session {
+    } else if is_detail && compact && can_edit_session {
         "Esc | j/k Fields | c Copy | e Edit | ? Guide | q Quit"
-    } else if ui.detail.is_some() && compact {
+    } else if is_detail && compact {
         "Esc Back | j/k Fields | c Copy | ? Guide | q Quit"
-    } else if ui.detail.is_some() && can_edit_session && can_handoff {
+    } else if is_detail && can_edit_session && can_handoff {
         "Esc | j/k Fields | c Copy | e Edit session | h Handoff | ? | q Quit"
-    } else if ui.detail.is_some() && can_edit_session {
+    } else if is_detail && can_edit_session {
         "Esc | j/k Fields | c Copy | e Edit session | ? Guide | q Quit"
-    } else if ui.detail.is_some() {
+    } else if is_detail {
         "Esc | j/k Fields | c Copy | ? Guide | q Quit"
     } else if compact && can_edit_session {
         "j/k | Left/Right | Enter | e Edit | ? | q Quit"
@@ -158,12 +179,12 @@ pub(super) fn draw_footer(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
     } else {
         refresh_status(snap)
     };
-    let shows_price_note = ui.detail.is_some();
+    let shows_price_note = is_detail;
     let right = if status_notice.is_some() {
         status
     } else if compact && shows_price_note {
         "Estimated using API rates".to_string()
-    } else if ui.detail.is_none() {
+    } else if !is_detail {
         status
     } else {
         format!("{status}   ·   Estimated using API rates")

@@ -1,10 +1,10 @@
 //! SQLite persistence for Managed Session registrations and authority records.
 
-use super::state::StateDatabase;
-use crate::application::managed_sessions::{
+use super::StateDatabase;
+use crate::application::managed_session::{
     BindingReceipt, ManagedCurrentRunRecord, ManagedLaunchEvidence, ManagedLaunchRegistration,
     ManagedLaunchStatus, ManagedLaunchTarget, ManagedResumeTarget, ManagedSessionRecord,
-    ManagedSessionRepository, PrivateTmuxEnvironment, ProviderNewCommand,
+    ManagedSessionRepository,
 };
 use crate::application::session_labels::validate_alias;
 use crate::domain::{
@@ -15,13 +15,12 @@ use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
-pub struct ManagedLaunchStore {
+pub struct StateManagedSessionRepository {
     conn: Connection,
 }
 
@@ -45,14 +44,14 @@ fn insert_registration(conn: &Connection, registration: &ManagedLaunchRegistrati
             path_bytes(&registration.target.working_directory),
             registration.session_alias,
             registration.description,
-            registration.tmux.socket_name,
-            registration.tmux.session_name,
+            registration.control_channel.namespace,
+            registration.control_channel.run_target,
             registration.created_at_ms,
             registration.launched_at_ms,
             registration
                 .launch_evidence
                 .as_ref()
-                .map(|evidence| &evidence.tmux_pane_id),
+                .map(|evidence| &evidence.channel_id),
             registration
                 .launch_evidence
                 .as_ref()
@@ -70,7 +69,7 @@ fn insert_registration(conn: &Connection, registration: &ManagedLaunchRegistrati
     Ok(())
 }
 
-impl ManagedLaunchStore {
+impl StateManagedSessionRepository {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let database = StateDatabase::open(path)?;
         let conn = database.connect()?;
@@ -325,20 +324,18 @@ impl ManagedLaunchStore {
                 )| {
                     Ok(ManagedLaunchRegistration {
                         id: registration_id.to_string(),
-                        status: ManagedLaunchStatus::parse(&status)?,
+                        status: ManagedLaunchStatus::parse(&status).ok_or_else(|| {
+                            anyhow!("unknown Managed Launch Registration status {status:?}")
+                        })?,
                         provider: Provider::parse(&provider)
                             .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
                         target: ManagedLaunchTarget { working_directory },
                         session_alias,
                         description,
                         binding_initializer,
-                        provider_command: ProviderNewCommand {
-                            executable: PathBuf::new(),
-                            arguments: Vec::new(),
-                        },
-                        tmux: PrivateTmuxEnvironment {
-                            socket_name: tmux_socket_name,
-                            session_name: tmux_session_name,
+                        control_channel: crate::domain::ManagedControlChannel {
+                            namespace: tmux_socket_name,
+                            run_target: tmux_session_name,
                         },
                         created_at_ms,
                         launched_at_ms,
@@ -560,9 +557,9 @@ impl ManagedLaunchStore {
                     .ok_or_else(|| anyhow!("unknown Session Provider {provider:?}"))?,
                 native_session_id,
                 provider_process: ProcessIdentity { pid, started_at_ms },
-                tmux: PrivateTmuxEnvironment {
-                    socket_name,
-                    session_name,
+                control_channel: crate::domain::ManagedControlChannel {
+                    namespace: socket_name,
+                    run_target: session_name,
                 },
                 binding_receipt_id,
             })
@@ -618,94 +615,12 @@ impl ManagedLaunchStore {
                 Ok(run.binding_receipt_id)
             })
             .transpose()?;
-        let opaque_ref = new_opaque_run_ref()?;
-        let transaction = self.conn.transaction()?;
-        transaction.execute(
-            "INSERT INTO binding_receipts (receipt_id, registration_id, provider, native_session_id, source_path, source_format, provider_pid, provider_started_at_ms, issued_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, 'jsonl', ?6, ?7, ?8)",
-            params![
-                receipt.id,
-                receipt.registration_id,
-                receipt.provider.as_str(),
-                receipt.native_session_id,
-                path_bytes(&receipt.source.path),
-                receipt.provider_process.pid,
-                receipt.provider_process.started_at_ms,
-                receipt.issued_at_ms,
-            ],
-        )?;
-        if let Some(prior_receipt_id) = resume_authority {
-            update_one(
-                transaction.execute(
-                    "UPDATE managed_sessions SET binding_receipt_id = ?3 WHERE provider = ?1 AND native_session_id = ?2 AND binding_receipt_id = ?4",
-                    params![
-                        receipt.provider.as_str(),
-                        receipt.native_session_id,
-                        receipt.id,
-                        prior_receipt_id,
-                    ],
-                )?,
-                &registration.id,
-            )?;
-        } else {
-            transaction.execute(
-                "INSERT INTO managed_sessions (provider, native_session_id, working_directory, session_alias, description, binding_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    receipt.provider.as_str(),
-                    receipt.native_session_id,
-                    path_bytes(&registration.target.working_directory),
-                    registration.session_alias,
-                    registration.description,
-                    receipt.id,
-                ],
-            )?;
-            transaction.execute(
-                r#"
-                INSERT INTO session_metadata (
-                    provider, native_session_id, alias, description
-                ) VALUES (?1, ?2, ?3, ?4)
-                ON CONFLICT(provider, native_session_id) DO UPDATE SET
-                    alias = COALESCE(session_metadata.alias, excluded.alias),
-                    description = COALESCE(session_metadata.description, excluded.description)
-                "#,
-                params![
-                    receipt.provider.as_str(),
-                    receipt.native_session_id,
-                    registration.session_alias,
-                    registration.description,
-                ],
-            )?;
-        }
-        transaction.execute(
-            "INSERT INTO managed_current_runs (run_id, opaque_ref, provider, native_session_id, provider_pid, provider_started_at_ms, tmux_socket_name, tmux_session_name, binding_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                format!("run-{}", registration.id),
-                opaque_ref,
-                receipt.provider.as_str(),
-                receipt.native_session_id,
-                receipt.provider_process.pid,
-                receipt.provider_process.started_at_ms,
-                registration.tmux.socket_name,
-                registration.tmux.session_name,
-                receipt.id,
-            ],
-        )?;
-        transaction.execute(
-            "DELETE FROM managed_resume_registrations WHERE registration_id = ?1",
-            [registration.id.as_str()],
-        )?;
-        transaction.execute(
-            "DELETE FROM managed_launch_title_associations WHERE registration_id = ?1",
-            [registration.id.as_str()],
-        )?;
-        update_one(
-            transaction.execute(
-                "DELETE FROM managed_launch_registrations WHERE registration_id = ?1 AND status = 'binding'",
-                [registration.id.as_str()],
-            )?,
-            &registration.id,
-        )?;
-        transaction.commit()?;
-        Ok(())
+        super::bindings::establish_management(
+            &mut self.conn,
+            registration,
+            receipt,
+            resume_authority,
+        )
     }
 
     fn record_launched(
@@ -731,7 +646,7 @@ impl ManagedLaunchStore {
                 params![
                     registration_id,
                     now_ms,
-                    evidence.tmux_pane_id,
+                    evidence.channel_id,
                     evidence.provider_process.pid,
                     evidence.provider_process.started_at_ms,
                 ],
@@ -809,9 +724,9 @@ impl ManagedLaunchStore {
     }
 }
 
-impl ManagedSessionRepository for ManagedLaunchStore {
+impl ManagedSessionRepository for StateManagedSessionRepository {
     fn insert(&self, registration: &ManagedLaunchRegistration) -> Result<()> {
-        ManagedLaunchStore::insert(self, registration)
+        StateManagedSessionRepository::insert(self, registration)
     }
 
     fn insert_resume(
@@ -819,15 +734,15 @@ impl ManagedSessionRepository for ManagedLaunchStore {
         registration: &ManagedLaunchRegistration,
         target: &ManagedResumeTarget,
     ) -> Result<()> {
-        ManagedLaunchStore::insert_resume(self, registration, target)
+        StateManagedSessionRepository::insert_resume(self, registration, target)
     }
 
     fn managed_resume_target(&self, registration_id: &str) -> Result<Option<ManagedResumeTarget>> {
-        ManagedLaunchStore::managed_resume_target(self, registration_id)
+        StateManagedSessionRepository::managed_resume_target(self, registration_id)
     }
 
     fn launch_title_association(&self, registration_id: &str) -> Result<Option<SessionIdentity>> {
-        ManagedLaunchStore::launch_title_association(self, registration_id)
+        StateManagedSessionRepository::launch_title_association(self, registration_id)
     }
 
     fn record_launch_title_association(
@@ -835,7 +750,11 @@ impl ManagedSessionRepository for ManagedLaunchStore {
         registration_id: &str,
         session: &SessionIdentity,
     ) -> Result<()> {
-        ManagedLaunchStore::record_launch_title_association(self, registration_id, session)
+        StateManagedSessionRepository::record_launch_title_association(
+            self,
+            registration_id,
+            session,
+        )
     }
 
     fn associate_launch_title(
@@ -844,31 +763,31 @@ impl ManagedSessionRepository for ManagedLaunchStore {
         session: &SessionIdentity,
         alias: &str,
     ) -> Result<()> {
-        ManagedLaunchStore::associate_launch_title(self, registration_id, session, alias)
+        StateManagedSessionRepository::associate_launch_title(self, registration_id, session, alias)
     }
 
     fn has_pending_resume(&self, provider: Provider, native_session_id: &str) -> Result<bool> {
-        ManagedLaunchStore::has_pending_resume(self, provider, native_session_id)
+        StateManagedSessionRepository::has_pending_resume(self, provider, native_session_id)
     }
 
     fn get(&self, registration_id: &str) -> Result<Option<ManagedLaunchRegistration>> {
-        ManagedLaunchStore::get(self, registration_id)
+        StateManagedSessionRepository::get(self, registration_id)
     }
 
     fn binding_registrations(&self) -> Result<Vec<ManagedLaunchRegistration>> {
-        ManagedLaunchStore::binding_registrations(self)
+        StateManagedSessionRepository::binding_registrations(self)
     }
 
     fn registrations(&self) -> Result<Vec<ManagedLaunchRegistration>> {
-        ManagedLaunchStore::registrations(self)
+        StateManagedSessionRepository::registrations(self)
     }
 
     fn binding_receipt(&self, registration_id: &str) -> Result<Option<BindingReceipt>> {
-        ManagedLaunchStore::binding_receipt(self, registration_id)
+        StateManagedSessionRepository::binding_receipt(self, registration_id)
     }
 
     fn binding_receipt_by_id(&self, receipt_id: &str) -> Result<Option<BindingReceipt>> {
-        ManagedLaunchStore::binding_receipt_by_id(self, receipt_id)
+        StateManagedSessionRepository::binding_receipt_by_id(self, receipt_id)
     }
 
     fn managed_session(
@@ -876,11 +795,11 @@ impl ManagedSessionRepository for ManagedLaunchStore {
         provider: Provider,
         native_session_id: &str,
     ) -> Result<Option<ManagedSessionRecord>> {
-        ManagedLaunchStore::managed_session(self, provider, native_session_id)
+        StateManagedSessionRepository::managed_session(self, provider, native_session_id)
     }
 
     fn managed_sessions(&self) -> Result<Vec<ManagedSessionRecord>> {
-        ManagedLaunchStore::managed_sessions(self)
+        StateManagedSessionRepository::managed_sessions(self)
     }
 
     fn managed_current_run(
@@ -888,15 +807,15 @@ impl ManagedSessionRepository for ManagedLaunchStore {
         provider: Provider,
         native_session_id: &str,
     ) -> Result<Option<ManagedCurrentRunRecord>> {
-        ManagedLaunchStore::managed_current_run(self, provider, native_session_id)
+        StateManagedSessionRepository::managed_current_run(self, provider, native_session_id)
     }
 
     fn managed_current_runs(&self) -> Result<Vec<ManagedCurrentRunRecord>> {
-        ManagedLaunchStore::managed_current_runs(self)
+        StateManagedSessionRepository::managed_current_runs(self)
     }
 
     fn apply_provenance(&self, sessions: &mut [Session]) -> Result<()> {
-        ManagedLaunchStore::apply_provenance(self, sessions)
+        StateManagedSessionRepository::apply_provenance(self, sessions)
     }
 
     fn establish_management(
@@ -904,7 +823,7 @@ impl ManagedSessionRepository for ManagedLaunchStore {
         registration: &ManagedLaunchRegistration,
         receipt: &BindingReceipt,
     ) -> Result<()> {
-        ManagedLaunchStore::establish_management(self, registration, receipt)
+        StateManagedSessionRepository::establish_management(self, registration, receipt)
     }
 
     fn record_launched(
@@ -913,38 +832,38 @@ impl ManagedSessionRepository for ManagedLaunchStore {
         now_ms: i64,
         evidence: ManagedLaunchEvidence,
     ) -> Result<()> {
-        ManagedLaunchStore::record_launched(self, registration_id, now_ms, evidence)
+        StateManagedSessionRepository::record_launched(self, registration_id, now_ms, evidence)
     }
 
     fn record_terminal_opened(&self, registration_id: &str, now_ms: i64) -> Result<()> {
-        ManagedLaunchStore::record_terminal_opened(self, registration_id, now_ms)
+        StateManagedSessionRepository::record_terminal_opened(self, registration_id, now_ms)
     }
 
     fn record_terminal_error(&self, registration_id: &str, error: &str) -> Result<()> {
-        ManagedLaunchStore::record_terminal_error(self, registration_id, error)
+        StateManagedSessionRepository::record_terminal_error(self, registration_id, error)
     }
 
     fn remove_binding(&mut self, registration_id: &str) -> Result<()> {
-        ManagedLaunchStore::remove_binding(self, registration_id)
+        StateManagedSessionRepository::remove_binding(self, registration_id)
     }
 
     fn mark_needs_review(&self, registration_id: &str, error: &str) -> Result<()> {
-        ManagedLaunchStore::mark_needs_review(self, registration_id, error)
+        StateManagedSessionRepository::mark_needs_review(self, registration_id, error)
     }
 
     fn mark_failed(&mut self, registration_id: &str, error: &str) -> Result<()> {
-        ManagedLaunchStore::mark_failed(self, registration_id, error)
+        StateManagedSessionRepository::mark_failed(self, registration_id, error)
     }
 }
 
 fn persisted_launch_evidence(
-    tmux_pane_id: Option<String>,
+    channel_id: Option<String>,
     provider_pid: Option<u32>,
     provider_started_at_ms: Option<i64>,
 ) -> Result<Option<ManagedLaunchEvidence>> {
-    match (tmux_pane_id, provider_pid, provider_started_at_ms) {
-        (Some(tmux_pane_id), Some(pid), Some(started_at_ms)) => Ok(Some(ManagedLaunchEvidence {
-            tmux_pane_id,
+    match (channel_id, provider_pid, provider_started_at_ms) {
+        (Some(channel_id), Some(pid), Some(started_at_ms)) => Ok(Some(ManagedLaunchEvidence {
+            channel_id,
             provider_process: ProcessIdentity { pid, started_at_ms },
         })),
         (None, None, None) => Ok(None),
@@ -980,14 +899,4 @@ fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
 #[cfg(not(unix))]
 fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
     PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-fn new_opaque_run_ref() -> Result<String> {
-    let mut random = [0_u8; 16];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
-    let encoded = random
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    Ok(format!("run_{encoded}"))
 }

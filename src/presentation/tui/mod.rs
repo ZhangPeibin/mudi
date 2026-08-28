@@ -3,7 +3,7 @@
 //! 本模块使用 Ratatui 构建紧凑的总览界面。渲染过程只读取业务快照
 //! [`Snapshot`] 和界面状态 [`Ui`]：前者提供会话、任务和信号等事实，后者保存
 //! 选中项、弹窗与滚动位置。提供方特有字段由适配器负责归一化，
-//! UI 自己只持久化 Profile 偏好与用户显式设置的会话元数据。
+//! UI 自己只持久化 Profile 偏好；Session Metadata 来自只读 Snapshot。
 
 mod attention_summary;
 mod chrome;
@@ -16,6 +16,7 @@ mod hidden_tree;
 mod layout;
 mod managed_start;
 mod modals;
+mod overlay;
 mod overview;
 mod path_display;
 mod project_tree;
@@ -33,10 +34,9 @@ mod theme;
 
 use crate::application::attention::{AttentionEngine, AttentionSnapshot};
 use crate::application::clipboard::ClipboardPort;
-use crate::application::managed_sessions::{
+use crate::application::managed_session::{
     ManagedLaunchAction, ManagedLaunchTarget, ManagedNewRequest, ManagedResumeRequest,
 };
-use crate::application::session_labels::{SessionMetadataQuery, SessionMetadataView};
 use crate::application::signals::RecentSignal;
 use crate::application::tasks::OperationTask;
 use crate::domain::{Provider, Session, SessionIdentity, SessionState};
@@ -472,32 +472,11 @@ pub struct Ui {
     all_region: AllRegion,
     signal_selected: usize,
     task_selected: usize,
-    /// 详情、展开分组及 Guide 的临时导航状态。
-    detail: Option<DetailView>,
-    hidden_tree_open: bool,
-    hidden_tree: hidden_tree::State,
-    guide_open: bool,
-    guide_category: GuideCategory,
-    guide_pane: GuidePane,
-    guide_scroll: usize,
-    // 文本换行取决于实际视口，所以绘制阶段会回写最近一次测得的最大滚动位置。
-    guide_max_scroll: StateCell<usize>,
-    /// 编辑器及所有需要显式确认的模态状态。
-    new_session: Option<NewSessionForm>,
-    directory_browser: Option<DirectoryBrowser>,
-    edit_session: Option<SessionEditor>,
-    handoff_confirmation: Option<HandoffConfirmation>,
-    managed_resume_confirmation: Option<ManagedResumeConfirmation>,
-    task_cancellation_confirmation: Option<TaskCancellationConfirmation>,
-    task_deletion_confirmation: Option<TaskDeletionConfirmation>,
-    task_retry_confirmation: Option<TaskRetryConfirmation>,
-    hide_confirmation: Option<HideConfirmation>,
-    inventory_delete_confirmation: Option<InventoryDeleteConfirmation>,
+    /// One explicit state owns both overlay input priority and drawing order.
+    overlay: overlay::OverlayState,
     /// Stable selection for the independent Managed Start status region.
     managed_launch_id: Option<String>,
-    /// UI 自己拥有的 Session 元数据、Profile、主题和短期状态提示。
-    labels: Box<dyn SessionMetadataQuery>,
-    labels_snapshot_revision: u64,
+    /// UI 自己拥有的 Profile、主题和短期状态提示。
     profile_path: Option<PathBuf>,
     profile: ProfilePreferences,
     theme: ThemeName,
@@ -614,27 +593,8 @@ impl Default for Ui {
             all_region: AllRegion::Now,
             signal_selected: 0,
             task_selected: 0,
-            detail: None,
-            hidden_tree_open: false,
-            hidden_tree: hidden_tree::State::default(),
-            guide_open: false,
-            guide_category: GuideCategory::Overview,
-            guide_pane: GuidePane::Categories,
-            guide_scroll: 0,
-            guide_max_scroll: StateCell::new(UNMEASURED_GUIDE_MAX_SCROLL),
-            new_session: None,
-            directory_browser: None,
-            edit_session: None,
-            handoff_confirmation: None,
-            managed_resume_confirmation: None,
-            task_cancellation_confirmation: None,
-            task_deletion_confirmation: None,
-            task_retry_confirmation: None,
-            hide_confirmation: None,
-            inventory_delete_confirmation: None,
+            overlay: overlay::OverlayState::None,
             managed_launch_id: None,
-            labels: Box::new(SessionMetadataView::default()),
-            labels_snapshot_revision: 0,
             profile_path: None,
             profile: ProfilePreferences::default(),
             theme: ThemeName::default(),
@@ -644,15 +604,31 @@ impl Default for Ui {
 }
 
 impl Ui {
-    /// 从本地 Profile 加载 UI 状态。
-    pub fn load(profile_path: impl AsRef<Path>) -> std::io::Result<Self> {
-        Self::load_with_session_metadata(profile_path, Box::new(SessionMetadataView::default()))
+    #[cfg(test)]
+    fn test_new_form(&self) -> Option<&NewSessionForm> {
+        self.overlay.new_session().map(overlay::NewOverlay::form)
     }
 
-    pub fn load_with_session_metadata(
-        profile_path: impl AsRef<Path>,
-        labels: Box<dyn SessionMetadataQuery>,
-    ) -> std::io::Result<Self> {
+    #[cfg(test)]
+    fn test_directory_browser(&self) -> Option<&DirectoryBrowser> {
+        match self.overlay.new_session()? {
+            overlay::NewOverlay::Directory { browser, .. } => Some(browser),
+            overlay::NewOverlay::Form(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn test_set_detail(&mut self, detail: DetailView) {
+        self.overlay = overlay::OverlayState::Detail(detail);
+    }
+
+    #[cfg(test)]
+    fn test_session_editor(&self) -> Option<&SessionEditor> {
+        self.overlay.session_editor()
+    }
+
+    /// 从本地 Profile 加载 UI 状态。
+    pub fn load(profile_path: impl AsRef<Path>) -> std::io::Result<Self> {
         let profile_path = profile_path.as_ref().to_path_buf();
         let profile = match fs::read(&profile_path) {
             Ok(contents) => serde_json::from_slice(&contents).map_err(std::io::Error::other)?,
@@ -664,8 +640,14 @@ impl Ui {
         let theme = profile.theme;
         let workspace_split = split_pane::State::new(profile.overview_left_width);
         Ok(Self {
-            guide_open: !profile.help_seen,
-            labels,
+            overlay: if profile.help_seen {
+                overlay::OverlayState::None
+            } else {
+                overlay::OverlayState::Guide(overlay::GuideOverlay::new(
+                    GuideCategory::Overview,
+                    overlay::OverlayState::None,
+                ))
+            },
             profile_path: Some(profile_path),
             profile,
             workspace_split,
@@ -698,47 +680,91 @@ impl Ui {
         self.status_notice = Some((message.into(), Instant::now() + Duration::from_secs(4)));
     }
 
+    fn push_confirmation(&mut self, confirmation: overlay::ConfirmationState) {
+        let underlay = Box::new(std::mem::take(&mut self.overlay));
+        self.overlay = overlay::OverlayState::Confirmation {
+            underlay,
+            confirmation,
+        };
+    }
+
+    fn open_guide(&mut self, category: GuideCategory) {
+        let underlay = std::mem::take(&mut self.overlay);
+        self.overlay = overlay::OverlayState::Guide(overlay::GuideOverlay::new(category, underlay));
+    }
+
+    fn close_guide(&mut self) {
+        let overlay = std::mem::take(&mut self.overlay);
+        self.overlay = match overlay {
+            overlay::OverlayState::Guide(guide) => *guide.underlay,
+            other => other,
+        };
+    }
+
+    fn close_session_editor(&mut self) {
+        let overlay = std::mem::take(&mut self.overlay);
+        self.overlay = match overlay {
+            overlay::OverlayState::SessionEdit(editor) => *editor.underlay,
+            other => other,
+        };
+    }
+
+    fn open_hidden_inventory(&mut self, snap: &Snapshot) {
+        let mut state = hidden_tree::State::default();
+        state.reconcile(snap);
+        let underlay = Box::new(std::mem::take(&mut self.overlay));
+        self.overlay = overlay::OverlayState::HiddenInventory(overlay::HiddenInventoryOverlay {
+            state,
+            underlay,
+        });
+    }
+
+    fn close_hidden_inventory(&mut self) {
+        let overlay = std::mem::take(&mut self.overlay);
+        self.overlay = match overlay {
+            overlay::OverlayState::HiddenInventory(inventory) => *inventory.underlay,
+            other => other,
+        };
+    }
+
     pub fn finish_managed_new_directory_selection(
         &mut self,
         selection: Result<Option<ManagedLaunchTarget>, String>,
     ) {
-        match selection {
-            Ok(Some(target)) => {
-                if let Some(form) = self.new_session.as_mut() {
-                    form.apply_directory_target(target);
-                } else {
-                    let mut form = NewSessionForm::new(Vec::new(), 0);
-                    form.apply_directory_target(target);
-                    self.new_session = Some(form);
+        let overlay = std::mem::take(&mut self.overlay);
+        let mut form = match overlay {
+            overlay::OverlayState::New(new) => match new {
+                overlay::NewOverlay::Form(form) | overlay::NewOverlay::Directory { form, .. } => {
+                    form
                 }
+            },
+            other => {
+                self.overlay = other;
+                NewSessionForm::new(Vec::new(), 0)
             }
+        };
+        match selection {
+            Ok(Some(target)) => form.apply_directory_target(target),
             Ok(None) => {}
             Err(error) => {
-                if let Some(form) = self.new_session.as_mut() {
-                    form.error = Some(error);
-                    form.editor.focus(NewSessionField::Location.index());
-                } else {
-                    let mut form = NewSessionForm::new(Vec::new(), 0);
-                    form.editor.focus(NewSessionField::Location.index());
-                    form.error = Some(error);
-                    self.new_session = Some(form);
-                }
+                form.editor.focus(NewSessionField::Location.index());
+                form.error = Some(error);
             }
         }
+        self.overlay = overlay::OverlayState::New(overlay::NewOverlay::Form(form));
     }
 
     pub fn finish_session_metadata_save(&mut self, result: Result<(), String>) {
         match result {
             Ok(()) => {
-                self.labels.reload();
-                self.edit_session = None;
+                self.close_session_editor();
                 self.status_notice = Some((
                     "Session metadata saved".into(),
                     Instant::now() + Duration::from_secs(2),
                 ));
             }
             Err(error) => {
-                if let Some(form) = self.edit_session.as_mut() {
+                if let Some(form) = self.overlay.session_editor_mut() {
                     form.error = Some(error);
                 } else {
                     self.show_notice(format!("Save failed: {error}"));
@@ -747,10 +773,9 @@ impl Ui {
         }
     }
 
-    pub fn finish_hide_sessions(&mut self, result: Result<usize, String>, snap: &Snapshot) {
+    pub fn finish_hide_sessions(&mut self, result: Result<usize, String>) {
         match result {
             Ok(count) => {
-                self.labels.reload();
                 self.show_notice(format!(
                     "{count} Session{} hidden",
                     if count == 1 { "" } else { "s" }
@@ -758,18 +783,12 @@ impl Ui {
             }
             Err(error) => self.show_notice(format!("Hide failed: {error}")),
         }
-        self.hidden_tree.reconcile(snap, self.labels.as_ref());
     }
 
-    pub fn finish_restore_sessions(&mut self, result: Result<usize, String>, snap: &Snapshot) {
+    pub fn finish_restore_sessions(&mut self, result: Result<usize, String>) {
         match result {
             Ok(count) => {
-                self.labels.reload();
-                if self.hidden_sessions(snap).is_empty() {
-                    self.hidden_tree_open = false;
-                } else {
-                    self.hidden_tree.reconcile(snap, self.labels.as_ref());
-                }
+                self.close_hidden_inventory();
                 self.show_notice(format!(
                     "{count} Session{} restored",
                     if count == 1 { "" } else { "s" }
@@ -779,15 +798,10 @@ impl Ui {
         }
     }
 
-    pub fn finish_permanent_exclusion(&mut self, result: Result<usize, String>, snap: &Snapshot) {
+    pub fn finish_permanent_exclusion(&mut self, result: Result<usize, String>) {
         match result {
             Ok(count) => {
-                self.labels.reload();
-                if self.hidden_sessions(snap).is_empty() {
-                    self.hidden_tree_open = false;
-                } else {
-                    self.hidden_tree.reconcile(snap, self.labels.as_ref());
-                }
+                self.close_hidden_inventory();
                 self.show_notice(format!(
                     "{count} Session{} permanently excluded",
                     if count == 1 { "" } else { "s" }
@@ -871,7 +885,6 @@ impl Ui {
     fn overview_split_is_interactive(&self, terminal_area: ratatui::layout::Rect) -> bool {
         terminal_area.width >= MIN_TERMINAL_WIDTH
             && terminal_area.height >= MIN_TERMINAL_HEIGHT
-            && self.detail.is_none()
             && !modals::blocks_background_interaction(self)
     }
 
@@ -894,204 +907,8 @@ impl Ui {
         self.clamp_selections(snap);
         let normal_snapshot = self.normal_snapshot(snap);
         let snap = &normal_snapshot;
-        if self.directory_browser.is_some() {
-            return Ok(self.handle_directory_browser_key(key));
-        }
-        if self.new_session.is_some() {
-            return Ok(self.handle_new_session_key(key));
-        }
-        // Session 编辑器是最高优先级模态状态，打开时不会泄漏全局快捷键。
-        if self.edit_session.is_some() {
-            return Ok(self.handle_session_editor_key(key));
-        }
-        if let Some(target) = self.managed_resume_confirmation.clone() {
-            return match key.code {
-                crossterm::event::KeyCode::Esc => {
-                    self.managed_resume_confirmation = None;
-                    Ok(UiAction::None)
-                }
-                crossterm::event::KeyCode::Enter => {
-                    self.managed_resume_confirmation = None;
-                    Ok(UiAction::StartManagedResume {
-                        request: ManagedResumeRequest {
-                            provider: target.provider,
-                            native_session_id: target.native_session_id,
-                        },
-                    })
-                }
-                _ => Ok(UiAction::None),
-            };
-        }
-        // 每一种确认框都只接受自身声明的按键，确保一次授权只对应一次操作。
-        if let Some(target) = self.handoff_confirmation.clone() {
-            return match key.code {
-                crossterm::event::KeyCode::Esc => {
-                    self.handoff_confirmation = None;
-                    Ok(UiAction::None)
-                }
-                crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right => {
-                    if let Some(confirmation) = self.handoff_confirmation.as_mut() {
-                        confirmation.successor_provider = match confirmation.successor_provider {
-                            Provider::ClaudeCode => Provider::CodexCli,
-                            Provider::CodexCli => Provider::ClaudeCode,
-                        };
-                    }
-                    Ok(UiAction::None)
-                }
-                crossterm::event::KeyCode::Enter => {
-                    self.handoff_confirmation = None;
-                    Ok(UiAction::AuthorizeHandoff {
-                        source_provider: target.session.provider,
-                        source_session_id: target.session.native_id,
-                        successor_provider: target.successor_provider,
-                        end_current_run: target.end_current_run,
-                    })
-                }
-                _ => Ok(UiAction::None),
-            };
-        }
-        if let Some(target) = self.task_cancellation_confirmation.clone() {
-            return match key.code {
-                crossterm::event::KeyCode::Esc => {
-                    self.task_cancellation_confirmation = None;
-                    Ok(UiAction::None)
-                }
-                crossterm::event::KeyCode::Enter => {
-                    self.task_cancellation_confirmation = None;
-                    Ok(UiAction::CancelTask {
-                        task_id: target.task_id,
-                    })
-                }
-                _ => Ok(UiAction::None),
-            };
-        }
-        if let Some(target) = self.task_deletion_confirmation.clone() {
-            return match key.code {
-                crossterm::event::KeyCode::Esc => {
-                    self.task_deletion_confirmation = None;
-                    Ok(UiAction::None)
-                }
-                crossterm::event::KeyCode::Enter => {
-                    self.task_deletion_confirmation = None;
-                    Ok(UiAction::DeleteTask {
-                        task_id: target.task_id,
-                    })
-                }
-                _ => Ok(UiAction::None),
-            };
-        }
-        // Retry 和首次 Handoff 一样，需要重新选择 Successor Provider 并显式授权。
-        if let Some(target) = self.task_retry_confirmation.clone() {
-            return match key.code {
-                crossterm::event::KeyCode::Esc => {
-                    self.task_retry_confirmation = None;
-                    Ok(UiAction::None)
-                }
-                crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right => {
-                    if let Some(confirmation) = self.task_retry_confirmation.as_mut() {
-                        confirmation.successor_provider = match confirmation.successor_provider {
-                            Provider::ClaudeCode => Provider::CodexCli,
-                            Provider::CodexCli => Provider::ClaudeCode,
-                        };
-                    }
-                    Ok(UiAction::None)
-                }
-                crossterm::event::KeyCode::Enter => {
-                    self.task_retry_confirmation = None;
-                    Ok(UiAction::RetryTask {
-                        predecessor_task_id: target.predecessor_task_id,
-                        source_provider: target.session.provider,
-                        source_session_id: target.session.native_id,
-                        successor_provider: target.successor_provider,
-                        end_current_run: target.end_current_run,
-                    })
-                }
-                _ => Ok(UiAction::None),
-            };
-        }
-        if let Some(target) = self.hide_confirmation.clone() {
-            return match key.code {
-                crossterm::event::KeyCode::Esc => {
-                    self.hide_confirmation = None;
-                    Ok(UiAction::None)
-                }
-                crossterm::event::KeyCode::Enter => {
-                    let requested = match &target {
-                        HideConfirmation::Session { session, .. } => std::slice::from_ref(session),
-                        HideConfirmation::Project { sessions, .. } => sessions.as_slice(),
-                    };
-                    let sessions = requested
-                        .iter()
-                        .filter(|identity| {
-                            observed_snapshot.sessions.iter().any(|session| {
-                                session.provider == identity.provider
-                                    && session.id == identity.native_id
-                                    && !session.state.is_open()
-                            })
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    self.hide_confirmation = None;
-                    if sessions.is_empty() {
-                        let became_open = requested.iter().any(|identity| {
-                            observed_snapshot.sessions.iter().any(|session| {
-                                session.provider == identity.provider
-                                    && session.id == identity.native_id
-                                    && session.state.is_open()
-                            })
-                        });
-                        self.show_notice(if became_open {
-                            "Open Session cannot be hidden"
-                        } else {
-                            "No Exited Sessions to hide"
-                        });
-                        return Ok(UiAction::None);
-                    }
-                    Ok(UiAction::HideSessions { sessions })
-                }
-                _ => Ok(UiAction::None),
-            };
-        }
-        if let Some(target) = self.inventory_delete_confirmation.clone() {
-            return match key.code {
-                crossterm::event::KeyCode::Esc => {
-                    self.inventory_delete_confirmation = None;
-                    Ok(UiAction::None)
-                }
-                crossterm::event::KeyCode::Enter => {
-                    self.inventory_delete_confirmation = None;
-                    Ok(UiAction::PermanentlyExcludeSessions {
-                        sessions: target.sessions,
-                    })
-                }
-                _ => Ok(UiAction::None),
-            };
-        }
-        // Retry 快捷键先建立确认状态，不会直接创建新的 Operation Task。
-        if key.code == crossterm::event::KeyCode::Char('r')
-            && self
-                .detail_task(snap)
-                .is_some_and(OperationTask::offers_retry)
-        {
-            let task = self.detail_task(snap).expect("checked above");
-            let source_state = snap
-                .sessions
-                .iter()
-                .find(|session| {
-                    session.provider == task.source_provider && session.id == task.source_session_id
-                })
-                .map_or(SessionState::Exited, |session| session.state);
-            self.task_retry_confirmation = Some(TaskRetryConfirmation {
-                predecessor_task_id: task.id.clone(),
-                session: SessionIdentity {
-                    provider: task.source_provider,
-                    native_id: task.source_session_id.clone(),
-                },
-                source_state,
-                successor_provider: task.source_provider,
-                end_current_run: source_state.is_open(),
-            });
-            return Ok(UiAction::None);
+        if let Some(action) = overlay::handle_modal_key(self, key, observed_snapshot)? {
+            return Ok(action);
         }
         // 退出键在 Guide 和详情之上保持全局可用。
         if key.code == crossterm::event::KeyCode::Char('q')
@@ -1102,98 +919,71 @@ impl Ui {
         {
             return Ok(UiAction::Quit);
         }
-        if self.hidden_tree_open {
-            match key.code {
-                crossterm::event::KeyCode::Esc => self.hidden_tree_open = false,
-                crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j') => {
-                    self.hidden_tree
-                        .move_vertical(observed_snapshot, self.labels.as_ref(), true);
-                }
-                crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {
-                    self.hidden_tree
-                        .move_vertical(observed_snapshot, self.labels.as_ref(), false);
-                }
-                crossterm::event::KeyCode::Enter => {
-                    self.hidden_tree
-                        .activate(observed_snapshot, self.labels.as_ref());
-                }
-                crossterm::event::KeyCode::Char('u') => {
-                    if let Some(sessions) = self
-                        .hidden_tree
-                        .selected_identities(observed_snapshot, self.labels.as_ref())
-                    {
-                        return Ok(UiAction::RestoreSessions { sessions });
-                    }
-                }
-                crossterm::event::KeyCode::Char('d') => {
-                    if let Some(sessions) = self
-                        .hidden_tree
-                        .selected_identities(observed_snapshot, self.labels.as_ref())
-                    {
-                        self.inventory_delete_confirmation =
-                            Some(InventoryDeleteConfirmation { sessions });
-                    }
-                }
-                _ => {}
-            }
-            return Ok(UiAction::None);
+        if let Some(action) = hidden_tree::handle_key(self, key, observed_snapshot) {
+            return Ok(action);
         }
-        // Guide 打开后拥有其余按键，防止帮助导航改变底层页面状态。
-        if self.guide_open {
-            self.handle_guide_key(key)?;
+        if guide::handle_key(self, key)? {
             return Ok(UiAction::None);
         }
         if let Some(action) = self.handle_managed_launch_key(key, snap) {
             return Ok(action);
         }
+        if let Some(action) = detail::handle_key(self, key, observed_snapshot, snap)? {
+            return Ok(action);
+        }
         // 下面按上下文分派普通页面和详情的导航动作。
         match key.code {
             crossterm::event::KeyCode::Char('n') => {
-                if self.detail.is_none() {
+                if self.overlay.detail().is_none() {
                     if let Some(selection) = self.project_tree.new_target_selection(snap) {
-                        self.new_session =
-                            Some(NewSessionForm::new(selection.targets, selection.selected));
+                        self.overlay = overlay::OverlayState::New(overlay::NewOverlay::Form(
+                            NewSessionForm::new(selection.targets, selection.selected),
+                        ));
                     } else {
-                        self.new_session = Some(NewSessionForm::new(Vec::new(), 0));
+                        self.overlay = overlay::OverlayState::New(overlay::NewOverlay::Form(
+                            NewSessionForm::new(Vec::new(), 0),
+                        ));
                     }
                 }
             }
-            crossterm::event::KeyCode::Char('r') if self.detail_managed_resume(snap).is_some() => {
-                let resume = self.detail_managed_resume(snap).expect("checked above");
-                self.managed_resume_confirmation = Some(ManagedResumeConfirmation {
-                    provider: resume.provider,
-                    native_session_id: resume.native_session_id.clone(),
-                });
-            }
             crossterm::event::KeyCode::Char('r') => {
-                self.labels.reload();
                 return Ok(UiAction::Rescan);
             }
             crossterm::event::KeyCode::Char('?') => {
-                self.guide_category = self.guide_category_for_context();
-                self.guide_pane = GuidePane::Categories;
-                self.reset_guide_scroll();
-                self.guide_open = true;
+                self.open_guide(self.guide_category_for_context());
             }
-            crossterm::event::KeyCode::Char('e') if self.labels.is_editable() => {
+            crossterm::event::KeyCode::Char('e')
+                if self.selected_session(snap).is_some_and(|session| {
+                    snap.session_metadata.allows_for(
+                        session,
+                        crate::application::observation::read_model::SessionMetadataAction::Edit,
+                    )
+                }) =>
+            {
                 self.open_session_editor(snap);
             }
             crossterm::event::KeyCode::Char('H')
-                if self.detail.is_none() && !self.labels.is_editable() =>
+                if self.overlay.detail().is_none() && !snap.session_metadata.is_editable() =>
             {
                 self.show_notice("Curation unavailable while Label Store is degraded");
             }
             crossterm::event::KeyCode::Char('H')
-                if self.detail.is_none() && self.all_region == AllRegion::Now =>
+                if self.overlay.detail().is_none() && self.all_region == AllRegion::Now =>
             {
                 if let Some(session) = self.project_tree.selected_session(snap) {
-                    if session.state.is_open() {
-                        self.show_notice("Open Session cannot be hidden");
+                    if snap.session_metadata.allows(
+                        session.provider,
+                        &session.id,
+                        crate::application::observation::read_model::SessionMetadataAction::Hide,
+                    ) {
+                        self.push_confirmation(overlay::ConfirmationState::Hide(
+                            HideConfirmation::Session {
+                                session: SessionIdentity::from(session),
+                                title: snap.session_metadata.title(session.provider, &session.id),
+                            },
+                        ));
                     } else {
-                        self.hide_confirmation = Some(HideConfirmation::Session {
-                            session: SessionIdentity::from(session),
-                            title: self.labels.title(session.provider, &session.id),
-                        });
+                        self.show_notice("Open Session cannot be hidden");
                     }
                 } else if let Some(project_identity) = self.project_tree.selected_project(snap) {
                     let project_label = snap
@@ -1203,125 +993,57 @@ impl Ui {
                         .find(|project| project.identity == project_identity)
                         .map(|project| project.label.clone())
                         .unwrap_or_else(|| project_identity.display_path().display().to_string());
-                    let project_sessions = snap.sessions.iter().filter(|session| {
-                        session
-                            .project
-                            .as_ref()
-                            .is_some_and(|project| project.identity == project_identity)
-                    });
-                    let open_count = project_sessions
-                        .clone()
-                        .filter(|session| session.state.is_open())
-                        .count();
-                    let sessions = project_sessions
-                        .filter(|session| !session.state.is_open())
-                        .map(SessionIdentity::from)
+                    let project_sessions = snap
+                        .sessions
+                        .iter()
+                        .filter(|session| {
+                            session
+                                .project
+                                .as_ref()
+                                .is_some_and(|project| project.identity == project_identity)
+                        })
                         .collect::<Vec<_>>();
+                    let sessions = project_sessions
+                        .iter()
+                        .filter(|session| {
+                            snap.session_metadata.allows_for(
+                                session,
+                                crate::application::observation::read_model::SessionMetadataAction::Hide,
+                            )
+                        })
+                        .map(|session| SessionIdentity::from(*session))
+                        .collect::<Vec<_>>();
+                    let open_count = project_sessions.len().saturating_sub(sessions.len());
                     if sessions.is_empty() {
                         self.show_notice("No Exited Sessions to hide");
                     } else {
-                        self.hide_confirmation = Some(HideConfirmation::Project {
-                            project_label,
-                            sessions,
-                            open_count,
-                        });
+                        self.push_confirmation(overlay::ConfirmationState::Hide(
+                            HideConfirmation::Project {
+                                project_label,
+                                sessions,
+                                open_count,
+                            },
+                        ));
                     }
                 }
             }
-            crossterm::event::KeyCode::Char('h') if self.detail_session(snap).is_some() => {
-                let session = self.detail_session(snap).expect("checked above");
-                self.handoff_confirmation = Some(HandoffConfirmation {
-                    session: SessionIdentity {
-                        provider: session.provider,
-                        native_id: session.id.clone(),
-                    },
-                    source_state: session.state,
-                    successor_provider: session.provider,
-                    end_current_run: session.state.is_open(),
-                });
-            }
-            crossterm::event::KeyCode::Char('h') if self.detail.is_none() => {
-                if !self.labels.is_editable() {
+            crossterm::event::KeyCode::Char('h') if self.overlay.detail().is_none() => {
+                if !snap.session_metadata.is_editable() {
                     self.show_notice("Hidden inventory unavailable: Label Store degraded");
                 } else if self.hidden_sessions(observed_snapshot).is_empty() {
                     self.show_notice("No hidden sessions");
                 } else {
-                    self.hidden_tree
-                        .reconcile(observed_snapshot, self.labels.as_ref());
-                    self.hidden_tree_open = true;
+                    self.open_hidden_inventory(observed_snapshot);
                 }
             }
-            crossterm::event::KeyCode::Char('o')
-                if self.detail_managed_current_run(snap).is_some() =>
-            {
-                let run = self
-                    .detail_managed_current_run(snap)
-                    .expect("checked above");
-                return Ok(UiAction::OpenManagedCurrentRunTerminal {
-                    provider: run.provider,
-                    native_session_id: run.native_session_id.clone(),
-                    opaque_ref: run.opaque_ref.clone(),
-                });
-            }
-            crossterm::event::KeyCode::Char('a')
-                if self.detail_managed_current_run(snap).is_some() =>
-            {
-                let run = self
-                    .detail_managed_current_run(snap)
-                    .expect("checked above");
-                return Ok(UiAction::CopyManagedCurrentRunAttachCommand {
-                    provider: run.provider,
-                    native_session_id: run.native_session_id.clone(),
-                    opaque_ref: run.opaque_ref.clone(),
-                });
-            }
-            crossterm::event::KeyCode::Char('x')
-                if self
-                    .detail_task(snap)
-                    .is_some_and(|task| !task.state.is_terminal()) =>
-            {
-                let task_id = self.detail_task(snap).expect("checked above").id.clone();
-                self.task_cancellation_confirmation =
-                    Some(TaskCancellationConfirmation { task_id });
-            }
-            crossterm::event::KeyCode::Char('d')
-                if self
-                    .detail_task(snap)
-                    .is_some_and(OperationTask::offers_deletion) =>
-            {
-                let task_id = self.detail_task(snap).expect("checked above").id.clone();
-                self.task_deletion_confirmation = Some(TaskDeletionConfirmation { task_id });
-            }
-            crossterm::event::KeyCode::Char('c')
-                if self.detail_task(snap).is_some_and(|task| {
-                    task.state == crate::application::tasks::OperationTaskState::Ready
-                        && !task.is_being_deleted()
-                        && task.successor_launch_plan.is_some()
-                }) =>
-            {
-                return Ok(UiAction::CopySuccessorCommand {
-                    task_id: self.detail_task(snap).expect("checked above").id.clone(),
-                });
-            }
-            crossterm::event::KeyCode::Char('o')
-                if self.detail_task(snap).is_some_and(|task| {
-                    task.state == crate::application::tasks::OperationTaskState::Ready
-                        && !task.is_being_deleted()
-                        && task.successor_launch_plan.is_some()
-                }) =>
-            {
-                return Ok(UiAction::OpenSuccessorTerminal {
-                    task_id: self.detail_task(snap).expect("checked above").id.clone(),
-                });
-            }
-            crossterm::event::KeyCode::Tab if self.detail.is_none() => {
+            crossterm::event::KeyCode::Tab if self.overlay.detail().is_none() => {
                 self.all_region = match self.all_region {
                     AllRegion::Now => AllRegion::RecentSignals,
                     AllRegion::RecentSignals => AllRegion::Tasks,
                     AllRegion::Tasks => AllRegion::Now,
                 };
             }
-            crossterm::event::KeyCode::BackTab if self.detail.is_none() => {
+            crossterm::event::KeyCode::BackTab if self.overlay.detail().is_none() => {
                 self.all_region = match self.all_region {
                     AllRegion::Now => AllRegion::Tasks,
                     AllRegion::RecentSignals => AllRegion::Now,
@@ -1329,285 +1051,73 @@ impl Ui {
                 };
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail_session(snap).is_some() =>
-            {
-                detail::move_selected_field(self, observed_snapshot, true);
-            }
-            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail_session(snap).is_some() =>
-            {
-                detail::move_selected_field(self, observed_snapshot, false);
-            }
-            crossterm::event::KeyCode::Char('c') if self.detail_session(snap).is_some() => {
-                if let Some((field, value)) = detail::selected_copy_request(observed_snapshot, self)
-                {
-                    return Ok(UiAction::Copy { field, value });
-                }
-            }
-            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail.is_none() && self.all_region == AllRegion::RecentSignals =>
+                if self.overlay.detail().is_none()
+                    && self.all_region == AllRegion::RecentSignals =>
             {
                 if self.signal_selected + 1 < snap.recent_signals.len() {
                     self.signal_selected += 1;
                 }
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail.is_none() && self.all_region == AllRegion::RecentSignals =>
+                if self.overlay.detail().is_none()
+                    && self.all_region == AllRegion::RecentSignals =>
             {
                 self.signal_selected = self.signal_selected.saturating_sub(1);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail.is_none() && self.all_region == AllRegion::Tasks =>
+                if self.overlay.detail().is_none() && self.all_region == AllRegion::Tasks =>
             {
                 if self.task_selected + 1 < snap.tasks.len() {
                     self.task_selected += 1;
                 }
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail.is_none() && self.all_region == AllRegion::Tasks =>
+                if self.overlay.detail().is_none() && self.all_region == AllRegion::Tasks =>
             {
                 self.task_selected = self.task_selected.saturating_sub(1);
             }
             crossterm::event::KeyCode::Right
-                if self.detail.is_none() && self.all_region == AllRegion::Now =>
+                if self.overlay.detail().is_none() && self.all_region == AllRegion::Now =>
             {
                 self.project_tree
                     .move_horizontal(snap, project_tree::HorizontalDirection::Right);
             }
             crossterm::event::KeyCode::Left
-                if self.detail.is_none() && self.all_region == AllRegion::Now =>
+                if self.overlay.detail().is_none() && self.all_region == AllRegion::Now =>
             {
                 self.project_tree
                     .move_horizontal(snap, project_tree::HorizontalDirection::Left);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail.is_none() && self.all_region == AllRegion::Now =>
+                if self.overlay.detail().is_none() && self.all_region == AllRegion::Now =>
             {
                 self.project_tree
                     .move_vertical(snap, project_tree::VerticalDirection::Down);
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail.is_none() && self.all_region == AllRegion::Now =>
+                if self.overlay.detail().is_none() && self.all_region == AllRegion::Now =>
             {
                 self.project_tree
                     .move_vertical(snap, project_tree::VerticalDirection::Up);
             }
             crossterm::event::KeyCode::Enter
-                if self.detail.is_none() && self.all_region == AllRegion::Tasks =>
+                if self.overlay.detail().is_none() && self.all_region == AllRegion::Tasks =>
             {
                 if let Some(action) = self.open_selected_task(snap) {
                     return Ok(action);
                 }
             }
-            crossterm::event::KeyCode::Enter if self.detail.is_none() => {
+            crossterm::event::KeyCode::Enter if self.overlay.detail().is_none() => {
                 self.activate_selection(snap);
-            }
-            crossterm::event::KeyCode::Enter
-                if detail::selected_opens_hidden_list(observed_snapshot, self) =>
-            {
-                self.hidden_tree
-                    .reconcile(observed_snapshot, self.labels.as_ref());
-                self.hidden_tree_open = true;
-            }
-            crossterm::event::KeyCode::Enter if self.detail_task(snap).is_some() => {
-                let successor = self.detail_task(snap).and_then(|task| {
-                    let session_id = task.successor_session_id.as_ref()?;
-                    snap.sessions.iter().find(|session| {
-                        session.provider == task.successor_provider && &session.id == session_id
-                    })
-                });
-                if let Some(successor) = successor {
-                    self.detail = Some(DetailView {
-                        session: SessionIdentity {
-                            provider: successor.provider,
-                            native_id: successor.id.clone(),
-                        },
-                        task_id: None,
-                        scroll: StateCell::new(0),
-                        selected_field: 0,
-                        origin_signal: None,
-                    });
-                }
-            }
-            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.detail_task(snap).is_some() =>
-            {
-                if let Some(detail) = self.detail.as_ref() {
-                    detail.scroll.set(detail.scroll.get().saturating_add(1));
-                }
-            }
-            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.detail_task(snap).is_some() =>
-            {
-                if let Some(detail) = self.detail.as_ref() {
-                    detail.scroll.set(detail.scroll.get().saturating_sub(1));
-                }
-            }
-            crossterm::event::KeyCode::Esc => {
-                self.close_detail(snap);
             }
             _ => {}
         }
         Ok(UiAction::None)
     }
 
-    /// 处理 Guide 内部的主题切换、焦点移动和正文滚动。
-    fn handle_guide_key(&mut self, key: crossterm::event::KeyEvent) -> std::io::Result<()> {
-        match key.code {
-            crossterm::event::KeyCode::Esc => {
-                self.profile.help_seen = true;
-                self.save_profile()?;
-                self.guide_open = false;
-            }
-            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.guide_pane == GuidePane::Categories =>
-            {
-                self.guide_category = self.guide_category.next();
-                self.reset_guide_scroll();
-            }
-            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.guide_pane == GuidePane::Categories =>
-            {
-                self.guide_category = self.guide_category.previous();
-                self.reset_guide_scroll();
-            }
-            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
-                if self.guide_pane == GuidePane::Content =>
-            {
-                let max_scroll = self.guide_max_scroll.get();
-                self.guide_scroll = self
-                    .guide_scroll
-                    .min(max_scroll)
-                    .saturating_add(1)
-                    .min(max_scroll);
-            }
-            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k')
-                if self.guide_pane == GuidePane::Content =>
-            {
-                self.guide_scroll = self
-                    .guide_scroll
-                    .min(self.guide_max_scroll.get())
-                    .saturating_sub(1);
-            }
-            crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::Right
-                if self.guide_pane == GuidePane::Categories =>
-            {
-                self.guide_pane = GuidePane::Content;
-            }
-            crossterm::event::KeyCode::BackTab | crossterm::event::KeyCode::Left
-                if self.guide_pane == GuidePane::Content =>
-            {
-                self.guide_pane = GuidePane::Categories;
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_new_session_key(&mut self, key: crossterm::event::KeyEvent) -> UiAction {
-        let Some(mut form) = self.new_session.take() else {
-            return UiAction::None;
-        };
-        form.error = None;
-        let activation = form.activation();
-        let event = form.editor.handle_key(key, activation);
-        match event {
-            PropertyEditorEvent::Close => return UiAction::None,
-            PropertyEditorEvent::Submit => match form.request() {
-                Ok(request) => {
-                    return UiAction::StartManagedNew { request };
-                }
-                Err(error) => {
-                    form.editor.focus(error.field.index());
-                    form.error = Some(error.message);
-                }
-            },
-            PropertyEditorEvent::TextCommitted { field, value } => {
-                match NewSessionField::from_index(field) {
-                    NewSessionField::Title => form.title = value,
-                    NewSessionField::Description => form.description = value,
-                    _ => {}
-                }
-            }
-            PropertyEditorEvent::ChoiceConfirmed { field, choice } => {
-                match NewSessionField::from_index(field) {
-                    NewSessionField::Provider => {
-                        form.provider = Some(if choice == 0 {
-                            Provider::CodexCli
-                        } else {
-                            Provider::ClaudeCode
-                        });
-                    }
-                    NewSessionField::Location if choice < form.targets.len() => {
-                        form.target_index = choice;
-                    }
-                    NewSessionField::Location => {
-                        let start_directory = form
-                            .targets
-                            .get(form.target_index)
-                            .map(|target| target.working_directory.clone())
-                            .or_else(|| std::env::current_dir().ok());
-                        match start_directory {
-                            Some(start_directory) => {
-                                match DirectoryBrowser::new(start_directory, self.theme.palette()) {
-                                    Ok(browser) => self.directory_browser = Some(browser),
-                                    Err(error) => {
-                                        form.error =
-                                            Some(format!("Directory browser failed: {error}"));
-                                    }
-                                }
-                            }
-                            None => {
-                                form.error =
-                                    Some("Directory browser has no start directory".into());
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-        self.new_session = Some(form);
-        UiAction::None
-    }
-
-    fn handle_directory_browser_key(&mut self, key: crossterm::event::KeyEvent) -> UiAction {
-        if key.code == crossterm::event::KeyCode::Esc {
-            self.directory_browser = None;
-            return UiAction::None;
-        }
-        if key.code == crossterm::event::KeyCode::Char('y') {
-            let directory = self
-                .directory_browser
-                .take()
-                .expect("directory browser checked above")
-                .explorer
-                .cwd()
-                .clone();
-            return UiAction::ResolveManagedNewDirectory { directory };
-        }
-        if let Some(browser) = self.directory_browser.as_mut() {
-            let event = crossterm::event::Event::Key(key);
-            if let Err(error) = browser.explorer.handle(&event) {
-                self.directory_browser = None;
-                if let Some(form) = self.new_session.as_mut() {
-                    form.error = Some(format!("Directory browser failed: {error}"));
-                }
-            }
-        }
-        UiAction::None
-    }
-
-    /// 切换 Guide 主题后重置滚动，并等待下一次绘制重新测量上限。
-    fn reset_guide_scroll(&mut self) {
-        self.guide_scroll = 0;
-        self.guide_max_scroll.set(UNMEASURED_GUIDE_MAX_SCROLL);
-    }
-
     /// 根据当前焦点选择最贴近上下文的 Guide 默认主题。
     fn guide_category_for_context(&self) -> GuideCategory {
-        if self.detail.is_some() {
+        if self.overlay.detail().is_some() {
             GuideCategory::Sessions
         } else if self.all_region == AllRegion::RecentSignals {
             GuideCategory::Signals
@@ -1618,7 +1128,7 @@ impl Ui {
 
     /// 关闭详情页，并恢复来源区域及其稳定身份对应的选择位置。
     fn close_detail(&mut self, snap: &Snapshot) {
-        let Some(detail) = self.detail.as_ref().cloned() else {
+        let Some(detail) = self.overlay.detail().cloned() else {
             return;
         };
         if let Some(origin_signal) = detail.origin_signal {
@@ -1631,7 +1141,7 @@ impl Ui {
                 self.signal_selected = index;
             }
             self.clamp_selections(snap);
-            self.detail = None;
+            self.overlay = overlay::OverlayState::None;
             return;
         }
         if let Some(task_id) = detail.task_id {
@@ -1639,12 +1149,12 @@ impl Ui {
             if let Some(index) = snap.tasks.iter().position(|task| task.id == task_id) {
                 self.task_selected = index;
             }
-            self.detail = None;
+            self.overlay = overlay::OverlayState::None;
             return;
         }
         let identity = detail.session;
         self.project_tree.select_session(identity);
-        self.detail = None;
+        self.overlay = overlay::OverlayState::None;
     }
 
     /// 以 JSON 保存当前 Profile 偏好；没有配置路径时视为无需持久化。
@@ -1672,10 +1182,7 @@ impl Ui {
 
     /// 根据最新快照校正所有区域的独立选中位置。
     pub fn clamp_selections(&mut self, snap: &Snapshot) {
-        if self.labels_snapshot_revision != snap.revision {
-            self.labels.reload();
-            self.labels_snapshot_revision = snap.revision;
-        }
+        let observed_snapshot = snap;
         let normal_snapshot = self.normal_snapshot(snap);
         let snap = &normal_snapshot;
         self.project_tree.reconcile(snap);
@@ -1699,51 +1206,15 @@ impl Ui {
                 .first()
                 .map(|launch| launch.id.clone());
         }
+        self.overlay.reconcile(observed_snapshot);
     }
 
     fn normal_snapshot(&self, snap: &Snapshot) -> Snapshot {
-        let mut normal = snap.clone();
-        let observed_session_count = normal.sessions.len();
-        normal
-            .sessions
-            .retain(|session| self.session_is_normally_visible(session));
-        let excluded_count = observed_session_count.saturating_sub(normal.sessions.len());
-        normal.stats.discovered = normal.stats.discovered.saturating_sub(excluded_count);
-        normal.recent_signals.retain(|signal| match signal {
-            RecentSignal::Session {
-                provider,
-                session_id,
-                ..
-            } => match self.labels.disposition(*provider, session_id) {
-                Some(crate::application::session_labels::CurationDisposition::Hidden) => snap
-                    .sessions
-                    .iter()
-                    .find(|session| session.provider == *provider && session.id == *session_id)
-                    .is_some_and(|session| session.state.is_open()),
-                Some(
-                    crate::application::session_labels::CurationDisposition::PermanentlyExcluded,
-                ) => false,
-                None => true,
-            },
-            RecentSignal::Project { .. } => true,
-        });
-        normal
-    }
-
-    fn session_is_normally_visible(&self, session: &Session) -> bool {
-        match self.labels.disposition(session.provider, &session.id) {
-            Some(crate::application::session_labels::CurationDisposition::Hidden) => {
-                session.state.is_open()
-            }
-            Some(crate::application::session_labels::CurationDisposition::PermanentlyExcluded) => {
-                false
-            }
-            None => true,
-        }
+        snap.normal_inventory()
     }
 
     fn hidden_sessions<'a>(&self, snap: &'a Snapshot) -> Vec<&'a Session> {
-        hidden_tree::sessions(snap, self.labels.as_ref())
+        hidden_tree::sessions(snap)
     }
 
     fn selected_managed_launch<'a>(
@@ -1761,7 +1232,7 @@ impl Ui {
         key: crossterm::event::KeyEvent,
         snap: &Snapshot,
     ) -> Option<UiAction> {
-        if self.detail.is_some() || snap.managed_launches.is_empty() {
+        if self.overlay.detail().is_some() || snap.managed_launches.is_empty() {
             return None;
         }
         if matches!(key.code, crossterm::event::KeyCode::Char('[' | ']')) {
@@ -1824,7 +1295,7 @@ impl Ui {
 
     /// 用稳定身份从最新快照解析详情页 Session。
     fn detail_session<'a>(&self, snap: &'a Snapshot) -> Option<&'a Session> {
-        let detail = self.detail.as_ref()?;
+        let detail = self.overlay.detail()?;
         if detail.task_id.is_some() {
             return None;
         }
@@ -1856,13 +1327,13 @@ impl Ui {
 
     /// 用任务 ID 从最新快照解析详情页 Operation Task。
     fn detail_task<'a>(&self, snap: &'a Snapshot) -> Option<&'a OperationTask> {
-        let task_id = self.detail.as_ref()?.task_id.as_deref()?;
+        let task_id = self.overlay.detail()?.task_id.as_deref()?;
         snap.tasks.iter().find(|task| task.id == task_id)
     }
 
     /// 返回当前上下文中真正被选中的 Session。
     fn selected_session<'a>(&self, snap: &'a Snapshot) -> Option<&'a Session> {
-        if self.detail.is_some() {
+        if self.overlay.detail().is_some() {
             return self.detail_session(snap);
         }
         if self.all_region != AllRegion::Now {
@@ -1873,7 +1344,7 @@ impl Ui {
 
     /// Resolve the All-page editor target from Tree selection even while a status panel has focus.
     fn editor_session<'a>(&self, snap: &'a Snapshot) -> Option<&'a Session> {
-        if self.detail.is_some() {
+        if self.overlay.detail().is_some() {
             return None;
         }
         self.project_tree.selected_session(snap)
@@ -1888,60 +1359,33 @@ impl Ui {
             provider: session.provider,
             native_id: session.id.clone(),
         };
-        let title = self
-            .labels
+        let title = snap
+            .session_metadata
             .alias(session.provider, &session.id)
             .unwrap_or("")
             .to_string();
-        let description = self
-            .labels
+        let description = snap
+            .session_metadata
             .description(session.provider, &session.id)
             .unwrap_or("")
             .to_string();
-        self.edit_session = Some(SessionEditor {
-            session: identity,
-            title,
-            description,
-            editor: PropertyEditor::new(SessionEditorField::ALL.len()),
-            error: None,
+        let underlay = Box::new(std::mem::take(&mut self.overlay));
+        self.overlay = overlay::OverlayState::SessionEdit(overlay::SessionEditOverlay {
+            form: SessionEditor {
+                session: identity,
+                title,
+                description,
+                editor: PropertyEditor::new(SessionEditorField::ALL.len()),
+                error: None,
+            },
+            underlay,
         });
-    }
-
-    /// 处理 Session 编辑器的浏览、字段草稿和元数据保存。
-    fn handle_session_editor_key(&mut self, key: crossterm::event::KeyEvent) -> UiAction {
-        let Some(mut form) = self.edit_session.take() else {
-            return UiAction::None;
-        };
-        form.error = None;
-        let activation = form.activation();
-        let event = form.editor.handle_key(key, activation);
-        match event {
-            PropertyEditorEvent::Close => return UiAction::None,
-            PropertyEditorEvent::Submit => {
-                let action = UiAction::SaveSessionMetadata {
-                    session: form.session.clone(),
-                    title: form.title.clone(),
-                    description: form.description.clone(),
-                };
-                self.edit_session = Some(form);
-                return action;
-            }
-            PropertyEditorEvent::TextCommitted { field, value } => {
-                match SessionEditorField::from_index(field) {
-                    SessionEditorField::Title => form.title = value,
-                    SessionEditorField::Description => form.description = value,
-                }
-            }
-            _ => {}
-        }
-        self.edit_session = Some(form);
-        UiAction::None
     }
 
     /// 打开选中的 Task；未读终态任务同时请求显式记录 Acknowledgement。
     fn open_selected_task(&mut self, snap: &Snapshot) -> Option<UiAction> {
         let task = snap.tasks.get(self.task_selected)?;
-        self.detail = Some(DetailView {
+        self.overlay = overlay::OverlayState::Detail(DetailView {
             session: SessionIdentity {
                 provider: task.source_provider,
                 native_id: task.source_session_id.clone(),
@@ -1961,7 +1405,7 @@ impl Ui {
     fn activate_selection(&mut self, snap: &Snapshot) {
         if self.all_region == AllRegion::Now {
             if let Some(session) = self.project_tree.activate(snap) {
-                self.detail = Some(DetailView {
+                self.overlay = overlay::OverlayState::Detail(DetailView {
                     session: SessionIdentity {
                         provider: session.provider,
                         native_id: session.id.clone(),
@@ -1990,7 +1434,7 @@ impl Ui {
                         .iter()
                         .any(|session| session.provider == *provider && session.id == *session_id)
                     {
-                        self.detail = Some(DetailView {
+                        self.overlay = overlay::OverlayState::Detail(DetailView {
                             session: SessionIdentity {
                                 provider: *provider,
                                 native_id: session_id.clone(),
@@ -2016,7 +1460,7 @@ impl Ui {
                         self.all_region = AllRegion::Now;
                         self.project_tree
                             .select_session(SessionIdentity::from(session));
-                        self.detail = None;
+                        self.overlay = overlay::OverlayState::None;
                         self.status_notice = None;
                     } else {
                         self.status_notice = Some((
@@ -2054,15 +1498,8 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
 
     // Task Detail stays a full page. Session Detail is drawn later as a modal so its
     // origin remains visible and can be restored without reconstructing it.
-    if ui.hidden_tree_open {
-        hidden_tree::draw(
-            f,
-            screen.content,
-            observed_snapshot,
-            &ui.hidden_tree,
-            ui.labels.as_ref(),
-            theme,
-        );
+    if let Some(hidden) = ui.overlay.hidden_inventory() {
+        hidden_tree::draw(f, screen.content, observed_snapshot, hidden, theme);
     } else if let Some(task) = ui.detail_task(snap) {
         tasks::draw_detail(f, screen.content, task, snap, ui);
     } else {

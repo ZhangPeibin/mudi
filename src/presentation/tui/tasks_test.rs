@@ -51,7 +51,7 @@ fn render_buffer(width: u16, tasks: &[OperationTask]) -> Buffer {
     let mut terminal = Terminal::new(backend).unwrap();
     let ui = Ui::default();
     terminal
-        .draw(|frame| draw_panel(frame, frame.area(), tasks, 3_000, &ui))
+        .draw(|frame| draw_panel(frame, frame.area(), tasks, &Default::default(), 3_000, &ui))
         .unwrap();
     terminal.backend().buffer().clone()
 }

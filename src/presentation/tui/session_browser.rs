@@ -161,14 +161,7 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         areas.header,
     );
 
-    project_tree::draw(
-        f,
-        areas.project_rows,
-        snap,
-        &ui.project_tree,
-        ui.labels.as_ref(),
-        theme,
-    );
+    project_tree::draw(f, areas.project_rows, snap, &ui.project_tree, theme);
     selected_session::draw(f, areas.details, snap, ui);
 }
 

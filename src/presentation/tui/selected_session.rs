@@ -66,8 +66,10 @@ fn detail_lines(snap: &Snapshot, ui: &Ui, content_width: usize) -> Vec<Line<'sta
         ))];
     };
 
-    let title = ui.labels.title(session.provider, &session.id);
-    let description = ui.labels.description(session.provider, &session.id);
+    let title = snap.session_metadata.title(session.provider, &session.id);
+    let description = snap
+        .session_metadata
+        .description(session.provider, &session.id);
     let mut lines = vec![
         FieldLine::new("Title", &title)
             .label_width(DETAILS_LABEL_WIDTH)

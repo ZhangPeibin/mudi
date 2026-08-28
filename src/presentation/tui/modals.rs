@@ -20,64 +20,73 @@ const PROPERTY_LABEL_WIDTH: usize = 14;
 
 /// Whether a modal interaction layer currently owns input over page content.
 pub(super) fn blocks_background_interaction(ui: &Ui) -> bool {
-    ui.hidden_tree_open
-        || ui.detail.is_some()
-        || ui.guide_open
-        || ui.new_session.is_some()
-        || ui.directory_browser.is_some()
-        || ui.edit_session.is_some()
-        || ui.managed_resume_confirmation.is_some()
-        || ui.handoff_confirmation.is_some()
-        || ui.task_cancellation_confirmation.is_some()
-        || ui.task_deletion_confirmation.is_some()
-        || ui.task_retry_confirmation.is_some()
-        || ui.hide_confirmation.is_some()
-        || ui.inventory_delete_confirmation.is_some()
+    ui.overlay.blocks_background_interaction()
 }
 
 /// 按层级绘制当前打开的 Detail、Guide、编辑器和授权确认框。
 pub(super) fn draw_overlays(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
-    // 后绘制的确认框覆盖 Detail，保证授权流程始终处于最高优先级。
-    if !ui.hidden_tree_open && ui.detail_session(snap).is_some() {
-        detail::draw(f, snap, ui);
-    }
-    if ui.guide_open {
-        guide::draw(f, ui);
-    }
-    if ui.new_session.is_some() {
-        draw_new_session(f, ui);
-    }
-    if ui.directory_browser.is_some() {
-        draw_directory_browser(f, ui);
-    }
-    if ui.edit_session.is_some() {
-        draw_session_editor(f, ui);
-    }
-    if ui.managed_resume_confirmation.is_some() {
-        draw_managed_resume_confirmation(f, ui);
-    }
-    if ui.handoff_confirmation.is_some() {
-        draw_handoff_confirmation(f, snap, ui);
-    }
-    if ui.task_cancellation_confirmation.is_some() {
-        draw_task_cancellation_confirmation(f, ui);
-    }
-    if ui.task_deletion_confirmation.is_some() {
-        draw_task_deletion_confirmation(f, ui);
-    }
-    if ui.task_retry_confirmation.is_some() {
-        draw_task_retry_confirmation(f, ui);
-    }
-    if ui.hide_confirmation.is_some() {
-        draw_hide_confirmation(f, ui);
-    }
-    if ui.inventory_delete_confirmation.is_some() {
-        draw_inventory_delete_confirmation(f, ui);
+    draw_overlay_state(f, snap, ui, &ui.overlay);
+}
+
+fn draw_overlay_state(
+    f: &mut Frame,
+    snap: &Snapshot,
+    ui: &Ui,
+    overlay: &super::overlay::OverlayState,
+) {
+    match overlay {
+        super::overlay::OverlayState::None => {}
+        super::overlay::OverlayState::HiddenInventory(_) => {}
+        super::overlay::OverlayState::Detail(_) => detail::draw(f, snap, ui),
+        super::overlay::OverlayState::Guide(guide) => {
+            draw_overlay_state(f, snap, ui, &guide.underlay);
+            guide::draw(f, ui);
+        }
+        super::overlay::OverlayState::New(new) => {
+            draw_new_session(f, ui);
+            if matches!(new, super::overlay::NewOverlay::Directory { .. }) {
+                draw_directory_browser(f, ui);
+            }
+        }
+        super::overlay::OverlayState::SessionEdit(editor) => {
+            draw_overlay_state(f, snap, ui, &editor.underlay);
+            draw_session_editor(f, ui);
+        }
+        super::overlay::OverlayState::Confirmation {
+            underlay,
+            confirmation,
+        } => {
+            draw_overlay_state(f, snap, ui, underlay);
+            match confirmation {
+                super::overlay::ConfirmationState::ManagedResume(_) => {
+                    draw_managed_resume_confirmation(f, ui)
+                }
+                super::overlay::ConfirmationState::Handoff(_) => {
+                    draw_handoff_confirmation(f, snap, ui)
+                }
+                super::overlay::ConfirmationState::TaskCancellation(_) => {
+                    draw_task_cancellation_confirmation(f, ui)
+                }
+                super::overlay::ConfirmationState::TaskDeletion(_) => {
+                    draw_task_deletion_confirmation(f, ui)
+                }
+                super::overlay::ConfirmationState::TaskRetry(_) => {
+                    draw_task_retry_confirmation(f, ui)
+                }
+                super::overlay::ConfirmationState::Hide(_) => draw_hide_confirmation(f, ui),
+                super::overlay::ConfirmationState::InventoryDelete(_) => {
+                    draw_inventory_delete_confirmation(f, ui)
+                }
+            }
+        }
     }
 }
 
 fn draw_directory_browser(f: &mut Frame, ui: &Ui) {
-    let Some(browser) = ui.directory_browser.as_ref() else {
+    let super::overlay::OverlayState::New(super::overlay::NewOverlay::Directory {
+        browser, ..
+    }) = &ui.overlay
+    else {
         return;
     };
     let theme = ui.theme.palette();
@@ -95,7 +104,9 @@ fn draw_directory_browser(f: &mut Frame, ui: &Ui) {
 }
 
 fn draw_inventory_delete_confirmation(f: &mut Frame, ui: &Ui) {
-    let Some(target) = ui.inventory_delete_confirmation.as_ref() else {
+    let Some(super::overlay::ConfirmationState::InventoryDelete(target)) =
+        ui.overlay.confirmation()
+    else {
         return;
     };
     let theme = ui.theme.palette();
@@ -142,7 +153,7 @@ fn draw_inventory_delete_confirmation(f: &mut Frame, ui: &Ui) {
 }
 
 fn draw_hide_confirmation(f: &mut Frame, ui: &Ui) {
-    let Some(target) = ui.hide_confirmation.as_ref() else {
+    let Some(super::overlay::ConfirmationState::Hide(target)) = ui.overlay.confirmation() else {
         return;
     };
     let theme = ui.theme.palette();
@@ -220,7 +231,8 @@ fn draw_hide_confirmation(f: &mut Frame, ui: &Ui) {
 }
 
 fn draw_managed_resume_confirmation(f: &mut Frame, ui: &Ui) {
-    let Some(target) = ui.managed_resume_confirmation.as_ref() else {
+    let Some(super::overlay::ConfirmationState::ManagedResume(target)) = ui.overlay.confirmation()
+    else {
         return;
     };
     let theme = ui.theme.palette();
@@ -273,9 +285,10 @@ fn draw_managed_resume_confirmation(f: &mut Frame, ui: &Ui) {
 }
 
 fn draw_new_session(f: &mut Frame, ui: &Ui) {
-    let Some(form) = &ui.new_session else {
+    let Some(new) = ui.overlay.new_session() else {
         return;
     };
+    let form = new.form();
     let theme = ui.theme.palette();
     let area = layout::centered_rect_with_max_size(88, 78, 9, f.area());
     let content_width = usize::from(area.width).saturating_sub(2);
@@ -567,7 +580,8 @@ fn draw_property_choice_dialog(
 
 /// 绘制 Retry 的重新授权确认框。
 fn draw_task_retry_confirmation(f: &mut Frame, ui: &Ui) {
-    let Some(target) = ui.task_retry_confirmation.as_ref() else {
+    let Some(super::overlay::ConfirmationState::TaskRetry(target)) = ui.overlay.confirmation()
+    else {
         return;
     };
     let theme = ui.theme.palette();
@@ -628,7 +642,9 @@ fn draw_task_retry_confirmation(f: &mut Frame, ui: &Ui) {
 
 /// 绘制取消非终态 Operation Task 的确认框。
 fn draw_task_cancellation_confirmation(f: &mut Frame, ui: &Ui) {
-    let Some(target) = ui.task_cancellation_confirmation.as_ref() else {
+    let Some(super::overlay::ConfirmationState::TaskCancellation(target)) =
+        ui.overlay.confirmation()
+    else {
         return;
     };
     let theme = ui.theme.palette();
@@ -668,7 +684,8 @@ fn draw_task_cancellation_confirmation(f: &mut Frame, ui: &Ui) {
 
 /// 绘制不可逆删除终态 Task 及其 Artifact 的确认框。
 fn draw_task_deletion_confirmation(f: &mut Frame, ui: &Ui) {
-    let Some(target) = ui.task_deletion_confirmation.as_ref() else {
+    let Some(super::overlay::ConfirmationState::TaskDeletion(target)) = ui.overlay.confirmation()
+    else {
         return;
     };
     let theme = ui.theme.palette();
@@ -709,7 +726,7 @@ fn draw_task_deletion_confirmation(f: &mut Frame, ui: &Ui) {
 
 /// 绘制 Handoff 授权确认框，并展示来源状态与目标 Provider。
 fn draw_handoff_confirmation(f: &mut Frame, snap: &Snapshot, ui: &Ui) {
-    let Some(target) = ui.handoff_confirmation.as_ref() else {
+    let Some(super::overlay::ConfirmationState::Handoff(target)) = ui.overlay.confirmation() else {
         return;
     };
     let theme = ui.theme.palette();
@@ -810,7 +827,7 @@ pub(super) fn draw_terminal_too_small(f: &mut Frame, theme: Theme) {
 
 /// 绘制 Session 元数据编辑器，并在字段编辑态显示草稿光标。
 fn draw_session_editor(f: &mut Frame, ui: &Ui) {
-    let Some(editor) = &ui.edit_session else {
+    let Some(editor) = ui.overlay.session_editor() else {
         return;
     };
     let theme = ui.theme.palette();

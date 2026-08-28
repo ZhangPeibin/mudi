@@ -1,17 +1,17 @@
 use mudi::adapters::handoff::open_handoff_service;
-use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::persistence::session_metadata::SessionLabels;
+use mudi::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use mudi::adapters::project::CanonicalManagedTargetResolver;
 use mudi::adapters::successor::RegistrySuccessorRuntime;
 use mudi::application::clipboard::ClipboardPort;
-use mudi::application::handlers::{WorkflowHandlers, WorkflowPorts};
+use mudi::application::handlers::{ManagedWorkflowServices, WorkflowHandlers, WorkflowPorts};
 use mudi::application::handoff::{
     CompletionNotice, CompletionNotifier, HandoffPaths, HandoffService, ProviderExecutables,
     WorkerLaunch, WorkerLauncher,
 };
-use mudi::application::managed_sessions::{
-    ManagedLaunchBroker, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedSessionService,
-    ManagedTerminalAccess,
+use mudi::application::managed_session::{
+    ManagedLaunchBroker, ManagedLaunchEvidence, ManagedLaunchRegistration, ManagedNewService,
+    ManagedTerminalAccess, ProviderLaunchCommand,
 };
 use mudi::application::observation::read_model::RefreshSnapshot;
 use mudi::application::observation::Clock;
@@ -40,13 +40,13 @@ impl CompletionNotifier for NoopCompletionNotifier {
 pub fn workflow_handlers<L: WorkerLauncher, T: TerminalLauncher>(
     handoff: HandoffService<L>,
     terminal_launcher: T,
-    managed_sessions: ManagedSessionService,
+    managed: ManagedWorkflowServices,
     metadata_path: impl AsRef<Path>,
 ) -> WorkflowHandlers<L, T> {
     WorkflowHandlers::new(
         handoff,
         terminal_launcher,
-        managed_sessions,
+        managed,
         WorkflowPorts {
             clock: Box::new(FixedClock),
             completion_notifier: Box::new(NoopCompletionNotifier),
@@ -70,8 +70,8 @@ pub fn sqlite_workflow_handlers(root: &Path) -> impl TestActionRouter {
         NeverWorker,
     )
     .unwrap();
-    let managed_sessions = ManagedSessionService::new(
-        ManagedLaunchStore::open(&state_path).unwrap(),
+    let managed_new = ManagedNewService::new(
+        StateManagedSessionRepository::open(&state_path).unwrap(),
         executables,
         Box::new(NeverManagedLaunch),
         Box::new(NeverManagedTerminal),
@@ -79,7 +79,11 @@ pub fn sqlite_workflow_handlers(root: &Path) -> impl TestActionRouter {
     workflow_handlers(
         handoff,
         NeverSuccessorTerminal,
-        managed_sessions,
+        ManagedWorkflowServices {
+            start_new: Some(managed_new),
+            start_resume: None,
+            recovery: None,
+        },
         state_path,
     )
 }
@@ -100,6 +104,7 @@ impl ManagedLaunchBroker for NeverManagedLaunch {
     fn launch(
         &mut self,
         _registration: &ManagedLaunchRegistration,
+        _command: &ProviderLaunchCommand,
     ) -> anyhow::Result<ManagedLaunchEvidence> {
         panic!("metadata and curation tests must not launch a Managed Session")
     }

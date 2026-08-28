@@ -1,11 +1,12 @@
 //! Dedicated management view for currently observable Hidden Sessions.
 
 use super::{
-    is_system_temporary_cwd, provider_mark, retained_selection, snapshot_now_ms, text, theme::Theme,
+    is_system_temporary_cwd, overlay, provider_mark, retained_selection, snapshot_now_ms, text,
+    theme::Theme, InventoryDeleteConfirmation, Ui, UiAction,
 };
-use crate::application::session_labels::{CurationDisposition, SessionMetadataQuery};
 use crate::domain::{Project, ProjectIdentity, Session, SessionIdentity};
 use crate::presentation::app::{fmt_relative, Snapshot};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -55,17 +56,12 @@ pub(super) struct State {
 }
 
 impl State {
-    pub(super) fn reconcile(&mut self, snap: &Snapshot, labels: &dyn SessionMetadataQuery) {
-        self.selection = effective_selection(self.selection.as_ref(), &self.rows(snap, labels));
+    pub(super) fn reconcile(&mut self, snap: &Snapshot) {
+        self.selection = effective_selection(self.selection.as_ref(), &self.rows(snap));
     }
 
-    pub(super) fn move_vertical(
-        &mut self,
-        snap: &Snapshot,
-        labels: &dyn SessionMetadataQuery,
-        down: bool,
-    ) {
-        let rows = self.rows(snap, labels);
+    pub(super) fn move_vertical(&mut self, snap: &Snapshot, down: bool) {
+        let rows = self.rows(snap);
         let Some(selection) = effective_selection(self.selection.as_ref(), &rows) else {
             return;
         };
@@ -80,8 +76,8 @@ impl State {
         self.selection = rows.get(next).map(|row| row.key().clone());
     }
 
-    pub(super) fn activate(&mut self, snap: &Snapshot, labels: &dyn SessionMetadataQuery) {
-        let rows = self.rows(snap, labels);
+    pub(super) fn activate(&mut self, snap: &Snapshot) {
+        let rows = self.rows(snap);
         let Some(Key::Project(project)) = effective_selection(self.selection.as_ref(), &rows)
         else {
             return;
@@ -92,15 +88,11 @@ impl State {
         self.selection = Some(Key::Project(project));
     }
 
-    pub(super) fn selected_identities(
-        &self,
-        snap: &Snapshot,
-        labels: &dyn SessionMetadataQuery,
-    ) -> Option<Vec<SessionIdentity>> {
-        let rows = self.rows(snap, labels);
+    pub(super) fn selected_identities(&self, snap: &Snapshot) -> Option<Vec<SessionIdentity>> {
+        let rows = self.rows(snap);
         match effective_selection(self.selection.as_ref(), &rows)? {
             Key::Project(project) => Some(
-                sessions(snap, labels)
+                sessions(snap)
                     .into_iter()
                     .filter(|session| {
                         session
@@ -115,8 +107,8 @@ impl State {
         }
     }
 
-    fn rows<'a>(&self, snap: &'a Snapshot, labels: &dyn SessionMetadataQuery) -> Vec<Row<'a>> {
-        let groups = groups(snap, labels);
+    fn rows<'a>(&self, snap: &'a Snapshot) -> Vec<Row<'a>> {
+        let groups = groups(snap);
         let mut rows = Vec::new();
         for group in groups {
             let project_identity = group.project.identity.clone();
@@ -141,24 +133,66 @@ impl State {
     }
 }
 
-pub(super) fn sessions<'a>(
-    snap: &'a Snapshot,
-    labels: &dyn SessionMetadataQuery,
-) -> Vec<&'a Session> {
+/// Convert one input event for the active Hidden Inventory workflow.
+pub(super) fn handle_key(ui: &mut Ui, key: KeyEvent, snap: &Snapshot) -> Option<UiAction> {
+    ui.overlay.hidden_inventory()?;
+    match key.code {
+        KeyCode::Esc => ui.close_hidden_inventory(),
+        KeyCode::Down | KeyCode::Char('j') => ui
+            .overlay
+            .hidden_inventory_mut()
+            .expect("Hidden Inventory checked above")
+            .move_vertical(snap, true),
+        KeyCode::Up | KeyCode::Char('k') => ui
+            .overlay
+            .hidden_inventory_mut()
+            .expect("Hidden Inventory checked above")
+            .move_vertical(snap, false),
+        KeyCode::Enter => ui
+            .overlay
+            .hidden_inventory_mut()
+            .expect("Hidden Inventory checked above")
+            .activate(snap),
+        KeyCode::Char('u') => {
+            let sessions = ui
+                .overlay
+                .hidden_inventory()
+                .expect("Hidden Inventory checked above")
+                .selected_identities(snap)?;
+            return Some(UiAction::RestoreSessions { sessions });
+        }
+        KeyCode::Char('d') => {
+            if let Some(sessions) = ui
+                .overlay
+                .hidden_inventory()
+                .expect("Hidden Inventory checked above")
+                .selected_identities(snap)
+            {
+                ui.push_confirmation(overlay::ConfirmationState::InventoryDelete(
+                    InventoryDeleteConfirmation { sessions },
+                ));
+            }
+        }
+        _ => {}
+    }
+    Some(UiAction::None)
+}
+
+pub(super) fn sessions(snap: &Snapshot) -> Vec<&Session> {
     snap.sessions
         .iter()
         .filter(|session| !is_system_temporary_cwd(session.cwd.as_deref()))
         .filter(|session| session.project.is_some())
-        .filter(|session| !session.state.is_open())
         .filter(|session| {
-            labels.disposition(session.provider, &session.id) == Some(CurationDisposition::Hidden)
+            snap.session_metadata
+                .in_hidden_inventory(session.provider, &session.id)
         })
         .collect()
 }
 
-fn groups<'a>(snap: &'a Snapshot, labels: &dyn SessionMetadataQuery) -> Vec<ProjectGroup<'a>> {
-    let mut projects: Vec<ProjectGroup<'a>> = Vec::new();
-    for session in sessions(snap, labels) {
+fn groups(snap: &Snapshot) -> Vec<ProjectGroup<'_>> {
+    let mut projects: Vec<ProjectGroup<'_>> = Vec::new();
+    for session in sessions(snap) {
         let project = session
             .project
             .as_ref()
@@ -205,8 +239,8 @@ fn effective_selection(selection: Option<&Key>, rows: &[Row<'_>]) -> Option<Key>
         .or_else(|| rows.first().map(|row| row.key().clone()))
 }
 
-pub(super) fn counts(snap: &Snapshot, labels: &dyn SessionMetadataQuery) -> (usize, usize) {
-    let sessions = sessions(snap, labels);
+pub(super) fn counts(snap: &Snapshot) -> (usize, usize) {
+    let sessions = sessions(snap);
     let projects = sessions
         .iter()
         .filter_map(|session| session.project.as_ref())
@@ -216,15 +250,8 @@ pub(super) fn counts(snap: &Snapshot, labels: &dyn SessionMetadataQuery) -> (usi
     (projects, sessions.len())
 }
 
-pub(super) fn draw(
-    f: &mut Frame,
-    area: Rect,
-    snap: &Snapshot,
-    state: &State,
-    labels: &dyn SessionMetadataQuery,
-    theme: Theme,
-) {
-    let tree_rows = state.rows(snap, labels);
+pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, state: &State, theme: Theme) {
+    let tree_rows = state.rows(snap);
     let selected = effective_selection(state.selection.as_ref(), &tree_rows);
     let visible_sessions = tree_rows
         .iter()
@@ -237,7 +264,7 @@ pub(super) fn draw(
         .iter()
         .map(|session| (session.provider, session.id.as_str()))
         .collect::<Vec<_>>();
-    let mut titles = labels.titles_for(&identities).into_iter();
+    let mut titles = snap.session_metadata.titles_for(&identities).into_iter();
     let content_width = usize::from(area.width.saturating_sub(2));
     let mut lines = Vec::new();
     for row in &tree_rows {
@@ -326,7 +353,7 @@ pub(super) fn draw(
     let scroll = selected_index
         .unwrap_or_default()
         .saturating_sub(visible_rows.saturating_sub(1));
-    let (project_count, session_count) = counts(snap, labels);
+    let (project_count, session_count) = counts(snap);
     let project_label = if project_count == 1 {
         "Project"
     } else {

@@ -3,7 +3,7 @@
 use super::{
     provider_mark, region_border_style, region_title_style, retained_selection, text, AllRegion, Ui,
 };
-use crate::application::session_labels::SessionMetadataQuery;
+use crate::application::observation::read_model::SessionMetadataSnapshot;
 use crate::application::signals::{ContextAlertLevel, RecentSignal, RecentSignalKind};
 use crate::domain::{Provider, SessionState};
 use crate::presentation::app::{fmt_relative, fmt_tokens};
@@ -20,6 +20,7 @@ pub(super) fn draw_panel(
     f: &mut Frame,
     area: Rect,
     signals: &[RecentSignal],
+    metadata: &SessionMetadataSnapshot,
     now_ms: i64,
     ui: &Ui,
 ) {
@@ -27,7 +28,7 @@ pub(super) fn draw_panel(
     let focused = ui.all_region == AllRegion::RecentSignals;
     let width = area.width.saturating_sub(2) as usize;
     let height = area.height.saturating_sub(2) as usize;
-    let titles = visible_titles(signals, ui.labels.as_ref());
+    let titles = visible_titles(signals, metadata);
     // 每个 Signal 可能需要多行证据；达到面板高度后立即停止，不提供历史滚动。
     let lines = if signals.is_empty() {
         vec![Line::from(Span::styled(
@@ -95,7 +96,7 @@ pub(super) fn draw_panel(
 type VisibleTitles = HashMap<Provider, HashMap<String, String>>;
 
 /// 一次性解析 Signals 涉及的所有 Session 标题，并处理重复标题消歧。
-fn visible_titles(signals: &[RecentSignal], labels: &dyn SessionMetadataQuery) -> VisibleTitles {
+fn visible_titles(signals: &[RecentSignal], metadata: &SessionMetadataSnapshot) -> VisibleTitles {
     let mut identities = Vec::<(Provider, String)>::new();
     let mut seen = HashSet::new();
     let mut add = |provider: Provider, native_id: &str| {
@@ -122,7 +123,7 @@ fn visible_titles(signals: &[RecentSignal], labels: &dyn SessionMetadataQuery) -
         .iter()
         .map(|(provider, native_id)| (*provider, native_id.as_str()))
         .collect::<Vec<_>>();
-    let resolved_titles = labels.titles_for(&identity_refs);
+    let resolved_titles = metadata.titles_for(&identity_refs);
     let mut visible = VisibleTitles::new();
     for ((provider, native_id), title) in identities.into_iter().zip(resolved_titles) {
         visible

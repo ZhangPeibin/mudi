@@ -3,7 +3,9 @@ use crate::application::alerts;
 use crate::application::attention::AttentionEngine;
 use crate::application::observation::read_model::{
     ManagedLaunchSummary, RefreshDiagnostic, RefreshHealth, RefreshSnapshot, RefreshStage,
+    SessionMetadataSnapshot,
 };
+use crate::application::session_labels::SessionMetadataQuery;
 use crate::application::signals::RecentSignalsEngine;
 use crate::application::tasks::OperationTask;
 use crate::domain::Session;
@@ -21,12 +23,14 @@ pub trait OperationTaskQuery: Send {
 pub struct ProjectPorts {
     pub task_query: std::result::Result<Box<dyn OperationTaskQuery>, String>,
     pub managed_query: std::result::Result<Box<dyn ManagedProjectionQuery>, String>,
+    pub session_metadata: std::result::Result<Box<dyn SessionMetadataQuery>, String>,
 }
 
 /// Builds the complete read model using only the frame and authoritative reads.
 pub struct ProjectionService {
     task_query: std::result::Result<Box<dyn OperationTaskQuery>, String>,
     managed_query: std::result::Result<Box<dyn ManagedProjectionQuery>, String>,
+    session_metadata: std::result::Result<Box<dyn SessionMetadataQuery>, String>,
     attention_engine: AttentionEngine,
     recent_signals_engine: RecentSignalsEngine,
     revision: u64,
@@ -37,6 +41,7 @@ impl ProjectionService {
         Self {
             task_query: ports.task_query,
             managed_query: ports.managed_query,
+            session_metadata: ports.session_metadata,
             attention_engine: AttentionEngine::default(),
             recent_signals_engine: RecentSignalsEngine::default(),
             revision: 0,
@@ -110,6 +115,49 @@ impl ProjectionService {
             }
         };
 
+        let identities = sessions
+            .iter()
+            .map(crate::domain::SessionIdentity::from)
+            .chain(tasks.iter().map(|task| crate::domain::SessionIdentity {
+                provider: task.source_provider,
+                native_id: task.source_session_id.clone(),
+            }))
+            .chain(recent_signals.iter().filter_map(|signal| match signal {
+                crate::application::signals::RecentSignal::Session {
+                    provider,
+                    session_id,
+                    ..
+                } => Some(crate::domain::SessionIdentity {
+                    provider: *provider,
+                    native_id: session_id.clone(),
+                }),
+                crate::application::signals::RecentSignal::Project { .. } => None,
+            }))
+            .collect::<Vec<_>>();
+        let session_metadata = match self.session_metadata.as_mut() {
+            Ok(metadata) => {
+                metadata.reload();
+                let projected =
+                    SessionMetadataSnapshot::project(metadata.as_ref(), identities, &sessions);
+                if let Some(error) = projected.error.as_ref() {
+                    diagnostics.push(RefreshDiagnostic::for_stage(
+                        RefreshStage::Project,
+                        "Session Metadata Store",
+                        error.clone(),
+                    ));
+                }
+                projected
+            }
+            Err(error) => {
+                diagnostics.push(RefreshDiagnostic::for_stage(
+                    RefreshStage::Project,
+                    "Session Metadata Store",
+                    error.clone(),
+                ));
+                SessionMetadataSnapshot::unavailable(error.clone())
+            }
+        };
+
         RefreshSnapshot {
             revision: self.revision,
             generated_at_ms: frame.observed_at_ms,
@@ -119,6 +167,7 @@ impl ProjectionService {
             managed_launches,
             verified_managed_current_runs: frame.verified_managed_current_runs.clone(),
             resumable_managed_sessions: frame.resumable_managed_sessions.clone(),
+            session_metadata,
             recent_signals,
             attention: Some(attention),
             stats: frame.stats,

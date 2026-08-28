@@ -6,7 +6,7 @@ pub mod codex;
 pub mod state;
 
 use crate::adapters::config::Config;
-pub use crate::application::managed_sessions::ProviderBindingEvidence;
+pub use crate::application::managed_session::ProviderBindingEvidence;
 use crate::application::ProviderExecutableResolver;
 pub use crate::application::ProviderExecutables;
 use crate::domain::{Compaction, ContextState, Provider, SourceFormat, Usage};

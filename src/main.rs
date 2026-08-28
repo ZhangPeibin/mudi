@@ -16,6 +16,7 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,13 +30,11 @@ use mudi::adapters::handoff::{
 };
 use mudi::adapters::handoff_worker::run_worker_from_args;
 use mudi::adapters::macos::clipboard::MacosClipboard;
-use mudi::adapters::managed_sessions::{
-    discover_tmux_executable, run_attach_from_args, MacosManagedTerminalAccess,
-    SystemManagedCurrentRunEvidence, SystemManagedResumeProviderEvidence, SystemProcessEvidence,
-    TmuxLaunchBroker,
+use mudi::adapters::managed_session::{
+    SystemManagedCurrentRunEvidence, SystemManagedResumeProviderEvidence,
 };
-use mudi::adapters::persistence::managed_sessions::ManagedLaunchStore;
 use mudi::adapters::persistence::session_metadata::SessionLabels;
+use mudi::adapters::persistence::state::managed_sessions::StateManagedSessionRepository;
 use mudi::adapters::persistence::state::StateDatabase;
 use mudi::adapters::project::CanonicalManagedTargetResolver;
 use mudi::adapters::refresh::{open_refresh_cycle_with_cache, SystemClock};
@@ -44,15 +43,19 @@ use mudi::adapters::skills::ManagedSkillCatalog;
 use mudi::adapters::successor::{
     run_successor_from_args, MacosTerminalLauncher, RegistrySuccessorRuntime,
 };
+use mudi::adapters::system::process::SystemProcessEvidence;
+use mudi::adapters::system::terminal_macos::MacosManagedTerminalAccess;
+use mudi::adapters::system::tmux::{discover_tmux_executable, TmuxLaunchBroker};
 
 use mudi::application::clipboard::ClipboardPort;
-use mudi::application::handlers::{WorkflowHandlers, WorkflowPorts};
+use mudi::application::handlers::{ManagedWorkflowServices, WorkflowHandlers, WorkflowPorts};
 use mudi::application::handoff::{
     HandoffPaths, HandoffService, ProviderExecutables, WorkerLauncher,
 };
-use mudi::application::managed_sessions::{
-    ManagedCurrentRunAccessService, ManagedCurrentRunVerifier, ManagedResumeVerifier,
-    ManagedSessionService, SystemManagedResumeEvidence,
+use mudi::application::managed_session::{
+    run_attach_from_args_with_access, CombinedManagedResumeEvidence,
+    ManagedCurrentRunAccessService, ManagedCurrentRunVerifier, ManagedLaunchRecoveryService,
+    ManagedNewService, ManagedResumeService, ManagedResumeVerifier,
 };
 use mudi::application::observation::read_model::{InMemoryReadModelCache, ReadModelCache};
 use mudi::application::successor::TerminalLauncher;
@@ -66,7 +69,7 @@ type TuiHandlers = WorkflowHandlers<DetachedWorkerLauncher, MacosTerminalLaunche
 async fn main() -> Result<()> {
     let config = Config::load();
     StateDatabase::open_data_dir(&config.data_dir)?;
-    if run_non_tui_mode()? {
+    if run_non_tui_mode(&config)? {
         return Ok(());
     }
 
@@ -75,14 +78,19 @@ async fn main() -> Result<()> {
 }
 
 /// Dispatch process modes that do not start the TUI.
-fn run_non_tui_mode() -> Result<bool> {
-    if run_attach_from_args(std::env::args_os())? {
+fn run_non_tui_mode(config: &Config) -> Result<bool> {
+    let args = std::env::args_os().collect::<Vec<_>>();
+    if args.get(1).map(|argument| argument.as_os_str()) == Some(OsStr::new("attach")) {
+        let tmux_executable = discover_tmux_executable().unwrap_or_default();
+        let mut managed_current_runs = build_managed_current_run_access(config, tmux_executable)?;
+        if run_attach_from_args_with_access(args.clone(), &mut managed_current_runs)? {
+            return Ok(true);
+        }
+    }
+    if run_successor_from_args(args.clone())? {
         return Ok(true);
     }
-    if run_successor_from_args(std::env::args_os())? {
-        return Ok(true);
-    }
-    if run_worker_from_args(std::env::args_os())? {
+    if run_worker_from_args(args)? {
         return Ok(true);
     }
     Ok(false)
@@ -97,10 +105,7 @@ struct TuiRuntime {
 
 impl TuiRuntime {
     fn build(config: Config) -> Result<Self> {
-        let ui = Ui::load_with_session_metadata(
-            config.profile_path(),
-            Box::new(SessionLabels::load(config.label_store_path())),
-        )?;
+        let ui = Ui::load(config.profile_path())?;
         let handlers = build_tui_handlers(&config)?;
         let read_model: SharedReadModelCache = Arc::new(InMemoryReadModelCache::default());
 
@@ -167,28 +172,53 @@ fn build_managed_session_services(
     config: &Config,
     provider_executables: &ProviderExecutables,
     tmux_executable: PathBuf,
-) -> Result<(ManagedSessionService, ManagedCurrentRunAccessService)> {
-    let managed_sessions = ManagedSessionService::new(
-        ManagedLaunchStore::open(config.managed_launch_store_path())?,
+) -> Result<(ManagedWorkflowServices, ManagedCurrentRunAccessService)> {
+    let managed_new = ManagedNewService::new(
+        StateManagedSessionRepository::open(config.managed_launch_store_path())?,
+        provider_executables.clone(),
+        Box::new(TmuxLaunchBroker::new(tmux_executable.clone())),
+        Box::new(MacosManagedTerminalAccess::new(tmux_executable.clone())),
+    );
+    let managed_resume = ManagedResumeService::new(
+        StateManagedSessionRepository::open(config.managed_launch_store_path())?,
         provider_executables.clone(),
         Box::new(TmuxLaunchBroker::new(tmux_executable.clone())),
         Box::new(MacosManagedTerminalAccess::new(tmux_executable.clone())),
     )
     .with_resume_verifier(ManagedResumeVerifier::new(Box::new(
-        SystemManagedResumeEvidence::new(
+        CombinedManagedResumeEvidence::new(
             Box::new(SystemProcessEvidence),
             Box::new(SystemManagedResumeProviderEvidence::new(config.clone())),
         ),
     )));
-    let managed_current_runs = ManagedCurrentRunAccessService::new(
-        ManagedLaunchStore::open(config.managed_launch_store_path())?,
+    let managed_recovery = ManagedLaunchRecoveryService::new(
+        StateManagedSessionRepository::open(config.managed_launch_store_path())?,
+        Box::new(TmuxLaunchBroker::new(tmux_executable.clone())),
+        Box::new(MacosManagedTerminalAccess::new(tmux_executable.clone())),
+    );
+    let managed_current_runs = build_managed_current_run_access(config, tmux_executable)?;
+
+    Ok((
+        ManagedWorkflowServices {
+            start_new: Some(managed_new),
+            start_resume: Some(managed_resume),
+            recovery: Some(managed_recovery),
+        },
+        managed_current_runs,
+    ))
+}
+
+fn build_managed_current_run_access(
+    config: &Config,
+    tmux_executable: PathBuf,
+) -> Result<ManagedCurrentRunAccessService> {
+    Ok(ManagedCurrentRunAccessService::new(
+        StateManagedSessionRepository::open(config.managed_launch_store_path())?,
         ManagedCurrentRunVerifier::new(Box::new(SystemManagedCurrentRunEvidence::new(
             config.clone(),
         ))),
         Box::new(MacosManagedTerminalAccess::new(tmux_executable)),
-    );
-
-    Ok((managed_sessions, managed_current_runs))
+    ))
 }
 
 fn build_handoff_service(
