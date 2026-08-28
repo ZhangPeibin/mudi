@@ -18,7 +18,7 @@ use mudi::domain::{
     Compaction, ContextState, ModelUsage, Project, ProjectIdentity, Provider, Session,
     SessionState, SourceFormat, SourceMetadata, Usage, UsageSummary,
 };
-use mudi::presentation::app::Snapshot;
+use mudi::presentation::app::{fmt_datetime, Snapshot};
 use mudi::presentation::tui::{draw, Ui, UiAction};
 use ratatui::backend::{Backend, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
@@ -4241,9 +4241,17 @@ fn compact_detail_field_navigation_reveals_complete_compaction_history() {
             rendered.visible_text()
         );
     }
+    let critical = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == "claude-critical")
+        .unwrap();
+    let fixture = include_str!("fixtures/production-renders/detail_open_scrolled_80x24.txt")
+        .replace("11-15 06:11", &fmt_datetime(critical.compactions[0].at_ms))
+        .replace("11-15 06:12", &fmt_datetime(critical.compactions[1].at_ms));
     assert_fixture(
         &rendered,
-        include_str!("fixtures/production-renders/detail_open_scrolled_80x24.txt"),
+        &fixture,
         "fixtures/production-renders/detail_open_scrolled_80x24.txt",
     );
 }
