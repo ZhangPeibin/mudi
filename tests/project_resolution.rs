@@ -394,7 +394,7 @@ fn project_resolution_observes_git_state_changes_on_each_refresh() {
         extra_dirs: vec![],
     };
     let models = ModelCatalog::load(None);
-    let mut resolver = ProjectResolverCache;
+    let mut resolver = ProjectResolverCache::default();
 
     let first = build_sessions_with_resolver(&cfg, &index, &models, &mut resolver).unwrap();
     assert_eq!(

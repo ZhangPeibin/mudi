@@ -69,7 +69,7 @@ fn index_one_checked(
 
 /// Build the normalized session list from the index, attaching live state and cost.
 pub fn build_sessions(cfg: &Config, index: &Index, models: &ModelCatalog) -> Vec<Session> {
-    let mut resolver = ProjectResolverCache;
+    let mut resolver = ProjectResolverCache::default();
     build_sessions_with_resolver(cfg, index, models, &mut resolver)
         .map(|built| built.sessions)
         .unwrap_or_default()
@@ -78,23 +78,30 @@ pub fn build_sessions(cfg: &Config, index: &Index, models: &ModelCatalog) -> Vec
 /// Refresh-scoped resolver. Project identity depends on current filesystem Git state,
 /// so results must not survive between snapshots.
 #[derive(Debug, Default)]
-pub struct ProjectResolverCache;
+pub struct ProjectResolverCache {
+    resolutions: HashMap<String, project::ProjectResolution>,
+}
 
 impl ProjectResolverCache {
     pub fn resolve(&mut self, cwd: Option<&str>) -> Result<project::ProjectResolution> {
         let Some(cwd) = cwd else {
             return Ok(project::ProjectResolution::default());
         };
-        project::resolve_checked(Some(Path::new(cwd)))
+        if let Some(resolution) = self.resolutions.get(cwd) {
+            return Ok(resolution.clone());
+        }
+        let resolution = project::resolve_checked(Some(Path::new(cwd)))?;
+        self.resolutions.insert(cwd.to_string(), resolution.clone());
+        Ok(resolution)
     }
 
     /// Drop a cached result when the source evidence for that cwd has changed deliberately.
     pub fn invalidate(&mut self, cwd: &str) {
-        let _ = cwd;
+        self.resolutions.remove(cwd);
     }
 
-    fn retain_source_cwds<'a>(&mut self, cwds: impl Iterator<Item = &'a str>) {
-        let _ = cwds.count();
+    fn begin_refresh(&mut self) {
+        self.resolutions.clear();
     }
 }
 
@@ -119,11 +126,7 @@ pub fn build_sessions_with_resolver(
     resolver: &mut ProjectResolverCache,
 ) -> Result<SessionBuild> {
     let stored = index.load_all()?;
-    resolver.retain_source_cwds(
-        stored
-            .iter()
-            .filter_map(|session| session.parsed.cwd.as_deref()),
-    );
+    resolver.begin_refresh();
     let detector = StateDetector::gather(&cfg.claude_sessions_dir());
 
     let mut project_diagnostics = Vec::new();
@@ -343,7 +346,7 @@ impl IndexedObservationSource {
             config,
             index,
             models,
-            project_resolver: ProjectResolverCache,
+            project_resolver: ProjectResolverCache::default(),
         }
     }
 }
