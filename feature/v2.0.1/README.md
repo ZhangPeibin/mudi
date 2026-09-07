@@ -2,36 +2,26 @@
 
 | Field | Value |
 |---|---|
-| Status | Accepted scope baseline |
+| Status | Accepted scope baseline; Checkpoint deferred 2026-08-28 |
 | Accepted | 2026-08-10 |
-| Role | First repeat-use layer after Managed Session Core |
+| Role | Repeat-use and inventory layer after Managed Session Core |
 
-`v2.0.1` lets a developer leave and reliably re-enter a body of coding work without
-reconstructing it from terminal history, Git state, and memory. It builds on `v2.0.0`
-Managed Session Core; it is not an Action Runtime or Flow Scheduler.
+`v2.0.1` lets a developer keep the Session inventory focused and reliably re-enter a
+known Session through precise Resume or explicit Handoff. It builds on `v2.0.0` Managed
+Session Core; it is not an Action Runtime or Flow Scheduler.
 
 ## Goal
 
-Give a developer an explicitly created, evidence-backed checkpoint for a selected Session
-and a clear continuation choice: precisely resume the same provider-native Session, or
-explicitly Handoff to a distinct Successor Session. Keep the repeat-use inventory focused
-through explicit, durable curation without deleting Provider-native history.
+Give a developer a clear continuation choice for a selected Session: precisely resume the
+same provider-native Session, or explicitly Handoff to a distinct Successor Session. Keep
+the repeat-use inventory focused through explicit, durable curation without deleting
+Provider-native history.
 
-The primary question answered is: **what can the next Session safely do now?**
+The primary question answered is: **which known Session can be continued safely, and by
+which explicit route?**
 
 ## Included
 
-- Create a local checkpoint only after the developer explicitly requests it for a selected
-  Session with a resolved Project.
-- Preserve the checkpoint's source Session identity, exact working directory, Provider,
-  observed Current Run state, repository revision, and allowed working-tree evidence needed
-  to orient the developer later. Derive Project from the working directory when displayed.
-- Let the developer add bounded, local objective, constraint, and next-action metadata.
-  This is separate from the Session Description, which continues to explain why the Session
-  exists rather than its transient work state.
-- Display observed evidence separately from user-authored or Agent-proposed statements.
-  Missing evidence must remain missing; Mudi never infers a passed check or completed
-  task from terminal prose.
 - Keep a Project in the normal inventory while it has an Open Session or its newest visible
   Session falls within the rolling seven-day window, including after Mudi or macOS restarts.
 - Let the developer explicitly hide Exited Sessions, restore them from a dedicated Hidden
@@ -44,30 +34,22 @@ The primary question answered is: **what can the next Session safely do now?**
   Session ID as soon as conclusive Provider source and launched-process evidence identifies
   the Session. Persist it as a first-writer-wins Session Alias before and independently of
   the later Managed Binding outcome.
-- Reopen a checkpoint to show whether its source Session can be precisely resumed, is still
-  Open, is Exited, or has unlinked evidence.
+- Show whether a selected Session can be precisely resumed, is still Open, is Exited, or
+  has unlinked evidence.
 - Offer the correct continuation route without conflating identities:
   - precise resume keeps the same native Session ID and creates a new Managed Current Run;
   - Handoff creates a distinct Successor Session and preserves visible lineage.
 - Reuse the existing explicit Handoff Operation and private Handoff Artifact for a
-  cross-Provider or new-Session continuation. A checkpoint does not itself create a Handoff
-  Artifact, launch a Successor, or grant control over an Externally Started Current Run.
+  cross-Provider or new-Session continuation. A ready Handoff Result does not itself launch
+  a Successor or grant control over an Externally Started Current Run.
 - Keep the workflow useful for Codex CLI and Claude Code while exposing Provider-specific
   limitations rather than claiming identical control capabilities.
 
 ## Product rules
 
-- A checkpoint is developer-directed. Mudi never creates one from elapsed time,
-  context pressure, or a provider observation alone.
 - The native Session ID remains Session identity. Work may continue across a Handoff, but a
   Successor is never merged with its source Session.
-- Checkpoint data remains local and private. It must not persist prompt bodies, generated
-  summaries, provider tool arguments, provider tool output, arbitrary terminal text, or
-  repository file content.
-- Repository evidence is metadata only. The exact evidence schema must be auditable and
-  avoid treating raw shell output as an authoritative completion signal.
-- Starting, resuming, and Handoff remain separate explicitly authorized operations. A
-  checkpoint authorizes none of them.
+- Starting, resuming, and Handoff remain separate explicitly authorized operations.
 - The v2.0.1 `New` workflow supersedes v2.0.0's opt-in Binding Initializer presentation:
   the initializer is always enabled for `New`, remains system-owned rather than developer
   task content, and keeps its Provider-specific command details inside Provider adapters.
@@ -84,23 +66,15 @@ The primary question answered is: **what can the next Session safely do now?**
 
 ## Deferred
 
-- Automatic checkpoint creation or automatic continuation.
+- All Checkpoint capabilities, including creation, durable metadata, repository evidence,
+  retention, reopening, and connections to Resume or Handoff. No Checkpoint schema or UI is
+  part of the current v2.0.1 delivery boundary.
 - A generic Agent-generated work summary, transcript analysis, or background prompt
   extraction.
 - Automatic provider or model switching.
 - Action dispatch, structured Action Results, `needs_input`, Execution Plans, Workflow Runs,
   dependency scheduling, and automatic Flow advancement.
 - Embedded terminal emulation, a Mudi daemon, and a second project or issue tracker.
-
-## Open design decisions within the scope
-
-- The exact durable representation and retention behavior of checkpoint metadata.
-- The minimum repository evidence that is useful without collecting sensitive command or
-  terminal content.
-- Which checkpoint fields may be user-authored, Agent-proposed with explicit approval, or
-  mechanically observed.
-- The interaction that connects a checkpoint to the existing Handoff Operation without
-  making a Handoff appear automatic.
 
 ## Intended layering
 

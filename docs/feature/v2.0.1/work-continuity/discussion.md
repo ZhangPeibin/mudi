@@ -1,9 +1,9 @@
 # Work Continuity - Requirements Discussion
 
-**Status:** analyzing; v2.0.1 scope is accepted while detailed delivery decisions remain open
+**Status:** deferred; Checkpoint is outside the current v2.0.1 delivery boundary
 **Release:** v2.0.1
 **Feature:** work-continuity
-**Last updated:** 2026-08-10
+**Last updated:** 2026-08-28
 
 The accepted boundary is [`feature/v2.0.1/README.md`](../../../../feature/v2.0.1/README.md).
 `CONTEXT.md` and accepted ADRs remain authoritative for domain and architecture decisions.
@@ -21,6 +21,18 @@ deliberately distinguishes three states:
 
 This document does not expand accepted scope, authorize implementation, or publish an Issue
 PRD.
+
+## Current scope decision
+
+Checkpoint is deferred from the current v2.0.1 delivery boundary. The repository has no
+active delivery task that demonstrates a continuity gap requiring a new durable Checkpoint
+object: GitHub Issues own intended work, Git owns code state, `state.db` owns Mudi workflow
+state, precise Resume continues one native Session, and Handoff transfers context to a
+distinct Successor Session.
+
+No Checkpoint Schema, Repository, evidence collector, or UI should be implemented from this
+discussion. Reopening the capability requires a concrete interrupted-work case that cannot
+be recovered adequately through the existing Issue, Git, Resume, and Handoff surfaces.
 
 ## Product thesis
 
@@ -81,7 +93,7 @@ The following invariants stay in force:
 - Mudi stores no prompt bodies, generated summaries, tool arguments, tool output, or
   repository file contents in its local stores.
 
-## Accepted v2.0.1 direction and open design
+## Deferred Checkpoint direction and open design
 
 The working name **Relay** means a developer-directed transition between coding Sessions.
 It is not yet a domain term and must not be added to `CONTEXT.md` until its durable model is
@@ -99,7 +111,7 @@ continuity, but it must not claim that the two provider-native Sessions are one 
 The existing Handoff Artifact is the candidate bridge for this second path. This draft does
 not change its content contract, storage boundary, or authorization rules.
 
-## Scope notes and open design questions
+## Deferred scope notes and open design questions
 
 ### R1. Developer-directed checkpoint
 
@@ -182,7 +194,7 @@ The product must make this faster than manually rereading a transcript, checking
 and explaining the situation to a new Agent. It should not require the developer to manage
 a second project-management hierarchy.
 
-## Candidate user journey
+## Deferred candidate user journey
 
 1. The developer chooses a Project directory, then explicitly starts a Managed Session
    through the v2.0.0 flow.
@@ -211,9 +223,9 @@ a second project-management hierarchy.
   Mudi service.
 - An embedded terminal emulator.
 
-## Product measures to validate the direction
+## Evidence that would justify reopening the direction
 
-These are discussion targets, not launch criteria yet:
+These are validation hypotheses, not current launch criteria:
 
 - A developer returning to known work can identify the next useful action in under one
   minute without reading the full transcript.
@@ -247,14 +259,14 @@ These are discussion targets, not launch criteria yet:
 
 ## Recommended next discussion order
 
-1. Confirm whether the primary repeat behavior is **individual continuity** (checkpoint,
-   resume, handoff) before discussing multi-Session Flow scheduling.
-2. Define the smallest evidence-backed checkpoint that provides real value without storing
-   prohibited content.
-3. Decide whether that checkpoint belongs to the existing Handoff path or a separate,
-   local-only capability.
-4. Turn the accepted v2.0.1 scope into an implementation PRD in GitHub Issues once these
-   choices are concrete enough for delivery.
+1. Capture a concrete interrupted-work case that existing Issue, Git, Resume, and Handoff
+   behavior cannot recover adequately.
+2. Confirm that the gap is a durable continuity problem rather than failed-Session recovery
+   or a Handoff usability problem.
+3. Only then define the smallest evidence-backed object that closes the validated gap
+   without storing prohibited content.
+4. Amend a future version boundary explicitly before producing a PRD or implementation
+   ticket.
 
 ## Related records
 
@@ -269,3 +281,14 @@ These are discussion targets, not launch criteria yet:
   authorization.
 - [`ADR 0007`](../../../adr/0007-link-successors-through-launched-process-evidence.md) - no
   guessed Successor linkage.
+
+## Session Log
+
+### 2026-08-28
+
+- Deferred Checkpoint after reviewing the completed v2.0.1 system and finding no active or
+  demonstrated task that needs a new durable continuity object.
+- Kept the earlier design exploration as historical evidence rather than converting it into
+  a PRD or implementation ticket.
+- Required a concrete gap beyond Issue, Git, Resume, and Handoff before the capability can
+  re-enter a future version boundary.
