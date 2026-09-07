@@ -1,4 +1,4 @@
-┌ Mudi | v2.0.0 ───────────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 4 Projects ┐
+┌ Mudi | v2.0.0 ───────────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 5 Projects ┐
                                         ┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
                                         │PJ /Users/fixture/co...  Risk detected││                                      │
                                         │✳ critical Ctx +Critical 160.0k>180.0k││                                      │
@@ -7,7 +7,7 @@
                                         │⬡ dex-idle Busy -> Idle               ││                                      │
                                         │                                      ││                                      │
                                         └──────────────────────────────────────┘└──────────────────────────────────────┘
- PROJECT 4 ─────────────────────────────────── 5 OPEN  │ Session Workspace ─────────────────────────────────────────────
+ PROJECT 5 ─────────────────────────────────── 5 OPEN  │ Session Workspace ─────────────────────────────────────────────
  ▾ mudi (2)                                            │Session Claude Code / critical
   > ✳ critical ↗                          ! •  90%  30s│Conversation unavailable.
     ⬡ x-shared ↗                          ! •  40%   1m│
@@ -17,7 +17,7 @@
     ⬡ dex-idle ↗                            ◦  30%   3m│
  ▾ mudi-healthy (1)                                    │
     ✳ -healthy ↗                            •  20%   4m│
-                                                       │
+ ▾ mudi-exited (1)                                     │
  DETAILS ──────────────────────────────────────────────│
  Title       critical                                  │
  Description N/A                                       │

@@ -100,7 +100,7 @@ context when visible labels collide.
 Project recency is the newest last activity among its Sessions, not the filesystem
 modification time of its directory. It determines Current versus Older membership: a
 Project with an Open Session remains current; otherwise it is Older when its newest
-Session activity predates the rolling three-day window. At TUI startup, Project lists
+Session activity predates the rolling seven-day window. At TUI startup, Project lists
 rank the initial snapshot by recency, then stable label and canonical identity. Existing
 Projects retain that rank for the application run despite later activity; a newly
 discovered Project appears first in its Current or Older section. A restart rebuilds
@@ -388,7 +388,7 @@ The first version **records observed events** (count badge + detail timeline). I
 
 ## Session recency
 
-A Session is **Recent** when its last activity falls within the rolling three-day window
+A Session is **Recent** when its last activity falls within the rolling seven-day window
 and **Older** when it predates that cutoff, regardless of lifecycle state. Recency never
 changes the Session's complete lifetime Usage scope.
 

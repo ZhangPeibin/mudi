@@ -425,7 +425,7 @@ fn newly_discovered_older_project_is_not_added_to_the_tree() {
 }
 
 #[test]
-fn project_with_only_recent_and_older_sessions_is_not_in_the_tree() {
+fn project_with_a_recent_session_remains_after_all_sessions_exit() {
     const DAY_MS: i64 = 86_400_000;
     const NOW: i64 = 1_700_000_000_000;
     let project = Project {
@@ -454,8 +454,19 @@ fn project_with_only_recent_and_older_sessions_is_not_in_the_tree() {
         &HashSet::new(),
         &HashSet::new(),
     );
-    assert!(tree.is_empty());
-    assert_eq!(tree_counts(&snapshot), (0, 0));
+    assert!(tree.iter().any(|row| matches!(
+        row,
+        ProjectTreeRow::Project { project, .. } if project.label == "history-only-project"
+    )));
+    assert!(tree.iter().any(|row| matches!(
+        row,
+        ProjectTreeRow::Disclosure {
+            band: super::model::SessionAgeBand::Recent,
+            session_count: 2,
+            ..
+        }
+    )));
+    assert_eq!(tree_counts(&snapshot), (1, 0));
 
     let backend = TestBackend::new(80, 14);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -471,12 +482,12 @@ fn project_with_only_recent_and_older_sessions_is_not_in_the_tree() {
         .iter()
         .map(|cell| cell.symbol())
         .collect::<String>();
-    assert!(rendered.contains("No Open Sessions."));
-    assert!(!rendered.contains("history-only-project"));
+    assert!(!rendered.contains("No Open Sessions."));
+    assert!(rendered.contains("history-only-project"));
 }
 
 #[test]
-fn project_count_includes_only_projects_with_open_sessions() {
+fn project_count_includes_open_and_recent_projects() {
     let mut open = open_session_in_project("open", "/open");
     open.project = Some(Project {
         identity: ProjectIdentity::new(PathBuf::from("/open")),
@@ -494,7 +505,7 @@ fn project_count_includes_only_projects_with_open_sessions() {
         ready: true,
         ..Snapshot::default()
     };
-    assert_eq!(tree_counts(&snapshot), (1, 1));
+    assert_eq!(tree_counts(&snapshot), (2, 1));
 }
 
 #[test]

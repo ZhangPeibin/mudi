@@ -535,7 +535,7 @@ fn assert_overview_focus(rendered: &ProductionRender, focused_index: usize) {
         rendered.style_at("TASKS"),
     ];
     let title_counts = [
-        rendered.style_at_in_row("PROJECT", "4"),
+        rendered.style_at_in_row("PROJECT", "5"),
         rendered.style_at_in_row("RECENT SIGNALS", "5"),
         rendered.style_at_in_row("TASKS", "1"),
     ];
@@ -2495,7 +2495,7 @@ fn global_header_combines_identity_with_indexed_usage_and_project_totals() {
     let wide_header = wide.text.lines().next().unwrap();
     assert!(wide_header.contains(&format!("Mudi | v{}", env!("CARGO_PKG_VERSION"))));
     assert!(!wide_header.contains("1 2 3"));
-    assert!(wide_header.contains("In 86.4k  Out 16.4k | 4 Projects"));
+    assert!(wide_header.contains("In 86.4k  Out 16.4k | 5 Projects"));
     let tasks_row = wide
         .text
         .lines()
@@ -2517,7 +2517,7 @@ fn global_header_combines_identity_with_indexed_usage_and_project_totals() {
     let compact = render(&snapshot, &Ui::default(), 80, 24);
     let compact_header = compact.text.lines().next().unwrap();
     assert!(compact_header.contains(&format!("Mudi | v{}", env!("CARGO_PKG_VERSION"))));
-    assert!(compact_header.contains("In 86.4k Out 16.4k | P 4"));
+    assert!(compact_header.contains("In 86.4k Out 16.4k | P 5"));
     assert!(compact
         .text
         .lines()
@@ -2539,7 +2539,7 @@ fn global_header_combines_identity_with_indexed_usage_and_project_totals() {
 fn all_page_frame_titles_summarize_open_work_and_signal_freshness() {
     let snapshot = production_snapshot();
     let rendered = render(&snapshot, &Ui::default(), 120, 30);
-    for expected in ["PROJECT 4", "5 OPEN", "RECENT SIGNALS 5", "latest 5s"] {
+    for expected in ["PROJECT 5", "5 OPEN", "RECENT SIGNALS 5", "latest 5s"] {
         assert!(
             rendered.text.lines().any(|line| line.contains(expected)),
             "missing frame summary: {expected}"
@@ -2826,7 +2826,7 @@ fn workspace_and_details_headings_keep_horizontal_section_rules() {
         .take(55)
         .collect::<String>();
 
-    assert!(project_header.contains("PROJECT 4"), "{project_header:?}");
+    assert!(project_header.contains("PROJECT 5"), "{project_header:?}");
     assert!(
         !project_header.contains("PROJECT TREE"),
         "{project_header:?}"
@@ -3282,7 +3282,7 @@ fn session_tree_keeps_open_sessions_visible_and_discloses_exited_age_bands() {
         "older-model",
         SessionState::Exited,
         20_000,
-        NOW - 3 * DAY_MS - 1,
+        NOW - 8 * DAY_MS,
         location,
     );
     let snapshot = Snapshot {

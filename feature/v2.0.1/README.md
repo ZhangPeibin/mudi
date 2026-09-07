@@ -32,6 +32,8 @@ The primary question answered is: **what can the next Session safely do now?**
 - Display observed evidence separately from user-authored or Agent-proposed statements.
   Missing evidence must remain missing; Mudi never infers a passed check or completed
   task from terminal prose.
+- Keep a Project in the normal inventory while it has an Open Session or its newest visible
+  Session falls within the rolling seven-day window, including after Mudi or macOS restarts.
 - Let the developer explicitly hide Exited Sessions, restore them from a dedicated Hidden
   Tree, or permanently exclude them from Mudi inventory. Project Hide is a snapshot
   bulk action over currently observed Session identities and never suppresses future Sessions.

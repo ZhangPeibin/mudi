@@ -61,7 +61,7 @@ const MIN_TERMINAL_WIDTH: u16 = 80;
 const MIN_TERMINAL_HEIGHT: u16 = 24;
 /// Guide 尚未渲染、因而无法测量最大滚动位置时使用的哨兵值。
 const UNMEASURED_GUIDE_MAX_SCROLL: usize = usize::MAX;
-const RECENT_SESSION_WINDOW_MS: i64 = 3 * 86_400_000;
+const RECENT_SESSION_WINDOW_MS: i64 = 7 * 86_400_000;
 
 /// 返回当前选中项的统一高亮样式。
 fn selected_style(theme: Theme) -> Style {

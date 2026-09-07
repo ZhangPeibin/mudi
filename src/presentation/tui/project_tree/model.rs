@@ -1,8 +1,8 @@
 //! Project Tree stable identities, row model, grouping, and ordering.
 
 #[cfg(test)]
-use super::super::{current_attention, snapshot_now_ms};
-use super::super::{is_system_temporary_cwd, RECENT_SESSION_WINDOW_MS};
+use super::super::current_attention;
+use super::super::{is_system_temporary_cwd, snapshot_now_ms, RECENT_SESSION_WINDOW_MS};
 use crate::application::attention::AttentionSnapshot;
 use crate::domain::{Project, ProjectIdentity, Session, SessionIdentity};
 use crate::presentation::app::Snapshot;
@@ -365,13 +365,14 @@ fn session_tree_key(session: &Session) -> ProjectTreeKey {
     ProjectTreeKey::Session(SessionIdentity::from(session))
 }
 
-/// 返回可解析 Project 总数和这些 Project 下的 Open Session 总数。
+/// 返回 Current Project 总数和这些 Project 下的 Open Session 总数。
 pub(super) fn tree_counts(snap: &Snapshot) -> (usize, usize) {
+    let cutoff_ms = snapshot_now_ms(snap) - RECENT_SESSION_WINDOW_MS;
     let project_count = snap
         .sessions
         .iter()
         .filter(|session| !is_system_temporary_cwd(session.cwd.as_deref()))
-        .filter(|session| session.state.is_open())
+        .filter(|session| session.state.is_open() || session.last_activity_ms >= cutoff_ms)
         .filter_map(|session| session.project.as_ref())
         .map(|project| &project.identity)
         .collect::<HashSet<_>>()
@@ -494,7 +495,7 @@ fn grouped_sessions<'a>(
         project.sessions.sort(attention);
     }
     projects.sort_by(|left, right| project_order.compare(left.project, right.project));
-    projects.retain(|project| project.has_open_session);
+    projects.retain(|project| project.has_open_session || !project.sessions.recent.is_empty());
     ProjectInventory {
         current_projects: projects,
     }
