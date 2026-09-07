@@ -474,7 +474,7 @@ pub struct Ui {
     task_selected: usize,
     /// One explicit state owns both overlay input priority and drawing order.
     overlay: overlay::OverlayState,
-    /// Stable selection for the independent Managed Start status region.
+    /// Stable selection for an actionable Managed Start registration.
     managed_launch_id: Option<String>,
     /// UI 自己拥有的 Profile、主题和短期状态提示。
     profile_path: Option<PathBuf>,
@@ -1196,14 +1196,16 @@ impl Ui {
         } else if self.task_selected >= snap.tasks.len() {
             self.task_selected = snap.tasks.len() - 1;
         }
-        if self
-            .managed_launch_id
-            .as_ref()
-            .is_none_or(|id| !snap.managed_launches.iter().any(|launch| &launch.id == id))
-        {
+        if self.managed_launch_id.as_ref().is_none_or(|id| {
+            !snap
+                .managed_launches
+                .iter()
+                .any(|launch| &launch.id == id && !launch.available_actions.is_empty())
+        }) {
             self.managed_launch_id = snap
                 .managed_launches
-                .first()
+                .iter()
+                .find(|launch| !launch.available_actions.is_empty())
                 .map(|launch| launch.id.clone());
         }
         self.overlay.reconcile(observed_snapshot);
@@ -1223,8 +1225,16 @@ impl Ui {
     ) -> Option<&'a crate::application::observation::read_model::ManagedLaunchSummary> {
         self.managed_launch_id
             .as_ref()
-            .and_then(|id| snap.managed_launches.iter().find(|launch| &launch.id == id))
-            .or_else(|| snap.managed_launches.first())
+            .and_then(|id| {
+                snap.managed_launches
+                    .iter()
+                    .find(|launch| &launch.id == id && !launch.available_actions.is_empty())
+            })
+            .or_else(|| {
+                snap.managed_launches
+                    .iter()
+                    .find(|launch| !launch.available_actions.is_empty())
+            })
     }
 
     fn handle_managed_launch_key(
@@ -1232,14 +1242,19 @@ impl Ui {
         key: crossterm::event::KeyEvent,
         snap: &Snapshot,
     ) -> Option<UiAction> {
-        if self.overlay.detail().is_some() || snap.managed_launches.is_empty() {
+        let actionable_launches = snap
+            .managed_launches
+            .iter()
+            .filter(|launch| !launch.available_actions.is_empty())
+            .collect::<Vec<_>>();
+        if self.overlay.detail().is_some() || actionable_launches.is_empty() {
             return None;
         }
         if matches!(key.code, crossterm::event::KeyCode::Char('[' | ']')) {
             let selected = self
                 .selected_managed_launch(snap)
                 .and_then(|launch| {
-                    snap.managed_launches
+                    actionable_launches
                         .iter()
                         .position(|candidate| candidate.id == launch.id)
                 })
@@ -1247,13 +1262,11 @@ impl Ui {
             let next = match key.code {
                 crossterm::event::KeyCode::Char('[') => selected
                     .checked_sub(1)
-                    .unwrap_or(snap.managed_launches.len() - 1),
-                crossterm::event::KeyCode::Char(']') => {
-                    (selected + 1) % snap.managed_launches.len()
-                }
+                    .unwrap_or(actionable_launches.len() - 1),
+                crossterm::event::KeyCode::Char(']') => (selected + 1) % actionable_launches.len(),
                 _ => unreachable!("guarded by Managed Start navigation keys"),
             };
-            self.managed_launch_id = Some(snap.managed_launches[next].id.clone());
+            self.managed_launch_id = Some(actionable_launches[next].id.clone());
             return Some(UiAction::None);
         }
 

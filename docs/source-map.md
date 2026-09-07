@@ -169,7 +169,7 @@ Owner。Presentation 中面向用户的 Terminal.app/tmux 文案不算具体实�
 | `src/presentation/tui/provider_mark.rs` | 终端安全的 Provider 标记（Claude / Codex 轮廓） |
 | `src/presentation/tui/provenance_mark.rs` | Project Tree 上外部观察 Session 的紧凑后缀标记 |
 | `src/presentation/tui/hidden_tree.rs` | Hidden Inventory 的输入 owner、稳定身份导航、restore/delete request 转换与专用管理视图 |
-| `src/presentation/tui/managed_start.rs` | 未完成 Managed 启动的仅元数据状态与恢复控件 |
+| `src/presentation/tui/managed_start.rs` | 仍有合法操作的 Managed 启动状态与恢复控件；无可操作记录时不占用总览空间 |
 | `src/presentation/tui/modals.rs` | 按 `OverlayState` 的同一层级结构绘制 underlay、确认框、编辑器与终端尺寸保护 |
 | `src/presentation/tui/guide.rs` | Guide 的输入 owner、关闭/来源恢复、主题内容、渲染与滚动测量 |
 | `src/presentation/tui/layout.rs` | 多个 UI 功能共用的几何布局辅助函数 |

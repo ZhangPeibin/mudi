@@ -720,7 +720,7 @@ fn refresh_publishes_metadata_only_managed_launch_recovery_state() {
 }
 
 #[test]
-fn managed_start_region_renders_each_state_with_only_legal_actions() {
+fn managed_start_region_renders_each_actionable_state_with_only_legal_actions() {
     let cases = [
         (
             launch_summary(
@@ -751,19 +751,6 @@ fn managed_start_region_renders_each_state_with_only_legal_actions() {
             ["NEEDS REVIEW", "o Open Terminal", "c Copy Diagnostics"].as_slice(),
             ["x Cancel Start", "Retry Binding", "Resume", "Adopt"].as_slice(),
         ),
-        (
-            launch_summary(
-                "R-FAILED",
-                ManagedLaunchStatus::Failed,
-                ManagedTerminalState::Pending,
-                None,
-                Some("Provider process absent"),
-                Vec::new(),
-                10_000,
-            ),
-            ["FAILED", "Provider process absent", "No recovery action"].as_slice(),
-            ["x Cancel Start", "Retry Terminal", "c Copy Diagnostics"].as_slice(),
-        ),
     ];
 
     for (launch, expected, forbidden) in cases {
@@ -793,7 +780,7 @@ fn managed_start_region_renders_each_state_with_only_legal_actions() {
 }
 
 #[test]
-fn compact_managed_start_region_preserves_navigation_actions_and_neighbor_panels() {
+fn compact_managed_start_region_ignores_non_actionable_records() {
     let snapshot = Snapshot {
         managed_launches: vec![
             launch_summary(
@@ -835,7 +822,7 @@ fn compact_managed_start_region_preserves_navigation_actions_and_neighbor_panels
         .collect::<String>();
 
     for expected in [
-        "MANAGED START [/]",
+        "MANAGED START",
         "o Retry Terminal",
         "c Copy Diagnostics",
         "RECENT SIGNALS",
@@ -846,10 +833,21 @@ fn compact_managed_start_region_preserves_navigation_actions_and_neighbor_panels
             "compact status band lost {expected:?}:\n{rendered}"
         );
     }
+    assert!(!rendered.contains("MANAGED START [/]"));
+    assert!(!rendered.contains("R-FAILED"));
 }
 
 #[test]
 fn managed_start_selection_stays_on_registration_identity_across_refresh_ordering() {
+    let failed = launch_summary(
+        "R-FAILED",
+        ManagedLaunchStatus::Failed,
+        ManagedTerminalState::Pending,
+        None,
+        Some("absent"),
+        Vec::new(),
+        40_000,
+    );
     let first = launch_summary(
         "R-FIRST",
         ManagedLaunchStatus::Binding,
@@ -872,7 +870,7 @@ fn managed_start_selection_stays_on_registration_identity_across_refresh_orderin
         20_000,
     );
     let mut snapshot = Snapshot {
-        managed_launches: vec![first.clone(), second.clone()],
+        managed_launches: vec![failed.clone(), first.clone(), second.clone()],
         ready: true,
         ..Snapshot::default()
     };
@@ -885,7 +883,7 @@ fn managed_start_selection_stays_on_registration_identity_across_refresh_orderin
     assert!(selected_second.contains("2/2"));
 
     snapshot.revision = 2;
-    snapshot.managed_launches = vec![second, first];
+    snapshot.managed_launches = vec![second, failed, first];
     ui.clamp_selections(&snapshot);
     let reordered = render_ui(&ui, &snapshot);
     assert!(reordered.contains("R-SECOND"));
@@ -968,6 +966,9 @@ fn managed_start_keys_emit_only_actions_allowed_by_the_selected_registration() {
         ready: true,
         ..Snapshot::default()
     };
+    let rendered = render_ui(&ui, &failed);
+    assert!(!rendered.contains("MANAGED START"));
+    assert!(!rendered.contains("R-FAILED"));
     for character in ['x', 'o', 'c'] {
         assert_eq!(
             ui.handle_key(key(character), &failed).unwrap(),

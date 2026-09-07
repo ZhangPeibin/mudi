@@ -2189,7 +2189,7 @@ fn all_page_has_global_usage_without_a_time_filter_or_cost_surface() {
 }
 
 #[test]
-fn all_page_places_status_panels_side_by_side_in_the_upper_right() {
+fn all_page_places_status_panels_side_by_side_across_the_full_status_strip() {
     let snapshot = demo_snapshot();
     let ui = Ui::default();
 
@@ -2199,9 +2199,7 @@ fn all_page_places_status_panels_side_by_side_in_the_upper_right() {
     assert!(wide_lines[1].contains("TASKS"));
     assert!(wide_lines[9].contains("PROJECT"));
     assert!(wide_lines[9].contains("Session Workspace"));
-    for line in &wide_lines[1..9] {
-        assert!(line.chars().take(40).all(|character| character == ' '));
-    }
+    assert!(wide_lines[1].starts_with("┌ RECENT SIGNALS"));
 
     let compact = rendered_rows_at(&ui, &snapshot, 80, 24);
     let compact_lines = compact.lines().collect::<Vec<_>>();
@@ -2209,9 +2207,7 @@ fn all_page_places_status_panels_side_by_side_in_the_upper_right() {
     assert!(compact_lines[1].contains("TASKS"));
     assert!(compact_lines[9].contains("PROJECT"));
     assert!(compact_lines[9].contains("Session Workspace"));
-    for line in &compact_lines[1..9] {
-        assert!(line.chars().take(26).all(|character| character == ' '));
-    }
+    assert!(compact_lines[1].starts_with("┌ RECENT SIGNALS"));
 
     assert!(wide.contains("RECENT SIGNALS"));
     assert!(compact.contains("RECENT SIGNALS"));

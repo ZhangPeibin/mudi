@@ -1,12 +1,12 @@
 ┌ Mudi | v2.0.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 5 ┐
-                          ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
-                          │PJ /Use...  Risk detected││                         │
-        ┌ Guide ───────────────────────────────────────────────────────┐       │
-        │> Overview    │Overview                                       │       │
-        │  Navigation  │Mudi is local to this Mac.                     │       │
-        │  Sessions    │Passive observation is the default.            │       │
-        │  Signals     │Control Operations require explicit            │       │
-        │  Theme       │authorization.                                 │───────┘
+┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
+│PJ /Users/fixture/co...  Risk detected││                                      │
+│✳ criti┌ Guide ───────────────────────────────────────────────────────┐       │
+│✳ ... C│> Overview    │Overview                                       │       │
+│✳ -warn│  Navigation  │Mudi is local to this Mac.                     │       │
+│⬡ dex-i│  Sessions    │Passive observation is the default.            │       │
+│       │  Signals     │Control Operations require explicit            │       │
+└───────│  Theme       │authorization.                                 │───────┘
  PROJECT│              │Current and recent                             │────────
  ▾ mudi │              │NOW shows current conditions.                  │
   > ✳ cr│              │Recent Signals show transitions.               │

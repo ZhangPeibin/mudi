@@ -1,12 +1,12 @@
 ┌ Mudi | v2.0.0 ───────────────────────────────────────────────────────────────────── In 86.4k  Out 16.4k | 5 Projects ┐
-                                        ┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
-                                        │PJ /Users/fixture/co...  Risk detected││                                      │
-            ┌ Session Detail ──────────────────────────────────────────────────────────────────────────────┐           │
-            │Provider        Claude Code -> claude-opus-4-8                                                │           │
-            │Project         mudi                                                                          │           │
-            │cwd             /Users/fixture/code/mudi                                                      │           │
-            │Source log      /Users/fixture/.claude/projects/-Users-fixture-code-mudi/claude-critical.jsonl│           │
-            │Source format   JSONL                                                                         │───────────┘
+┌ RECENT SIGNALS 5 ───────────────────────────── latest 5s ┐┌ TASKS 0 ─────────────────────────────────────────────────┐
+│PJ /Users/fixture/code/mudi  Risk detected                ││                                                          │
+│✳ critical ┌ Session Detail ──────────────────────────────────────────────────────────────────────────────┐           │
+│✳ critical │Provider        Claude Code -> claude-opus-4-8                                                │           │
+│✳ -warning │Project         mudi                                                                          │           │
+│⬡ dex-idle │cwd             /Users/fixture/code/mudi                                                      │           │
+│           │Source log      /Users/fixture/.claude/projects/-Users-fixture-code-mudi/claude-critical.jsonl│           │
+└───────────│Source format   JSONL                                                                         │───────────┘
  PROJECT 5 ─│Title           critical                                                                      │────────────
  ▾ mudi (2) │Session ID      claude-critical                                                               │
   > ✳ critic│State           Busy                                                                          │

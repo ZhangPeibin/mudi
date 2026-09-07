@@ -2043,7 +2043,7 @@ fn task_rows_resolve_the_current_session_alias_without_changing_task_identity() 
 
     let rendered = render(&snapshot, &ui, 80, 24).text;
 
-    assert!(rendered.contains("✳:...oordinator"));
+    assert!(rendered.contains("✳:...coordinator"));
     assert!(!rendered.contains("✳:critical"));
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -2616,13 +2616,13 @@ fn all_page_labels_the_session_tree_and_uses_theme_foreground_for_project_names(
     assert!(dark.text.lines().any(|line| line.contains(" PROJECT ")));
     assert!(dark.text.lines().any(|line| line.contains("▾ mudi")));
     assert!(!dark.text.contains("PROJECT  mudi"));
-    let dark_project = dark.style_at("mudi");
+    let dark_project = dark.style_at_in_row("▾ mudi", "mudi");
     assert_eq!(dark_project.fg, Some(Color::Rgb(224, 220, 210)));
     assert!(dark_project.add_modifier.contains(Modifier::BOLD));
 
     let light_ui = ui_with_theme("light");
     let light = render(&snapshot, &light_ui, 120, 30);
-    let light_project = light.style_at("mudi");
+    let light_project = light.style_at_in_row("▾ mudi", "mudi");
     assert_eq!(light_project.fg, Some(Color::Rgb(28, 31, 34)));
     assert!(light_project.add_modifier.contains(Modifier::BOLD));
 }
@@ -2761,12 +2761,8 @@ fn full_all_page_matches_the_reviewed_production_fixture() {
     assert_ne!(lines[9].chars().next(), Some('┌'));
     assert_ne!(lines[9].chars().last(), Some('┐'));
     assert_eq!(lines[9].chars().nth(55), Some('│'));
-    for line in &lines[1..9] {
-        assert!(
-            line.chars().take(40).all(|character| character == ' '),
-            "upper-left status region should remain empty: {line:?}"
-        );
-    }
+    assert!(lines[1].starts_with("┌ RECENT SIGNALS"));
+    assert!(!rendered.text.contains("MANAGED START"));
     for required in [
         "90%",
         "x-shared",
@@ -3983,7 +3979,7 @@ fn long_unicode_now_title_does_not_move_operational_evidence() {
     let baseline_row = baseline
         .text
         .lines()
-        .find(|line| line.contains("✳ critical"))
+        .find(|line| line.contains("✳ critical") && line.contains("90%"))
         .expect("baseline critical NOW Session should render");
 
     let mut ui = RoutedUi::temporary();

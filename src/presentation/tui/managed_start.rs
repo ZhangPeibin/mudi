@@ -15,8 +15,12 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         return;
     };
     let theme = ui.theme.palette();
-    let selected_index = snap
+    let actionable_launches = snap
         .managed_launches
+        .iter()
+        .filter(|candidate| !candidate.available_actions.is_empty())
+        .collect::<Vec<_>>();
+    let selected_index = actionable_launches
         .iter()
         .position(|candidate| candidate.id == launch.id)
         .unwrap_or(0);
@@ -25,7 +29,7 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
         ManagedLaunchStatus::NeedsReview => theme.accent,
         ManagedLaunchStatus::Failed => theme.critical,
     };
-    let title = if snap.managed_launches.len() > 1 {
+    let title = if actionable_launches.len() > 1 {
         " MANAGED START [/] "
     } else {
         " MANAGED START "
@@ -52,7 +56,7 @@ pub(super) fn draw(f: &mut Frame, area: Rect, snap: &Snapshot, ui: &Ui) {
                     "  {}  {}/{}",
                     launch.id,
                     selected_index + 1,
-                    snap.managed_launches.len()
+                    actionable_launches.len()
                 ),
                 Style::default().fg(theme.muted),
             ),

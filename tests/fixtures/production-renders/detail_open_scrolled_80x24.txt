@@ -1,12 +1,12 @@
 ┌ Mudi | v2.0.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 5 ┐
-                          ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
-        ┌ Session Detail ──────────────────────────────────────────────┐       │
-        │Output          230                                           │       │
-        │Est. API cost   $0.04                                         │       │
-        │                                                              │       │
-        │Current Run per-model Usage                                   │       │
-        │  claude-opus-4-8      in 1.2k out 230  $0.04                 │       │
-        │                                                              │───────┘
+┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
+│PJ /Use┌ Session Detail ──────────────────────────────────────────────┐       │
+│✳ criti│Output          230                                           │       │
+│✳ ... C│Est. API cost   $0.04                                         │       │
+│✳ -warn│                                                              │       │
+│⬡ dex-i│Current Run per-model Usage                                   │       │
+│       │  claude-opus-4-8      in 1.2k out 230  $0.04                 │       │
+└───────│                                                              │───────┘
  PROJECT│Transcript Lifetime Usage                                     │────────
  ▾ mudi │Input           12.3k                                         │n select
   > ✳ cr│Output          2.3k                                          │

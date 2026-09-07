@@ -1,12 +1,12 @@
 ┌ Mudi | v2.0.0 ───────────────────────────────────── In 86.4k Out 16.4k | P 5 ┐
-                          ┌ RECENT SIGNALS 5 ───────┐┌ TASKS 0 ────────────────┐
-        ┌ Session Detail ──────────────────────────────────────────────┐       │
-        │Provider        Claude Code -> claude-opus-4-8                │       │
-        │Project         mudi                                          │       │
-        │cwd             /Users/fixture/code/mudi                      │       │
-        │Source log                                                    │       │
-        │/Users/fixture/.claude/projects/-Users-fixture-code-mudi/claud│       │
-        │e-critical.jsonl                                              │───────┘
+┌ RECENT SIGNALS 5 ───────── latest 5s ┐┌ TASKS 0 ─────────────────────────────┐
+│PJ /Use┌ Session Detail ──────────────────────────────────────────────┐       │
+│✳ criti│Provider        Claude Code -> claude-opus-4-8                │       │
+│✳ ... C│Project         mudi                                          │       │
+│✳ -warn│cwd             /Users/fixture/code/mudi                      │       │
+│⬡ dex-i│Source log                                                    │       │
+│       │/Users/fixture/.claude/projects/-Users-fixture-code-mudi/claud│       │
+└───────│e-critical.jsonl                                              │───────┘
  PROJECT│Source format   JSONL                                         │────────
  ▾ mudi │Title           critical                                      │n select
   > ✳ cr│Session ID      claude-critical                               │
